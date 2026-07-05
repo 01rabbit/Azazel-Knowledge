@@ -1,6 +1,6 @@
 # ADR-0001: Repository naming and family positioning
 
-Status: **open — needs owner decision + naming spec update**
+Status: **deferred by owner decision (2026-07-05)** — working name `Azazel-CTI`
 
 ## Context
 
@@ -12,27 +12,32 @@ updating the spec first. Current vocabulary:
 - Role: `Gateway`, `Shield`, `Probe`.
 
 A CTI node fits none of these: it is not in the traffic path, defends
-nothing, and is a rear-echelon knowledge service. Azazel-Edge is designated
-AZ-01; this node is the natural AZ-02.
+nothing, and is a rear-echelon knowledge service.
 
-## Options
+AZ-xx designations already assigned: **AZ-01 = Azazel-Edge, AZ-02 =
+Azazel-Gadget, AZ-03 = Azazel-Boot.** This node would take the next free
+number when formally named.
 
-1. New Form word for rear/knowledge-tier devices, e.g. `Azazel-Keep`
-   (castle keep — rear stronghold, fits the delaying-action doctrine) with
-   Role `Oracle` or `Intel`.
-2. `Azazel-CTI` — plain, descriptive, breaks the Form/Role scheme but is
-   instantly legible at a conference booth.
-3. Reuse `Probe` role semantics ("observation and measurement focused, minimal
-   control") under a new Form — closest existing Role in spirit.
+The physical form is a portable Raspberry Pi 4 — man-packable like the rest
+of the family, which may inform the eventual Form word.
 
-## Decision (interim)
+## Decision
 
-Use **Azazel-CTI** as the working repository name so design work is not
-blocked. Before first public release: pick the formal name, update the
-naming spec in `01rabbit/Azazel`, and add this node to the doctrine repo's
-product map and AZ-xx numbering.
+Naming is **deliberately deferred**. Design and Phase 1 implementation
+proceed under the working name `Azazel-CTI`.
+
+Before first public release:
+
+1. Choose the formal `Azazel-<Form> <Role>` name (new Form and/or Role word
+   likely required — e.g. a rear/knowledge-tier Form, or a Role such as
+   `Oracle`/`Intel`; `Probe`'s "observation focused, minimal control" is the
+   closest existing Role in spirit).
+2. Update the naming spec and product map in `01rabbit/Azazel`, and take the
+   next AZ-xx number.
 
 ## Consequences
 
-- Renaming a GitHub repo later is cheap (redirects preserved); deciding the
-  doctrine vocabulary is the real task and belongs in the Azazel repo.
+- Renaming a GitHub repo later is cheap (redirects preserved); the doctrine
+  vocabulary decision is the real task and belongs in the Azazel repo.
+- Until then, external-facing text must present `Azazel-CTI` as a working
+  name.

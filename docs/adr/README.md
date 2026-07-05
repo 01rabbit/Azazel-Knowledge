@@ -5,7 +5,7 @@ resolved (or explicitly deferred) with rationale:
 
 | ADR | Question | Decision |
 |---|---|---|
-| [0001](0001-repository-naming.md) | Repository / product name | Working name `Azazel-CTI`; formal name needs Azazel naming-spec update — **owner decision pending** |
+| [0001](0001-repository-naming.md) | Repository / product name | **Deferred by owner** — working name `Azazel-CTI`; formal name + AZ-xx number (AZ-01/02/03 taken) with naming-spec update before first release |
 | [0002](0002-data-model.md) | STIX 2.1 vs. lightweight native model | Native model internally; STIX 2.1 at boundaries only |
 | [0003](0003-database.md) | SQLite vs. PostgreSQL | SQLite WAL; PostgreSQL only on measured Phase 2 triggers |
 | [0004](0004-sync-strategy.md) | Pull / push / USB / differential sync | Scheduled pull online + signed offline bundles (full & differential) |

@@ -1,14 +1,15 @@
 # Azazel-CTI — On-Premises Tactical CTI Node for the Azazel System
 
-> **Working name.** The Azazel naming spec (`Azazel-<Form> <Role>`) requires a
-> vocabulary update before this project gets its formal name. See
-> [ADR-0001](docs/adr/0001-repository-naming.md). Candidate designation: **AZ-02**.
+> **Working name.** The formal name and AZ-xx designation are deliberately
+> deferred (AZ-01 = Azazel-Edge, AZ-02 = Azazel-Gadget, AZ-03 = Azazel-Boot
+> are already assigned). See [ADR-0001](docs/adr/0001-repository-naming.md).
 
 **Status: design phase. No implementation yet.**
 
 Azazel-CTI is an independent, on-premises Cyber Threat Intelligence node built
-on Raspberry Pi 4. It pairs with [Azazel-Edge](https://github.com/01rabbit/Azazel-Edge)
-(AZ-01) but is deliberately a separate device and a separate repository.
+on a portable Raspberry Pi 4. It pairs with
+[Azazel-Edge](https://github.com/01rabbit/Azazel-Edge) (AZ-01) but is
+deliberately a separate device and a separate repository.
 
 The CTI node does **not** defend anything. It is a *device that understands
 threats* — a Threat Knowledge Plane for the Azazel family:
@@ -37,7 +38,7 @@ fully functional when the CTI node is absent, slow, or wrong.
                      │
       ┌──────────────────────────────┐
       │  Raspberry Pi 4              │
-      │  Azazel-CTI  (AZ-02)         │   Intelligence / Correlation /
+      │  Azazel-CTI (working name)   │   Intelligence / Correlation /
       │  Threat Knowledge Plane      │   Campaign analysis / IOC management
       └──────────────────────────────┘
                ▲            │
