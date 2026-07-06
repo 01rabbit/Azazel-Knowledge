@@ -50,3 +50,6 @@ jobs:
 
       - name: Validate configuration
         run: python azctl check-config --config-dir config
+
+      - name: Docs sync check (allowlisted drift warns now, fails after T3 ratification)
+        run: python tools/docs-sync-check.py
