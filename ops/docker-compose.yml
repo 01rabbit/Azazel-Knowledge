@@ -1,0 +1,91 @@
+# Azazel-CTI Phase 1 deployment (design S2/S11): exactly two containers,
+# one writer. `worker` is the sole process that opens data/db/*.db for
+# writing (db/writer.py:PrioritySingleWriterQueue, flock-guarded on
+# var/run/{local,intel}.lock); `api` only ever opens read-only WAL
+# connections. No other services belong in this file.
+#
+# Before first boot: `azctl provision --root .` (or the mounted host
+# path this file's volumes point at) to create var/, data/db/, and
+# secrets/, and to mint the first admin API client token.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: azazel-cti:latest
+    command:
+      - gunicorn
+      - azazel_cti.api.app:app
+      - -k
+      - uvicorn.workers.UvicornWorker
+      - -w
+      - "3"
+      - --bind
+      - "0.0.0.0:8443"
+    ports:
+      - "8443:8443"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1280m
+    pids_limit: 256
+    environment:
+      AZAZEL_ROOT: /app
+    volumes:
+      - ../config:/app/config:ro
+      - ../data:/app/data:ro
+      - ../var:/app/var
+      - ../secrets:/app/secrets:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8443/v1/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      worker:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: azazel-cti:latest
+    command: ["python", "-m", "azazel_cti.worker", "--online", "--interval-s", "5"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 640m
+    pids_limit: 64
+    # Design S11/S7: reserve one core for the worker so a live bundle
+    # build or feed pull never contends with the api's query-serving
+    # cores. Adjust the cpuset index to your board's core count.
+    cpuset: "3"
+    environment:
+      AZAZEL_ROOT: /app
+    volumes:
+      - ../config:/app/config:ro
+      - ../data:/app/data
+      - ../var:/app/var
+      - ../secrets:/app/secrets
+    healthcheck:
+      test: ["CMD", "test", "-f", "/app/var/run/local.lock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
