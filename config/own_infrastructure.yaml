@@ -1,0 +1,15 @@
+# Own-infrastructure and critical-infrastructure allowlists (design S6).
+# Shipped empty; populated per deployment. Consulted by
+# normalize/exclusions.py before any IOC enters scoring.
+#
+# own_networks: list of CIDR strings for this site's own address space;
+#   traffic/IOCs inside these ranges are excluded from scoring entirely.
+#
+# critical_infrastructure: list of {cidr, label} objects; matches are
+#   flagged and quarantined (contribution 0 until second-group
+#   corroboration), never silently excluded, and require admin-only
+#   promotion.
+
+own_networks: []
+
+critical_infrastructure: []

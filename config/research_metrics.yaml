@@ -1,0 +1,14 @@
+# Research/metrics knobs (design S8): headline reaction metrics are
+# computed only from rows meeting `metrics_eligible_strict`, recomputed
+# from `reaction_trust_event` at export time.
+
+metrics_eligible_strict:
+  min_trust_tier: same_edge_corroborated
+  min_evidence_modality_count: 2
+  exclude_linkage: [none]
+
+linkage_window_s: 3600
+
+promotion:
+  min_distinct_edges: 3
+  window_days: 7
