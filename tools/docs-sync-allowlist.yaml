@@ -1,29 +1,30 @@
-known_diffs:
-  - doc: docs/scoring.md
-    check: weights_table
-    key: ioc_match
-    reason: "S12/F-15/T3 ratification pending: scoring.md still shows pre-ratification ioc_match weight"
-  - doc: docs/scoring.md
-    check: weights_table
-    key: campaign
-    reason: "S12/F-15/T3 ratification pending: scoring.md still shows pre-ratification campaign weight"
-  - doc: docs/scoring.md
-    check: weights_table
-    key: geo_asn
-    reason: "S12/F-15/T3 ratification pending: scoring.md still shows pre-ratification geo_asn weight"
-  - doc: docs/scoring.md
-    check: weights_table
-    key: cve_exploited
-    reason: "S12/F-15/T3 ratification pending: scoring.md weight table still omits cve_exploited"
-  - doc: docs/api.md
-    check: reason_example
-    key: ioc_match
-    reason: "S12/F-15/T3 ratification pending: api.md reason[] example still shows pre-ratification ioc_match weight"
-  - doc: docs/api.md
-    check: reason_example
-    key: campaign
-    reason: "S12/F-15/T3 ratification pending: api.md reason[] example still shows pre-ratification campaign weight"
-  - doc: docs/api.md
-    check: reason_example
-    key: geo_asn
-    reason: "S12/F-15/T3 ratification pending: api.md reason[] example still shows pre-ratification geo_asn weight"
+known_diffs: []
+# T3 ratification resolved these diffs; any future drift should fail instead of warning.
+# - doc: docs/scoring.md
+#   check: weights_table
+#   key: ioc_match
+#   reason: "S12/F-15/T3 ratification pending: scoring.md still shows pre-ratification ioc_match weight"
+# - doc: docs/scoring.md
+#   check: weights_table
+#   key: campaign
+#   reason: "S12/F-15/T3 ratification pending: scoring.md still shows pre-ratification campaign weight"
+# - doc: docs/scoring.md
+#   check: weights_table
+#   key: geo_asn
+#   reason: "S12/F-15/T3 ratification pending: scoring.md still shows pre-ratification geo_asn weight"
+# - doc: docs/scoring.md
+#   check: weights_table
+#   key: cve_exploited
+#   reason: "S12/F-15/T3 ratification pending: scoring.md weight table still omits cve_exploited"
+# - doc: docs/api.md
+#   check: reason_example
+#   key: ioc_match
+#   reason: "S12/F-15/T3 ratification pending: api.md reason[] example still shows pre-ratification ioc_match weight"
+# - doc: docs/api.md
+#   check: reason_example
+#   key: campaign
+#   reason: "S12/F-15/T3 ratification pending: api.md reason[] example still shows pre-ratification campaign weight"
+# - doc: docs/api.md
+#   check: reason_example
+#   key: geo_asn
+#   reason: "S12/F-15/T3 ratification pending: api.md reason[] example still shows pre-ratification geo_asn weight"
