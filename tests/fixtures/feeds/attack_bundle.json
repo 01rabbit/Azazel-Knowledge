@@ -1,0 +1,84 @@
+{
+  "type": "bundle",
+  "id": "bundle--00000000-0000-4000-8000-000000000001",
+  "objects": [
+    {
+      "type": "x-mitre-collection",
+      "id": "x-mitre-collection--00000000-0000-4000-8000-0000000000c0",
+      "name": "Enterprise ATT&CK",
+      "x_mitre_version": "15.1",
+      "spec_version": "2.1"
+    },
+    {
+      "type": "x-mitre-tactic",
+      "id": "x-mitre-tactic--00000000-0000-4000-8000-0000000000t1",
+      "name": "Credential Access",
+      "x_mitre_shortname": "credential-access",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "TA0006"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--00000000-0000-4000-8000-0000000000a1",
+      "name": "Brute Force",
+      "description": "Adversaries may use brute force techniques.",
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "credential-access"}
+      ],
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1110"}
+      ],
+      "x_mitre_is_subtechnique": false,
+      "x_mitre_platforms": ["Linux", "Windows"],
+      "x_mitre_data_sources": ["Command: Command Execution"]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--00000000-0000-4000-8000-0000000000a2",
+      "name": "Password Guessing",
+      "description": "Adversaries may guess passwords.",
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "credential-access"}
+      ],
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1110.001"}
+      ],
+      "x_mitre_is_subtechnique": true,
+      "x_mitre_platforms": ["Linux"],
+      "x_mitre_data_sources": []
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--00000000-0000-4000-8000-0000000000a3",
+      "name": "Deprecated Technique",
+      "revoked": true,
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T9999"}
+      ]
+    },
+    {
+      "type": "course-of-action",
+      "id": "course-of-action--00000000-0000-4000-8000-0000000000m1",
+      "name": "Account Use Policies",
+      "description": "Configure lockout policies.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "M1036"}
+      ]
+    },
+    {
+      "type": "relationship",
+      "id": "relationship--00000000-0000-4000-8000-0000000000r1",
+      "relationship_type": "mitigates",
+      "source_ref": "course-of-action--00000000-0000-4000-8000-0000000000m1",
+      "target_ref": "attack-pattern--00000000-0000-4000-8000-0000000000a1"
+    },
+    {
+      "type": "relationship",
+      "id": "relationship--00000000-0000-4000-8000-0000000000r2",
+      "relationship_type": "subtechnique-of",
+      "source_ref": "attack-pattern--00000000-0000-4000-8000-0000000000a2",
+      "target_ref": "attack-pattern--00000000-0000-4000-8000-0000000000a1"
+    }
+  ]
+}

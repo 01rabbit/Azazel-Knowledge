@@ -1,0 +1,7 @@
+# URLhaus recent URLs (synthetic fixture)
+url,host,date
+http://malware.example.com/payload.exe,malware.example.com,2026-07-05T10:00:00Z
+http://45.155.205.233/drop.bin,45.155.205.233,2026-07-05T11:30:00Z
+http://10.0.0.5/internal.exe,10.0.0.5,2026-07-05T12:00:00Z
+hxxp://evil[.]example[.]org/stage2,evil.example.org,2026-07-05T13:00:00Z
+not-a-url,,2026-07-05T14:00:00Z

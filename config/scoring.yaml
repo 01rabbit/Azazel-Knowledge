@@ -31,6 +31,8 @@ components:
 
   history:
     burst_cap: 500
+    half_saturation_count: 10
+    trend_bonus: 10
 
   attack_map:
     single_basis_cap: 60
