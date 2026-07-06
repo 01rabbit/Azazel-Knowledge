@@ -62,6 +62,7 @@ python -m pytest tests/unit -q # 全緑が完了条件(基準線 487 本)
 
 `python -m pytest tests/unit -q` が全緑 + 指示された受け入れ基準を満たすこと。
 完了報告に必ず含める:
+
 1. 作成/変更ファイル一覧
 2. テスト数(before → after)
 3. 判断に迷った点・制約との緊張があった箇所
