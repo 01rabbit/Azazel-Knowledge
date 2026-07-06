@@ -1,0 +1,944 @@
+#!/usr/bin/env python3
+"""azctl -- Azazel-CTI operations CLI (design S11).
+
+Wires existing library functions into an operator-facing surface:
+provisioning a node's directory tree, validating configuration,
+building/signing/inspecting/importing offline bundles, running an
+offline feed pull, managing trust anchors and API client tokens,
+backup/restore, audit-chain verification, a health snapshot, and the
+crypto-erase stub. Nothing here re-implements scoring, ingest, or
+storage logic -- it only sequences calls into `azazel_cti.*`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import io
+import json
+import os
+import sqlite3
+import sys
+import tarfile
+from pathlib import Path
+from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(_REPO_ROOT / "src"))
+sys.path.insert(0, str(_REPO_ROOT / "tools"))
+
+from nacl.signing import SigningKey  # noqa: E402
+
+import bundle_build  # noqa: E402
+from azazel_cti.bundle.importer import apply_differential, import_full  # noqa: E402
+from azazel_cti.bundle.rollback_anchor import (  # noqa: E402
+    mark_needs_full_rebaseline,
+    read_state,
+)
+from azazel_cti.bundle.verify import peek_manifest  # noqa: E402
+from azazel_cti.audit.logger import MerkleAnchor, verify_anchors, verify_chain  # noqa: E402
+from azazel_cti.core.config import ConfigError, TrackedConfigLoader  # noqa: E402
+from azazel_cti.db import generations  # noqa: E402
+from azazel_cti.db.repository import apply_migrations  # noqa: E402
+from azazel_cti.db.writer import P0, WRITER_PRAGMAS, PrioritySingleWriterQueue, WriterLockHeld  # noqa: E402
+from azazel_cti.normalize.exclusions import ExclusionPolicy  # noqa: E402
+from azazel_cti.security import auth  # noqa: E402
+from azazel_cti.worker import (  # noqa: E402
+    WorkerPaths,
+    build_feed_adapter,
+    current_intel_db_path,
+    ensure_intel_generation,
+    ensure_local_db,
+    load_exclusion_policy,
+)
+
+# --------------------------------------------------------------------------
+# shared helpers
+# --------------------------------------------------------------------------
+
+
+def _paths(args: argparse.Namespace) -> WorkerPaths:
+    root = Path(args.root) if getattr(args, "root", None) else Path(os.environ.get("AZAZEL_ROOT", ".")).resolve()
+    config_dir = Path(args.config_dir) if getattr(args, "config_dir", None) else None
+    return WorkerPaths.from_root(root, config_dir=config_dir)
+
+
+@contextlib.contextmanager
+def _writer_flock(lock_path: Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        fh.close()
+        raise SystemExit(f"writer lock held (is the worker running?): {lock_path} ({exc})") from exc
+    try:
+        yield
+    finally:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+
+def _open_intel_connection(intel_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(intel_path, isolation_level=None)
+    for pragma in WRITER_PRAGMAS:
+        conn.execute(pragma)
+    return conn
+
+
+def _add_tar_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
+    info = tarfile.TarInfo(name=name)
+    info.size = len(data)
+    info.mtime = 0
+    info.mode = 0o644
+    tar.addfile(info, io.BytesIO(data))
+
+
+def _audit_event(paths: WorkerPaths, stream: str, event: dict[str, Any]) -> None:
+    """Append one line to an azctl audit chain and roll a joint anchor if due.
+
+    Best-effort: a broken audit sink must not block an operator CLI
+    command from completing (unlike the API's context path, which fails
+    closed per F-17), so failures here are printed, not raised.
+    """
+    from azazel_cti.audit.logger import AuditChain
+
+    try:
+        chain_dir = paths.audit_dir / stream
+        chain = AuditChain(chain_dir, f"azctl-{os.getpid()}", "cli", lambda text: text)
+        chain.append(event)
+        chain.flush()
+        if paths.node_signing_key_path.is_file():
+            signing_key = SigningKey(paths.node_signing_key_path.read_bytes())
+            anchor_mgr = MerkleAnchor(paths.audit_dir, paths.audit_dir / "anchor.jsonl", signing_key)
+            anchor_mgr.record_entries(1)
+            anchor_mgr.maybe_anchor()
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: audit event not recorded: {exc}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------
+# provision
+# --------------------------------------------------------------------------
+
+
+def _dump_anchors(threshold: int, keys: dict[str, str], revoked: list[str]) -> str:
+    lines = [f"threshold = {int(threshold)}", f"revoked = [{', '.join(json.dumps(r) for r in revoked)}]", ""]
+    lines.append("[keys]")
+    for key_id, hex_key in keys.items():
+        lines.append(f"{key_id} = {json.dumps(hex_key)}")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_provision(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    paths.ensure_dirs()
+
+    ensure_local_db(paths.local_db_path)
+    gen = ensure_intel_generation(paths.data_db_dir)
+    print(f"initialized data/db/local.db and data/db/gen-{gen}/intel.db (current)")
+
+    if not paths.node_signing_key_path.is_file():
+        signing_key = SigningKey.generate()
+        paths.node_signing_key_path.write_bytes(signing_key.encode())
+        paths.node_signing_key_path.chmod(0o600)
+        print(f"generated node signing key: {paths.node_signing_key_path}")
+        print(f"node verify_key: {signing_key.verify_key.encode().hex()}")
+    else:
+        print(f"node signing key already present: {paths.node_signing_key_path}")
+
+    if not paths.anchors_path.is_file():
+        paths.anchors_path.write_text(_dump_anchors(1, {}, []), encoding="utf-8")
+        paths.anchors_path.chmod(0o600)
+        print(f"wrote trust anchor template: {paths.anchors_path} (empty -- run 'azctl keys add')")
+    else:
+        print(f"trust anchors already present: {paths.anchors_path}")
+
+    if not paths.state_path.is_file():
+        from azazel_cti.bundle.rollback_anchor import RollbackState, write_state
+
+        write_state(paths.state_path, RollbackState())
+        print(f"wrote anti-rollback state: {paths.state_path}")
+    else:
+        print(f"anti-rollback state already present: {paths.state_path}")
+
+    key_id = os.urandom(4).hex()
+    token, token_sha256 = auth.mint_token(key_id)
+    scopes = ["ingest", "query", "read", "admin"]
+
+    def _insert_admin(conn: sqlite3.Connection) -> None:
+        from azazel_cti.db.repository import utc_now_rfc3339
+
+        conn.execute(
+            "INSERT INTO api_client (key_id, token_sha256, scopes, quota_bytes, enabled, created_at) "
+            "VALUES (?, ?, ?, NULL, 1, ?)",
+            (key_id, token_sha256, json.dumps(scopes), utc_now_rfc3339()),
+        )
+
+    writer = PrioritySingleWriterQueue(paths.local_db_path, paths.local_lock_path)
+    writer.open()
+    try:
+        writer.submit(P0, _insert_admin)
+        writer.process_pending()
+    finally:
+        writer.close()
+
+    print("")
+    print("first admin API client token (shown once -- store it now):")
+    print(f"  key_id: {key_id}")
+    print(f"  token:  {token}")
+    print("")
+
+    if args.check_thermal:
+        thermal_path = Path("/sys/class/thermal/thermal_zone0/temp")
+        if thermal_path.is_file():
+            try:
+                millidegrees = int(thermal_path.read_text().strip())
+                print(f"thermal check: {millidegrees / 1000:.1f} C ({thermal_path})")
+            except ValueError:
+                print(f"thermal check: could not parse {thermal_path}")
+        else:
+            print("thermal check: skipped (no thermal zone found)")
+
+    return 0
+
+
+# --------------------------------------------------------------------------
+# check-config
+# --------------------------------------------------------------------------
+
+GEN_CACHE_MB_PER_WORKER = 64
+GEN_CACHE_WORKERS = 3
+DB_PSS_CEILING_MIB = 320
+API_MEM_LIMIT_MIB = 1280
+WORKER_MEM_LIMIT_MIB = 640
+TOTAL_RSS_BUDGET_MIB = 2048
+
+
+def cmd_check_config(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir) if args.config_dir else _REPO_ROOT / "config"
+    try:
+        loader = TrackedConfigLoader(config_dir)
+    except ConfigError as exc:
+        print(f"config invalid: {exc}", file=sys.stderr)
+        return 1
+
+    weights_sum = sum(float(v) for v in loader.weights().values())
+    confidence_sum = sum(float(v) for v in loader.confidence_weights().values())
+
+    print(f"config_dir: {config_dir}")
+    print(f"config_hash: {loader.config_hash}")
+    print(f"weights sum: {weights_sum:.9f} (ok)")
+    print(f"confidence_weights sum: {confidence_sum:.9f} (ok)")
+    print(f"context deadline_ms: {loader.deadline_ms()}")
+    print(f"stats max_staleness_s: {loader.max_staleness_s()}")
+    print("")
+    print("memory arithmetic (design S2/S11):")
+    gen_cache_total = GEN_CACHE_MB_PER_WORKER * GEN_CACHE_WORKERS
+    print(f"  gen_cache: {GEN_CACHE_WORKERS} x {GEN_CACHE_MB_PER_WORKER} MiB = {gen_cache_total} MiB")
+    print(f"  db_pss_ceiling: {DB_PSS_CEILING_MIB} MiB (combined, both processes)")
+    print(f"  api mem_limit: {API_MEM_LIMIT_MIB} MiB")
+    print(f"  worker mem_limit: {WORKER_MEM_LIMIT_MIB} MiB")
+    total = API_MEM_LIMIT_MIB + WORKER_MEM_LIMIT_MIB
+    verdict = "OK" if total <= TOTAL_RSS_BUDGET_MIB else "OVER BUDGET"
+    print(f"  total containers: {total} MiB (budget {TOTAL_RSS_BUDGET_MIB} MiB): {verdict}")
+    return 0 if total <= TOTAL_RSS_BUDGET_MIB else 1
+
+
+# --------------------------------------------------------------------------
+# bundle build|sign|inspect|import|resolve-state
+# --------------------------------------------------------------------------
+
+
+def cmd_bundle_build(args: argparse.Namespace) -> int:
+    return bundle_build.main(["build", *args.bundle_build_args])
+
+
+def cmd_bundle_sign(args: argparse.Namespace) -> int:
+    bundle_path = Path(args.bundle)
+    members: list[tuple[str, bytes]] = []
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        for info in tar.getmembers():
+            data = tar.extractfile(info).read() if info.isreg() else b""
+            members.append((info.name, data))
+
+    manifest_bytes: bytes | None = None
+    sig_bytes = b""
+    content_members: list[tuple[str, bytes]] = []
+    for name, data in members:
+        if name == bundle_build.MANIFEST_MEMBER:
+            manifest_bytes = data
+        elif name == bundle_build.SIGNATURE_MEMBER:
+            sig_bytes = data
+        else:
+            content_members.append((name, data))
+
+    if manifest_bytes is None:
+        raise SystemExit(f"{bundle_path}: no manifest.json member found")
+
+    sig_lines = [ln for ln in sig_bytes.decode("utf-8").splitlines() if ln.strip()]
+    for key_path in args.sign_key:
+        hex_key = Path(key_path).read_text(encoding="utf-8").strip()
+        signing_key = SigningKey(bytes.fromhex(hex_key))
+        key_id = signing_key.verify_key.encode().hex()[:8]
+        signature = signing_key.sign(manifest_bytes).signature.hex()
+        sig_lines.append(f"{key_id}:{signature}")
+    new_sig_bytes = ("\n".join(sig_lines) + "\n").encode("utf-8")
+
+    tmp_out = bundle_path.with_name(f".{bundle_path.name}.tmp")
+    with tarfile.open(tmp_out, "w:gz") as tar:
+        _add_tar_bytes(tar, bundle_build.MANIFEST_MEMBER, manifest_bytes)
+        _add_tar_bytes(tar, bundle_build.SIGNATURE_MEMBER, new_sig_bytes)
+        for name, data in content_members:
+            _add_tar_bytes(tar, name, data)
+    os.replace(tmp_out, bundle_path)
+
+    print(f"added {len(args.sign_key)} signature(s) to {bundle_path} ({len(sig_lines)} total)")
+    return 0
+
+
+def cmd_bundle_inspect(args: argparse.Namespace) -> int:
+    manifest = peek_manifest(args.bundle)
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_bundle_import(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    bundle_path = Path(args.bundle)
+    anchors_path = Path(args.anchors) if args.anchors else paths.anchors_path
+    state_path = Path(args.state) if args.state else paths.state_path
+    data_db_dir = Path(args.data_db_dir) if args.data_db_dir else paths.data_db_dir
+
+    if args.fingerprint:
+        digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+        manifest = peek_manifest(bundle_path)
+        print(f"bundle_version: {manifest['bundle_version']}")
+        print(f"kind: {manifest['kind']}")
+        print(f"base_version: {manifest.get('base_version')}")
+        print(f"sha256: {digest}")
+        return 0
+
+    if not args.confirm:
+        raise SystemExit("refusing to import without --confirm (use --fingerprint to preview first)")
+
+    manifest = peek_manifest(bundle_path)
+    with _writer_flock(paths.intel_lock_path):
+        if manifest["kind"] == "full":
+            result = import_full(bundle_path, anchors_path, state_path, data_db_dir)
+        else:
+            current = generations.current_generation(data_db_dir)
+            if current is None:
+                raise SystemExit("no live generation to apply a differential bundle against")
+            live_path = generations.intel_db_path(data_db_dir, current)
+            conn = _open_intel_connection(live_path)
+            try:
+                result = apply_differential(bundle_path, anchors_path, state_path, conn)
+            finally:
+                conn.close()
+
+    print(f"imported bundle_version={result.bundle_version} generation={result.generation} tables={result.tables}")
+    _audit_event(paths, "azctl", {"action": "bundle_import", "bundle_version": result.bundle_version})
+    return 0
+
+
+def cmd_bundle_resolve_state(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    state_path = Path(args.state) if args.state else paths.state_path
+    state = read_state(state_path)
+    print(f"last_imported_version: {state.last_imported_version}")
+    print(f"last_import_at: {state.last_import_at}")
+    print(f"last_bundle_sha256: {state.last_bundle_sha256}")
+    print(f"needs_full_rebaseline: {state.needs_full_rebaseline}")
+
+    if args.clear_rebaseline:
+        if not args.confirm:
+            raise SystemExit("refusing to clear needs_full_rebaseline without --confirm")
+        mark_needs_full_rebaseline(state_path, False)
+        print("needs_full_rebaseline cleared")
+        _audit_event(paths, "azctl", {"action": "resolve_state", "clear_rebaseline": True})
+    return 0
+
+
+# --------------------------------------------------------------------------
+# feed pull|inspect|approve
+# --------------------------------------------------------------------------
+
+
+def cmd_feed_pull(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    paths.ensure_dirs()
+    ensure_local_db(paths.local_db_path)
+    intel_db_path = current_intel_db_path(paths.data_db_dir)
+    config_loader = TrackedConfigLoader(paths.config_dir)
+    feeds_doc = config_loader.feeds()
+    exclusion_policy = load_exclusion_policy(paths.config_dir)
+
+    if args.file:
+        file_path = Path(args.file)
+        fetch_bytes = file_path.read_bytes
+    elif args.online:
+        from azazel_cti.feeds.base import fetch_https_with_pins
+        from azazel_cti.worker import FEED_ENDPOINTS
+
+        url = FEED_ENDPOINTS.get(args.feed_id)
+        if url is None:
+            raise SystemExit(f"no known online endpoint for feed {args.feed_id!r}; use --file")
+        merged = feeds_doc.get("feeds", {}).get(args.feed_id, {})
+        pins = list(merged.get("pin_spki_sha256") or [])
+        fetch_bytes = lambda: fetch_https_with_pins(url, pins)  # noqa: E731
+    else:
+        raise SystemExit("azctl feed pull requires --file PATH (offline) or --online")
+
+    from azazel_cti.core.clock import SystemClock
+
+    local_writer = PrioritySingleWriterQueue(paths.local_db_path, paths.local_lock_path)
+    intel_writer = PrioritySingleWriterQueue(intel_db_path, paths.intel_lock_path)
+    try:
+        local_writer.open()
+        intel_writer.open()
+    except WriterLockHeld as exc:
+        raise SystemExit(f"writer lock held (is the worker running?): {exc}") from exc
+    try:
+        adapter = build_feed_adapter(
+            args.feed_id, feeds_doc, intel_writer, local_writer,
+            clock=SystemClock(), fetch_bytes=fetch_bytes, exclusion_policy=exclusion_policy,
+        )
+        outcome = adapter.run()
+    finally:
+        local_writer.close()
+        intel_writer.close()
+
+    print(
+        f"feed_id={outcome.feed_id} status={outcome.status} "
+        f"items_fetched={outcome.items_fetched} items_applied={outcome.items_applied} "
+        f"reason={outcome.reason}"
+    )
+    return 0 if outcome.status in ("applied", "throttled", "warming_up") else 1
+
+
+def cmd_feed_inspect(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    intel_db_path = current_intel_db_path(paths.data_db_dir)
+    conn = sqlite3.connect(f"file:{intel_db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        state = conn.execute("SELECT * FROM feed_state WHERE feed_id = ?", (args.feed_id,)).fetchone()
+    finally:
+        conn.close()
+    print(f"feed_state: {dict(state) if state else None}")
+
+    local_conn = sqlite3.connect(f"file:{paths.local_db_path}?mode=ro", uri=True)
+    local_conn.row_factory = sqlite3.Row
+    try:
+        rows = local_conn.execute(
+            "SELECT * FROM feed_quarantine WHERE feed_id = ? ORDER BY quarantined_at DESC", (args.feed_id,)
+        ).fetchall()
+    finally:
+        local_conn.close()
+    print(f"feed_quarantine ({len(rows)}):")
+    for row in rows:
+        print(f"  {dict(row)}")
+    return 0
+
+
+def cmd_feed_approve(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    intel_db_path = current_intel_db_path(paths.data_db_dir)
+
+    with _writer_flock(paths.intel_lock_path):
+        conn = _open_intel_connection(intel_db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE feed_state SET enabled = 1 WHERE feed_id = ?", (args.feed_id,))
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+
+    from azazel_cti.db.repository import utc_now_rfc3339
+
+    with _writer_flock(paths.local_lock_path):
+        local_conn = sqlite3.connect(paths.local_db_path, isolation_level=None)
+        try:
+            local_conn.execute("BEGIN IMMEDIATE")
+            local_conn.execute(
+                "UPDATE feed_quarantine SET resolved_at = ? "
+                "WHERE feed_id = ? AND resolved_at IS NULL",
+                (utc_now_rfc3339(), args.feed_id),
+            )
+            local_conn.execute("COMMIT")
+        finally:
+            local_conn.close()
+
+    _audit_event(paths, "azctl", {"action": "feed_approve", "feed_id": args.feed_id})
+    print(f"feed {args.feed_id!r} re-enabled and open quarantine entries resolved")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# keys list|add|remove|set-threshold
+# --------------------------------------------------------------------------
+
+
+def _read_anchors(anchors_path: Path) -> tuple[int, dict[str, str], list[str]]:
+    import tomllib
+
+    if not anchors_path.is_file():
+        return 1, {}, []
+    with anchors_path.open("rb") as fh:
+        doc = tomllib.load(fh)
+    return int(doc.get("threshold", 1)), dict(doc.get("keys", {})), list(doc.get("revoked", []))
+
+
+def _write_anchors(anchors_path: Path, threshold: int, keys: dict[str, str], revoked: list[str]) -> None:
+    anchors_path.parent.mkdir(parents=True, exist_ok=True)
+    anchors_path.write_text(_dump_anchors(threshold, keys, revoked), encoding="utf-8")
+    anchors_path.chmod(0o600)
+
+
+def cmd_keys_list(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    print(f"threshold: {threshold}")
+    print(f"keys ({len(keys)}):")
+    for key_id, hex_key in keys.items():
+        print(f"  {key_id}: {hex_key}")
+    print(f"revoked: {revoked}")
+    return 0
+
+
+def cmd_keys_add(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    keys[args.key_id] = args.verify_key_hex
+    _write_anchors(paths.anchors_path, threshold, keys, revoked)
+    _audit_event(paths, "azctl", {"action": "keys_add", "key_id": args.key_id})
+    print(f"added key {args.key_id!r}")
+    return 0
+
+
+def cmd_keys_remove(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    keys.pop(args.key_id, None)
+    if args.revoke and args.key_id not in revoked:
+        revoked.append(args.key_id)
+    _write_anchors(paths.anchors_path, threshold, keys, revoked)
+    _audit_event(paths, "azctl", {"action": "keys_remove", "key_id": args.key_id, "revoked": args.revoke})
+    print(f"removed key {args.key_id!r}" + (" (revoked)" if args.revoke else ""))
+    return 0
+
+
+def cmd_keys_set_threshold(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    _threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    _write_anchors(paths.anchors_path, args.threshold, keys, revoked)
+    _audit_event(paths, "azctl", {"action": "keys_set_threshold", "threshold": args.threshold})
+    print(f"threshold set to {args.threshold}")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# client add|list|revoke
+# --------------------------------------------------------------------------
+
+
+def cmd_client_add(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    ensure_local_db(paths.local_db_path)
+    key_id = args.key_id or os.urandom(4).hex()
+    scopes = [s.strip() for s in args.scopes.split(",") if s.strip()]
+    token, token_sha256 = auth.mint_token(key_id)
+
+    from azazel_cti.db.repository import utc_now_rfc3339
+
+    def _insert(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT INTO api_client (key_id, token_sha256, scopes, quota_bytes, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?)",
+            (key_id, token_sha256, json.dumps(scopes), args.quota_bytes, utc_now_rfc3339()),
+        )
+
+    writer = PrioritySingleWriterQueue(paths.local_db_path, paths.local_lock_path)
+    writer.open()
+    try:
+        writer.submit(P0, _insert)
+        writer.process_pending()
+    finally:
+        writer.close()
+
+    print(f"key_id: {key_id}")
+    print(f"scopes: {scopes}")
+    print(f"token (shown once): {token}")
+    return 0
+
+
+def cmd_client_list(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    conn = sqlite3.connect(f"file:{paths.local_db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT key_id, scopes, quota_bytes, enabled, created_at FROM api_client").fetchall()
+    finally:
+        conn.close()
+    for row in rows:
+        print(dict(row))
+    return 0
+
+
+def cmd_client_revoke(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+
+    def _revoke(conn: sqlite3.Connection) -> None:
+        conn.execute("UPDATE api_client SET enabled = 0 WHERE key_id = ?", (args.key_id,))
+
+    writer = PrioritySingleWriterQueue(paths.local_db_path, paths.local_lock_path)
+    writer.open()
+    try:
+        writer.submit(P0, _revoke)
+        writer.process_pending()
+    finally:
+        writer.close()
+    _audit_event(paths, "azctl", {"action": "client_revoke", "key_id": args.key_id})
+    print(f"client {args.key_id!r} revoked")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# backup / restore
+# --------------------------------------------------------------------------
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    intel_db_path = current_intel_db_path(paths.data_db_dir)
+
+    with _writer_flock(paths.local_lock_path), _writer_flock(paths.intel_lock_path):
+        local_out = out_dir / "local.db"
+        intel_out = out_dir / "intel.db"
+        for existing in (local_out, intel_out):
+            if existing.exists():
+                existing.unlink()
+
+        conn = sqlite3.connect(paths.local_db_path)
+        try:
+            conn.execute("VACUUM INTO ?", (str(local_out),))
+        finally:
+            conn.close()
+
+        conn = sqlite3.connect(intel_db_path)
+        try:
+            conn.execute("VACUUM INTO ?", (str(intel_out),))
+        finally:
+            conn.close()
+
+    print(f"backup written: {local_out}, {intel_out}")
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    backup_dir = Path(args.backup_dir)
+    local_backup = backup_dir / "local.db"
+    intel_backup = backup_dir / "intel.db"
+    if not local_backup.is_file() or not intel_backup.is_file():
+        raise SystemExit(f"expected local.db and intel.db under {backup_dir}")
+    if not args.confirm:
+        raise SystemExit("refusing to restore without --confirm (this replaces the live databases)")
+
+    paths.ensure_dirs()
+    with _writer_flock(paths.local_lock_path), _writer_flock(paths.intel_lock_path):
+        import shutil
+
+        shutil.copy2(local_backup, paths.local_db_path)
+
+        current = generations.current_generation(paths.data_db_dir)
+        next_n = 1 if current is None else current + 1
+        new_gen_dir = generations.generation_dir(paths.data_db_dir, next_n)
+        new_gen_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(intel_backup, generations.intel_db_path(paths.data_db_dir, next_n))
+        generations.swap_current(paths.data_db_dir, next_n)
+        generations.gc_old_generations(paths.data_db_dir, keep=2)
+
+    mark_needs_full_rebaseline(paths.state_path, True)
+    _audit_event(paths, "azctl", {"action": "restore", "generation": next_n})
+    print(f"restored local.db and intel.db (generation {next_n}); needs_full_rebaseline=true")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# audit verify
+# --------------------------------------------------------------------------
+
+
+def cmd_audit_verify(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    chains_dir = paths.audit_dir
+    anchor_path = chains_dir / "anchor.jsonl"
+    ok = True
+
+    if not chains_dir.is_dir():
+        print(f"no audit chains found under {chains_dir}")
+        return 0
+
+    for path in sorted(chains_dir.rglob("*.jsonl")):
+        if path == anchor_path:
+            continue
+        result = verify_chain(path)
+        status = "OK" if result.ok else f"FAIL ({result.error} at seq {result.bad_seq})"
+        print(f"chain {path.relative_to(chains_dir)}: {status} ({result.lines} lines)")
+        ok = ok and result.ok
+
+    if paths.node_signing_key_path.is_file():
+        verify_key = SigningKey(paths.node_signing_key_path.read_bytes()).verify_key
+        anchors_ok = verify_anchors(anchor_path, chains_dir, verify_key)
+        print(f"anchors: {'OK' if anchors_ok else 'FAIL'}")
+        ok = ok and anchors_ok
+    else:
+        print("anchors: skipped (no node_signing_key found)")
+
+    print(f"audit verify: {'PASS' if ok else 'FAIL'}")
+    return 0 if ok else 1
+
+
+# --------------------------------------------------------------------------
+# health
+# --------------------------------------------------------------------------
+
+
+def cmd_health(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    snapshot: dict[str, Any] = {}
+
+    intel_db_path = current_intel_db_path(paths.data_db_dir)
+    conn = sqlite3.connect(f"file:{intel_db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        snapshot["feeds"] = [dict(r) for r in conn.execute(
+            "SELECT feed_id, last_run, last_success, enabled FROM feed_state"
+        ).fetchall()]
+        snapshot["intel_generation"] = generations.current_generation(paths.data_db_dir)
+    finally:
+        conn.close()
+
+    if paths.local_db_path.is_file():
+        local_conn = sqlite3.connect(f"file:{paths.local_db_path}?mode=ro", uri=True)
+        local_conn.row_factory = sqlite3.Row
+        try:
+            snapshot["open_quarantine"] = local_conn.execute(
+                "SELECT COUNT(*) AS n FROM feed_quarantine WHERE resolved_at IS NULL"
+            ).fetchone()["n"]
+            snapshot["pending_edge_reported"] = local_conn.execute(
+                "SELECT COUNT(*) AS n FROM edge_reported_ioc WHERE status = 'quarantined'"
+            ).fetchone()["n"]
+        finally:
+            local_conn.close()
+    else:
+        snapshot["open_quarantine"] = None
+        snapshot["pending_edge_reported"] = None
+
+    state = read_state(paths.state_path) if paths.state_path.is_file() else None
+    snapshot["bundle_state"] = {
+        "last_imported_version": state.last_imported_version if state else None,
+        "needs_full_rebaseline": state.needs_full_rebaseline if state else None,
+    }
+
+    print(json.dumps(snapshot, indent=2, sort_keys=True))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# scrub
+# --------------------------------------------------------------------------
+
+
+def cmd_scrub(args: argparse.Namespace) -> int:
+    if args.force:
+        raise SystemExit(
+            "azctl scrub --force is not implemented in Phase 1: crypto-erase is a hardware/LUKS "
+            "operation (destroy the LUKS header key slots), not something this dev CLI performs."
+        )
+    print(
+        "azctl scrub is a documented stub (design S7). The real crypto-erase procedure is:\n"
+        "  1. Stop the api and worker containers.\n"
+        "  2. cryptsetup luksErase <secrets-partition-device>\n"
+        "     cryptsetup luksErase <data-partition-device>\n"
+        "     (each destroys every LUKS2 key slot; without a slot the Adiantum-encrypted\n"
+        "     ciphertext on disk is unrecoverable -- this is the seizure-model crypto-erase.)\n"
+        "  3. Physically wipe or destroy secrets/node_signing_key and secrets/trust/*.toml if the\n"
+        "     device is being decommissioned rather than re-keyed.\n"
+        "No destructive action is taken without --force, and --force always errors in Phase 1 dev."
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------
+# argument parser
+# --------------------------------------------------------------------------
+
+
+def _add_root_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--root", default=None, help="node root (default: $AZAZEL_ROOT or cwd)")
+    parser.add_argument("--config-dir", default=None, help="config directory (default: <root>/config)")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="azctl", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("provision", help="initialize a node's directory tree")
+    _add_root_args(p)
+    p.add_argument("--check-thermal", action="store_true")
+    p.set_defaults(func=cmd_provision)
+
+    p = sub.add_parser("check-config", help="validate config and print memory arithmetic")
+    p.add_argument("--config-dir", default=None)
+    p.set_defaults(func=cmd_check_config)
+
+    bundle = sub.add_parser("bundle", help="bundle build|sign|inspect|import|resolve-state")
+    bundle_sub = bundle.add_subparsers(dest="bundle_command", required=True)
+
+    p = bundle_sub.add_parser("build", help="passthrough to tools/bundle_build.py build")
+    p.add_argument("bundle_build_args", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_bundle_build)
+
+    p = bundle_sub.add_parser("sign", help="append signature(s) to an already-built bundle")
+    p.add_argument("bundle")
+    p.add_argument("--sign-key", action="append", required=True, dest="sign_key")
+    p.set_defaults(func=cmd_bundle_sign)
+
+    p = bundle_sub.add_parser("inspect", help="print a bundle's manifest, unverified")
+    p.add_argument("bundle")
+    p.set_defaults(func=cmd_bundle_inspect)
+
+    p = bundle_sub.add_parser("import", help="verify and import a bundle")
+    _add_root_args(p)
+    p.add_argument("bundle")
+    p.add_argument("--anchors", default=None)
+    p.add_argument("--state", default=None)
+    p.add_argument("--data-db-dir", default=None)
+    p.add_argument("--confirm", action="store_true")
+    p.add_argument("--fingerprint", action="store_true", help="print manifest_version/sha256 and exit")
+    p.set_defaults(func=cmd_bundle_import)
+
+    p = bundle_sub.add_parser("resolve-state", help="inspect/ack anti-rollback state after an alert")
+    _add_root_args(p)
+    p.add_argument("--state", default=None)
+    p.add_argument("--clear-rebaseline", action="store_true")
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_bundle_resolve_state)
+
+    feed = sub.add_parser("feed", help="feed pull|inspect|approve")
+    feed_sub = feed.add_subparsers(dest="feed_command", required=True)
+
+    p = feed_sub.add_parser("pull", help="run one feed adapter cycle")
+    _add_root_args(p)
+    p.add_argument("feed_id")
+    p.add_argument("--file", default=None, help="offline source file (air-gapped pull)")
+    p.add_argument("--online", action="store_true", help="fetch live over the network")
+    p.set_defaults(func=cmd_feed_pull)
+
+    p = feed_sub.add_parser("inspect", help="print feed_state + feed_quarantine for a feed")
+    _add_root_args(p)
+    p.add_argument("feed_id")
+    p.set_defaults(func=cmd_feed_inspect)
+
+    p = feed_sub.add_parser("approve", help="re-enable a halted/quarantined feed")
+    _add_root_args(p)
+    p.add_argument("feed_id")
+    p.set_defaults(func=cmd_feed_approve)
+
+    keys = sub.add_parser("keys", help="keys list|add|remove|set-threshold")
+    keys_sub = keys.add_subparsers(dest="keys_command", required=True)
+
+    p = keys_sub.add_parser("list")
+    _add_root_args(p)
+    p.set_defaults(func=cmd_keys_list)
+
+    p = keys_sub.add_parser("add")
+    _add_root_args(p)
+    p.add_argument("key_id")
+    p.add_argument("verify_key_hex")
+    p.set_defaults(func=cmd_keys_add)
+
+    p = keys_sub.add_parser("remove")
+    _add_root_args(p)
+    p.add_argument("key_id")
+    p.add_argument("--revoke", action="store_true")
+    p.set_defaults(func=cmd_keys_remove)
+
+    p = keys_sub.add_parser("set-threshold")
+    _add_root_args(p)
+    p.add_argument("threshold", type=int)
+    p.set_defaults(func=cmd_keys_set_threshold)
+
+    client = sub.add_parser("client", help="client add|list|revoke")
+    client_sub = client.add_subparsers(dest="client_command", required=True)
+
+    p = client_sub.add_parser("add")
+    _add_root_args(p)
+    p.add_argument("--key-id", default=None)
+    p.add_argument("--scopes", default="ingest,query")
+    p.add_argument("--quota-bytes", type=int, default=None, dest="quota_bytes")
+    p.set_defaults(func=cmd_client_add)
+
+    p = client_sub.add_parser("list")
+    _add_root_args(p)
+    p.set_defaults(func=cmd_client_list)
+
+    p = client_sub.add_parser("revoke")
+    _add_root_args(p)
+    p.add_argument("key_id")
+    p.set_defaults(func=cmd_client_revoke)
+
+    p = sub.add_parser("backup", help="VACUUM INTO both databases")
+    _add_root_args(p)
+    p.add_argument("--out-dir", required=True, dest="out_dir")
+    p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("restore", help="restore both databases from a backup dir")
+    _add_root_args(p)
+    p.add_argument("--backup-dir", required=True, dest="backup_dir")
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_restore)
+
+    audit = sub.add_parser("audit", help="audit verify")
+    audit_sub = audit.add_subparsers(dest="audit_command", required=True)
+    p = audit_sub.add_parser("verify")
+    _add_root_args(p)
+    p.add_argument("--cross-check", action="store_true", help="reserved; chains+anchors are always cross-checked")
+    p.set_defaults(func=cmd_audit_verify)
+
+    p = sub.add_parser("health", help="print a health snapshot")
+    _add_root_args(p)
+    p.set_defaults(func=cmd_health)
+
+    p = sub.add_parser("scrub", help="crypto-erase (documented stub in Phase 1)")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=cmd_scrub)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(argv) if argv is not None else sys.argv[1:]
+
+    # `bundle build` is a pure passthrough to `tools/bundle_build.py build`.
+    # Dispatched here, ahead of the main parser, because `argparse.REMAINDER`
+    # does not reliably swallow a leading `--flag` token when it immediately
+    # follows nested subparsers (a longstanding argparse quirk) -- forwarding
+    # the raw argv avoids re-declaring bundle_build's own flags twice.
+    if len(argv) >= 2 and argv[0] == "bundle" and argv[1] == "build":
+        return bundle_build.main(["build", *argv[2:]])
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

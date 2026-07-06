@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
-.venv/
-*.db
-*.sqlite3
+.pytest_cache/
+var/
 data/
-.DS_Store
+*.egg-info/

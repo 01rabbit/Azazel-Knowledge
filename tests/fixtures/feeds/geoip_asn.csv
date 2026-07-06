@@ -1,0 +1,6 @@
+network,autonomous_system_number,autonomous_system_organization
+192.0.2.0/25,64500,Example Carrier One
+192.0.2.128/25,64500,Example Carrier One
+198.51.100.0/24,64510,Example Carrier Two
+2001:db8::/32,64520,IPv6 Only Org
+bad-network,64530,Broken Row

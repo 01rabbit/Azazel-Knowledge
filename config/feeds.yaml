@@ -1,0 +1,73 @@
+# Feed adapter configuration (design S6, F-13/F-14/F-16).
+# `cisa_kev` intentionally carries no `source_confidence`: KEV never
+# enters `ioc_source` or a lookup's `sources[]` (F-14) and scores only
+# through the `cve_exploited` component.
+
+defaults:
+  volume_halt_multiplier: 3
+
+feeds:
+  attack:
+    kind: attack_stix
+    group: mitre
+    pin_spki_sha256: []
+
+  cisa_kev:
+    kind: cisa_kev
+    group: cisa
+    pin_spki_sha256: []
+
+  urlhaus:
+    kind: urlhaus
+    group: abusech
+    source_confidence: 85
+    pin_spki_sha256: []
+    min_consecutive_polls: 2
+    ttl:
+      ip: 14d
+      domain: 14d
+      url: 30d
+      hash: 365d
+
+  malwarebazaar:
+    kind: malwarebazaar
+    group: abusech
+    source_confidence: 80
+    pin_spki_sha256: []
+    min_consecutive_polls: 2
+    ttl:
+      hash: 365d
+
+  threatfox:
+    kind: threatfox
+    group: abusech
+    source_confidence:
+      cap: 90
+    pin_spki_sha256: []
+    min_consecutive_polls: 2
+    ttl:
+      ip: 14d
+      domain: 14d
+      url: 30d
+      hash: 365d
+
+  spamhaus_asndrop:
+    kind: spamhaus_asndrop
+    group: spamhaus
+    pin_spki_sha256: []
+    ttl:
+      asn: 7d
+
+  geoip_asn:
+    kind: geoip_asn
+    group: geoip
+    pin_spki_sha256: []
+    ttl:
+      asn: 30d
+
+  edge_reported:
+    kind: edge_reported
+    group: edge_reported
+    source_confidence: 35
+    ttl:
+      default: 3d

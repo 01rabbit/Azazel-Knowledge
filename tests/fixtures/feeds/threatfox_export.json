@@ -1,0 +1,49 @@
+{
+  "data": [
+    {
+      "ioc": "91.219.29.81:4444",
+      "ioc_type": "ip:port",
+      "threat_type": "botnet_cc",
+      "malware": "win.cobalt_strike",
+      "confidence_level": 100,
+      "first_seen": "2026-07-05T09:00:00Z",
+      "last_seen": "2026-07-05T18:00:00Z"
+    },
+    {
+      "ioc": "bad.example.net",
+      "ioc_type": "domain",
+      "threat_type": "payload_delivery",
+      "malware": "win.lummastealer",
+      "confidence_level": 75,
+      "first_seen": "2026-07-05T10:00:00Z",
+      "last_seen": "2026-07-05T17:00:00Z"
+    },
+    {
+      "ioc": "http://dropper.example.io/x.bin",
+      "ioc_type": "url",
+      "threat_type": "payload_delivery",
+      "malware": "win.agent_tesla",
+      "confidence_level": 50,
+      "first_seen": "2026-07-05T11:00:00Z",
+      "last_seen": "2026-07-05T16:00:00Z"
+    },
+    {
+      "ioc": "127.0.0.1:8080",
+      "ioc_type": "ip:port",
+      "threat_type": "botnet_cc",
+      "malware": "win.bogus",
+      "confidence_level": 90,
+      "first_seen": "2026-07-05T12:00:00Z",
+      "last_seen": "2026-07-05T15:00:00Z"
+    },
+    {
+      "ioc": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "ioc_type": "sha256_hash",
+      "threat_type": "payload",
+      "malware": "win.example",
+      "confidence_level": 80,
+      "first_seen": "2026-07-05T13:00:00Z",
+      "last_seen": "2026-07-05T14:00:00Z"
+    }
+  ]
+}

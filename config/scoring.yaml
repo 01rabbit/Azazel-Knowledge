@@ -1,0 +1,106 @@
+# Deterministic scoring configuration (ADR-0006, docs/scoring.md, design S5).
+# `weights` and `confidence_weights` are loader-validated to sum to 1.0
+# (tolerance 1e-9); the loader raises ConfigError otherwise.
+
+weights:
+  ioc_match: 0.30
+  history: 0.20
+  attack_map: 0.15
+  cve_exploited: 0.15
+  campaign: 0.10
+  geo_asn: 0.10
+
+freshness:
+  half_life_days: 30
+  floor: 0.2
+
+components:
+  ioc_match:
+    source_count_curve:
+      "1": 0.4
+      "2": 0.7
+      "3+": 1.0
+    type_caps:
+      ja3: 0.6
+      ja4: 0.7
+      ja3_corroborated: 0.9
+      ja4_corroborated: 1.0
+    corroboration:
+      exact_match_types: [ip, domain, url, hash]
+      history_threshold: 50
+
+  history:
+    burst_cap: 500
+    half_saturation_count: 10
+    trend_bonus: 10
+
+  attack_map:
+    single_basis_cap: 60
+
+  cve_exploited:
+    freshness_floor: 0.7
+    applies_when: [eve_alert]
+
+  campaign:
+    ioc_overlap_weight: 0.7
+    technique_overlap_weight: 0.3
+    single_ref_cap: 40
+    type_diversity_bonus: 10
+
+  geo_asn: {}
+
+confidence_weights:
+  source_count: 0.30
+  source_independence: 0.30
+  source_freshness: 0.25
+  local_corroboration: 0.15
+
+confidence:
+  source_count:
+    max_distinct_groups: 4
+  local_corroboration:
+    floor: 0.3
+
+recommendation:
+  action_bands:
+    - name: isolate
+      condition: {score_gte: 85, confidence_gte: 70}
+      rejected_alternatives: []
+
+    - name: throttle
+      condition: {score_gte: 60, confidence_gte: 50}
+      rejected_alternatives:
+        - action: isolate
+          reason: "score or confidence below the isolate threshold"
+
+    - name: redirect
+      condition: {score_gte: 45, confidence_gte: 40}
+      rejected_alternatives:
+        - action: isolate
+          reason: "score or confidence below the isolate threshold"
+        - action: throttle
+          reason: "score or confidence below the throttle threshold"
+
+    - name: observe
+      default: true
+      rejected_alternatives:
+        - action: isolate
+          reason: "score or confidence below the isolate threshold"
+        - action: throttle
+          reason: "score or confidence below the throttle threshold"
+        - action: redirect
+          reason: "score or confidence below the redirect threshold"
+
+context:
+  deadline_ms: 220
+
+stats:
+  max_staleness_s: 120
+
+research:
+  shadow_scoring:
+    enabled: false
+    reaction_adjustments:
+      mode: shadow
+      max_delta: 30
+      max_total_delta: 20

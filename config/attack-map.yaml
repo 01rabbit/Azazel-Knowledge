@@ -1,0 +1,63 @@
+# ATT&CK mapping rules (design S5/S6): pattern_index-evaluated match
+# predicates over normalized evidence fields, each producing a
+# technique_id contribution to the `attack_map` scoring component.
+# Grammar: match_spec "v":1, combinators all|any|not (depth <= 4),
+# ops eq,in,prefix,suffix,cidr,gte,lte,exists. Unknown op/version
+# entries are skipped and logged, never hard-fail scoring.
+
+version: 1
+
+rules:
+  - id: ssh_bruteforce
+    technique_id: T1110
+    description: "Repeated failed SSH authentication attempts against a single host"
+    match:
+      v: 1
+      all:
+        - {op: eq, field: alert.category, value: bruteforce}
+        - {op: eq, field: alert.proto, value: ssh}
+
+  - id: network_scan
+    technique_id: T1595.002
+    description: "Vulnerability/port scanning behavior against the local network"
+    match:
+      v: 1
+      any:
+        - {op: eq, field: alert.category, value: scan}
+        - {op: eq, field: alert.signature_class, value: network-scan}
+
+  - id: dns_tunneling
+    technique_id: T1071.004
+    description: "DNS used as a C2 channel via tunneling indicators"
+    match:
+      v: 1
+      any:
+        - {op: eq, field: alert.category, value: dns-tunneling}
+        - {op: gte, field: dns.query_entropy, value: 3.5}
+
+  - id: known_malicious_ip
+    technique_id: T1071.001
+    description: "Traffic to/from an IOC-matched malicious IP over a web protocol"
+    match:
+      v: 1
+      all:
+        - {op: exists, field: ioc.matched_ip}
+        - {op: in, field: alert.proto, value: [http, https]}
+
+  - id: c2_beaconing
+    technique_id: T1071.001
+    description: "Periodic outbound connections consistent with C2 beaconing"
+    match:
+      v: 1
+      all:
+        - {op: eq, field: alert.category, value: c2-beacon}
+        - {op: gte, field: flow.periodicity_score, value: 0.7}
+
+  - id: credential_dumping_tooling
+    technique_id: T1003
+    description: "Filename or hash match against known credential-dumping tooling"
+    match:
+      v: 1
+      any:
+        - {op: suffix, field: file.name, value: "lsass.dmp"}
+        - {op: exists, field: ioc.matched_hash}
