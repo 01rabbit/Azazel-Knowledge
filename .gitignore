@@ -4,3 +4,5 @@ __pycache__/
 var/
 data/
 *.egg-info/
+.venv/
+bench-results/
