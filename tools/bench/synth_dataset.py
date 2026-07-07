@@ -67,22 +67,20 @@ def _ip_value(index: int, rng: random.Random) -> str:
 
 
 def _domain_value(index: int, rng: random.Random) -> str:
-    label = f"ioc-{index:08x}-{rng.randrange(0, 1 << 16):04x}"
+    label = f"ioc-{index:012x}"
     return normalize("domain", f"{label}.bench.example")
 
 
 def _sha256_value(index: int, rng: random.Random) -> str:
-    value = f"{index:016x}{rng.getrandbits(192):048x}"
-    return normalize("sha256", value[:64])
+    return normalize("sha256", f"{index:064x}")
 
 
 def _ja3_value(index: int, rng: random.Random) -> str:
-    value = f"{rng.getrandbits(128):032x}"
-    return normalize("ja3", value)
+    return normalize("ja3", f"{index:032x}")
 
 
 def _ja4_value(index: int, rng: random.Random) -> str:
-    return normalize("ja4", f"t13d{index % 10:04d}h2_{rng.randrange(0, 1 << 20):05x}")
+    return normalize("ja4", f"t13d{index:08x}h2_{index:05x}")
 
 
 def _value_for(ioc_type: str, index: int, rng: random.Random) -> str:

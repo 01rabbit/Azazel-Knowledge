@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -98,3 +99,23 @@ def test_cold_read_platform_behavior(tmp_path):
         assert payload["skipped"] is False
         assert "leaf_read_ms" in payload
         assert "worst_case_context_ms" in payload
+
+
+def test_synth_dataset_large_scale_preserves_ioc_uniqueness(tmp_path: Path) -> None:
+    root = tmp_path / "scratch"
+    manifest_path = _manifest_path(tmp_path)
+    manifest = synth_dataset.generate_dataset(root, 0.002, synth_dataset.DEFAULT_SEED, manifest_path)
+
+    db_path = Path(manifest["intel_db_path"])
+    conn = sqlite3.connect(db_path)
+    try:
+        count = int(conn.execute("SELECT COUNT(*) FROM ioc").fetchone()[0])
+        distinct_pairs = int(
+            conn.execute("SELECT COUNT(DISTINCT type || ':' || value) FROM ioc").fetchone()[0]
+        )
+    finally:
+        conn.close()
+
+    assert count == 20_000
+    assert count == int(manifest["count"])
+    assert distinct_pairs == count
