@@ -26,12 +26,9 @@
 
 ### 絶対制約(全タスクの受け入れ基準。違反はレビューで即差し戻し)
 
-1. **助言専用** — CTIノードはEdgeに命令しない。api/taxii に書き込みSQLを追加しない(静的テストが監視)
-2. **決定論スコアリング** — YAML重み(合計1.0)、`reason[]` 完全性(0寄与も明示)、7要素タプルでバイト同一リプレイ
-3. **オフラインファースト** — クエリパスにインターネット依存を持ち込まない
-4. **local.db(研究データ)は不可侵** — バンドル/世代スワップが reaction/observation に触れる変更は禁止(F-1)
-5. **フェイルクローズド** — timeout は非スコア503、監査不能時は503(F-12/F-17)
-6. コア依存は stdlib + PyYAML + idna + PyNaCl のみ(fastapi/pydantic は api/ 限定)
+絶対制約は `CLAUDE.md` の「絶対制約1〜8」を唯一の正とする(各項に強制手段=静的テスト名を併記)。
+本書ではこれ以上再掲しない(二重管理を避けるため)。以降で「絶対制約」と言えば
+CLAUDE.md の 1〜8 を指す。
 
 ---
 
@@ -110,7 +107,7 @@ VS Code 設定(`.vscode/settings.json` 推奨):
                           Codex(実装者) ─ ブランチ上で実装、テスト緑まで
                               ▼
                        Claude Code(敵対的レビュー)
-                              │ 差分を絶対制約1〜6+設計書と突き合わせて攻撃
+                              │ 差分を絶対制約1〜8(CLAUDE.md)+設計書と突き合わせて攻撃
                               │ 指摘 → Codex 修正 → 再レビュー(緑まで反復)
                               ▼
                        コミット/プッシュ/PR(Claude Code が担当)
@@ -208,7 +205,7 @@ codex exec \
 ```
 
 規約:
-1. **仕様は必ずファイル(`spec.md`)経由**で渡す。「所有ファイル・受け入れ基準・絶対制約1〜6・
+1. **仕様は必ずファイル(`spec.md`)経由**で渡す。「所有ファイル・受け入れ基準・絶対制約1〜8・
    テスト要件」を含め、口頭要約で投げない(AGENTS.md が worktree にあるので Codex は自動で読む)
 2. `codex exec` の**標準出力(最終メッセージ)をログに残す**。Claude Code はそれと
    `git -C ../azazel-codex/<task> diff` の両方を突き合わせてレビューする
@@ -241,72 +238,15 @@ codex exec \
 
 ---
 
-## 3. リポジトリに置くファイル(初回セットアップ時に Claude Code に作らせる)
+## 3. 規範ファイル(初回セットアップ時に作成済み)
 
-### 3-1. `CLAUDE.md`(Claude Code = 指揮官の規範)
+指揮官/実装者の規範はリポジトリ直下の実ファイルが唯一の正。本書はテンプレを再掲しない。
 
-```markdown
-# CLAUDE.md — Azazel-CTI
+- **`CLAUDE.md`** — Claude Code(指揮官)の規範。絶対制約1〜8・委任プロトコル・敵対的レビュー
+  チェックリスト・git 規律の正本。
+- **`AGENTS.md`** — Codex(実装者)の規範。worktree 内で Codex が自動で読む。
 
-あなたはこのリポジトリの指揮官兼敵対的レビュアーである。実装労働は Codex に委任し、
-自分では原則コードを書かない(仕様化・レビュー・統合判断・git 操作が仕事)。
-
-## 必読
-- docs/design/phase1-implementation.md(最終設計。F-1〜F-20 は既決事項)
-- docs/adr/*.md(既決の設計判断。覆すには新ADRが必要)
-- README.md / docs/architecture.md(助言専用の教義)
-
-## 絶対制約(違反する差分は理由を問わず差し戻し)
-1. 助言専用: api/・taxii/ に書き込みSQLを入れない(tests/unit/test_api_static.py が監視)
-2. 決定論: 重み合計1.0、reason[] 完全性、7要素決定論タプルのリプレイテストを壊さない
-3. オフラインファースト: クエリパスに外部通信を追加しない
-4. local.db 不可侵: バンドル/世代処理が研究データに触れる変更は禁止
-5. フェイルクローズド: 部分的な reason[] を返す経路を作らない
-6. コア依存は stdlib+PyYAML+idna+PyNaCl のみ
-
-## ワークフロー
-1. タスクを仕様化: 対象ファイル、受け入れ基準、テスト要件、制約を明記
-2. Codex に実装させる(AGENTS.md が Codex 側の規範)
-3. 敵対的レビュー: 制約1〜6、設計書との整合、テスト網羅、エッジケースを攻撃
-4. 修正 → 再レビュー → python -m pytest tests/unit -q が全緑
-5. ブランチにコミット、プッシュ、ドラフトPR作成(main 直接コミット禁止)
-
-## 検証コマンド
-- python -m pytest tests/unit -q      # 487+ passed が基準線
-- python azctl check-config --config-dir config
-```
-
-### 3-2. `AGENTS.md`(Codex = 実装者の規範。Codex はこのファイルを自動で読む)
-
-```markdown
-# AGENTS.md — Azazel-CTI 実装規範
-
-## プロジェクト
-Raspberry Pi 4 上のオンプレ戦術CTIノード。設計は docs/design/phase1-implementation.md が
-唯一の正。ADR(docs/adr/)は既決事項であり実装で覆さない。
-
-## セットアップ / 検証
-- source .venv/bin/activate
-- pip install -e ".[api,dev]"
-- python -m pytest tests/unit -q   # 全緑が完了条件(現在487本)
-
-## 絶対制約(1つでも破ると差し戻し)
-- api/・taxii/ 配下に INSERT/UPDATE/DELETE 等の書き込みSQLを書かない
-- config/scoring.yaml の weights / confidence_weights は合計1.0(ローダが拒否する)
-- scoring/correlate に wall-clock 直読み(datetime.now 等)を入れない — core/clock.py 経由
-- local.db 側テーブル(reaction, observation, advisory_log 等)への破壊的変更禁止
-- コアモジュールの依存は stdlib + PyYAML + idna + PyNaCl のみ。fastapi/pydantic は api/ 限定
-- reaction 行は INSERT のみ(トリガが UPDATE/DELETE を拒否する)
-
-## コード規約
-- Python 3.11、型ヒント必須、ナレーション的コメント禁止(制約の明示のみ可)
-- 新規コードには必ず tests/unit/ にテストを追加。既存テストの改変は指示がある場合のみ
-- 1タスクで指示された所有ファイル以外に触れない
-
-## 完了条件
-python -m pytest tests/unit -q が全緑 + 指示された受け入れ基準を満たすこと。
-完了報告には「作成/変更ファイル一覧」「テスト数」「判断に迷った点」を含めること。
-```
+> 初回はこの2ファイルを作成済み。以降は実ファイルを直接編集し、本書ではメンテしない。
 
 ---
 
@@ -393,15 +333,10 @@ Issue #12 の子Issue #1〜#11 それぞれについて、PR #15 の実装がど
 
 ---
 
-## 5. 敵対的レビューチェックリスト(Claude Code が毎PRで使う)
+## 5. 敵対的レビューチェックリスト
 
-- [ ] 絶対制約1〜6に抵触する行が差分にないか(grep + 静的テスト)
-- [ ] 新規コードに対応するテストがあるか。テストは実装の写経でなく仕様を検証しているか
-- [ ] 決定論に影響する入力(wall-clock、乱数、環境変数、ファイル順序)が混入していないか
-- [ ] エラーパスがフェイルクローズドか(例外を握りつぶして部分結果を返していないか)
-- [ ] 設計書・ADR・docs との矛盾がないか。矛盾するなら文書改訂が同じPRにあるか
-- [ ] `python -m pytest tests/unit -q` 全緑(487+)。テスト数が減っていないか
-- [ ] 依存追加がないか(あるなら pyproject.toml と ADR 判断の明示)
+毎PRで使うチェックリストは `CLAUDE.md` の「敵対的レビューチェックリスト」を唯一の正とする
+(絶対制約1〜8対応・テスト基準線487・依存追加の扱いを含む)。本書では再掲しない。
 
 ---
 
