@@ -14,7 +14,7 @@
 ### 残タスク(= 今後の開発対象)
 
 | # | タスク | MacBookで可能か |
-|---|---|---|
+| --- | --- | --- |
 | T1 | GitHub Actions CI(現在 `.github/` が存在しない) | ○ |
 | T2 | `tools/docs-sync-check.py` 本実装(設計書S13で持ち越したスタブ) | ○ |
 | T3 | 文書批准差分の作成(A-label IDN → data-model.md、重み表 → scoring.md、KEV `sources[]`/`rejected_alternatives` → api.md)→ オーナー批准用PR | ○ |
@@ -99,7 +99,7 @@ VS Code 設定(`.vscode/settings.json` 推奨):
 - **Option B(Bash 配線)**: Claude Code が `codex exec` を Bash 経由で直接呼び、
   出力を受け取ってレビューまで自走する。本当の"サブエージェント"に一番近い(§2B)。
 
-```
+```text
 あなた(マスター) ──指示──▶ Claude Code(指揮官)
                               │ 1. タスクを仕様化(受け入れ基準+絶対制約を明記)
                               │ 2. AGENTS.md 経由で Codex に実装指示
@@ -113,7 +113,8 @@ VS Code 設定(`.vscode/settings.json` 推奨):
                        コミット/プッシュ/PR(Claude Code が担当)
 ```
 
-**鉄則**
+#### 鉄則
+
 - Codex への指示には必ず「対象ファイル所有権」「受け入れ基準」「絶対制約」を含める(曖昧な指示を出さない)
 - レビューは最低1回の敵対的パス(指摘ゼロでも「なぜ問題ないか」を書かせる)
 - `main` 直接コミット禁止。1タスク=1ブランチ=1PR
@@ -205,6 +206,7 @@ codex exec \
 ```
 
 規約:
+
 1. **仕様は必ずファイル(`spec.md`)経由**で渡す。「所有ファイル・受け入れ基準・絶対制約1〜8・
    テスト要件」を含め、口頭要約で投げない(AGENTS.md が worktree にあるので Codex は自動で読む)
 2. `codex exec` の**標準出力(最終メッセージ)をログに残す**。Claude Code はそれと
@@ -218,7 +220,7 @@ codex exec \
 
 ### 半自動ループ(Claude Code の手順テンプレ)
 
-```
+```text
 1. git worktree add + venv 構築(隔離)
 2. spec.md 生成(§4 のタスク指示 + 絶対制約 + 所有ファイル + テスト要件)
 3. codex exec --cd <wt> --sandbox workspace-write "$(cat spec.md)"  → 出力をログ
@@ -257,7 +259,7 @@ codex exec \
 
 ### T1: GitHub Actions CI(最優先・小)
 
-```
+```text
 ブランチ ci/github-actions を切り、Codex に .github/workflows/test.yml を実装させよ。
 要件: push/PR で ubuntu-latest + python3.11、pip install -e ".[api,dev]"、
 python -m pytest tests/unit -q を実行。concurrency で同一refの多重実行をキャンセル。
@@ -269,7 +271,7 @@ fork PR での secrets 非使用、pip の固定(ハッシュまでは不要、�
 
 ### T2: docs-sync-check.py 本実装(中)
 
-```
+```text
 ブランチ tools/docs-sync-check を切り、Codex に tools/docs-sync-check.py を実装させよ。
 仕様(設計書 S5/S12): config/scoring.yaml の weights / confidence_weights /
 freshness 値と、docs/scoring.md・docs/api.md 内の数値例・重み表を突き合わせ、
@@ -282,7 +284,7 @@ tests/unit/test_docs_sync.py を追加。T1 の CI にステップとして組�
 
 ### T3: 文書批准差分PR(中・オーナー判断材料)
 
-```
+```text
 ブランチ docs/ratification を切り、Codex に以下の文書改訂を作らせよ(コード変更なし):
 1. docs/data-model.md: IOC正規化を U-label → A-label 正準形へ改訂(F-15。ホモグリフ
    耐性の根拠1段落を追加)
@@ -298,7 +300,7 @@ tests/unit/test_docs_sync.py を追加。T1 の CI にステップとして組�
 
 ### T4: S9 性能ゲートハーネス(中〜大。実行は Pi 4、開発は Mac)
 
-```
+```text
 ブランチ perf/bench-harness を切り、Codex に tools/bench/ を実装させよ。
 設計書 S9 のゲートをスクリプト化する:
 1. capacity_run.py — ブレーカー無効で lookup p95 / context p95 を測る(合成 10M IOC
@@ -314,7 +316,7 @@ Mac では機能テスト(小規模データでの正動作)のみ tests/unit/te
 
 ### T5: Issue 整理(小・GitHub操作のみ)
 
-```
+```text
 Issue #12 の子Issue #1〜#11 それぞれについて、PR #15 の実装がどのファイル/テストで
 受け入れ基準を満たしたかをコメントで対応表として記録し、満たしたものはクローズ提案
 (クローズ自体はマスター承認後)。#14 も完遂済みなのでクローズ提案に含める。
@@ -324,7 +326,7 @@ Issue #12 の子Issue #1〜#11 それぞれについて、PR #15 の実装がど
 
 ### T6: S13 持ち越し検討(低優先・設計判断が必要なものは実装前にマスター確認)
 
-```
+```text
 以下は実装前に必ずマスターに選択肢を提示すること(勝手に実装しない):
 - 共有メモリ GenCache(3×64MB 重複の解消)— multiprocessing.shared_memory 案の設計スパイク
 - バンドル zstd 化 — zstandard 依存追加の是非(ADR 追記が必要)
@@ -348,4 +350,3 @@ Issue #12 の子Issue #1〜#11 それぞれについて、PR #15 の実装がど
 4. [ ] まず **Option A(手動リレー)** で T1(CI)を1本通す — 体制の感触を掴む最小タスク
 5. [ ] 慣れたら §2B の **Option B** を配線(`.claude/settings.json` 許可リスト + worktree 分離)
 6. [ ] 以後 T2 → T3 → T4 の順に1タスク1PR(1worktree)で進める
-```
