@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 var/
 data/
+secrets/
 *.egg-info/
 .venv/
 bench-results/
