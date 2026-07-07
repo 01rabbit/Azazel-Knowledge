@@ -175,15 +175,18 @@ def _parse_reason_list(reason: list[Any]) -> dict[str, float]:
     for index, entry in enumerate(reason):
         if not isinstance(entry, dict):
             raise ValueError(f"reason[{index}] must be an object")
-        if "component" not in entry or "weight" not in entry:
-            raise ValueError(f"reason[{index}] must include 'component' and 'weight'")
+        weight_value = entry.get("config_weight", entry.get("weight"))
+        if "component" not in entry or weight_value is None:
+            raise ValueError(
+                f"reason[{index}] must include 'component' and 'config_weight' or 'weight'"
+            )
         component = entry["component"]
         if not isinstance(component, str):
             raise ValueError(f"reason[{index}].component must be a string")
         try:
-            weights[component] = float(entry["weight"])
+            weights[component] = float(weight_value)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"reason[{index}].weight must be numeric") from exc
+            raise ValueError(f"reason[{index}].config_weight/weight must be numeric") from exc
     return weights
 
 

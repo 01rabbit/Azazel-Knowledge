@@ -50,6 +50,7 @@ def _write_docs(
     scoring_weights: dict[str, float],
     freshness_line: str = "Default half-life 30 days, floor 0.2.",
     reason_weights: dict[str, float] | None = None,
+    reason_weight_key: str = "weight",
 ) -> None:
     docs_dir.mkdir(parents=True, exist_ok=True)
     scoring_rows = "\n".join(
@@ -83,7 +84,7 @@ def _write_docs(
     reason_rows = ",\n".join(
         dedent(
             f"""
-            {{ "component": "{component}", "weight": {weight:.2f}, "contribution": 1, "detail": "x" }}
+            {{ "component": "{component}", "{reason_weight_key}": {weight:.2f}, "contribution": 1, "detail": "x" }}
             """
         ).strip()
         for component, weight in reason_weights.items()
@@ -133,7 +134,7 @@ def _matching_weights() -> dict[str, float]:
     }
 
 
-def test_repo_passes_with_shipped_allowlist():
+def test_repo_in_sync_after_ratification():
     result = docs_sync_check.run_check(
         REPO_ROOT / "config",
         REPO_ROOT / "docs",
@@ -141,7 +142,7 @@ def test_repo_passes_with_shipped_allowlist():
     )
     assert result.exit_code == 0
     assert result.mismatches == []
-    assert len([warning for warning in result.warnings if warning.kind == "allowlisted"]) == 7
+    assert result.warnings == []
 
 
 def test_unallowlisted_weight_mismatch_fails(tmp_path):
@@ -189,12 +190,15 @@ def test_allowlist_downgrades_to_warning(tmp_path):
     }
 
 
-def test_empty_allowlist_escalates_current_drift(tmp_path):
+def test_repo_remains_in_sync_with_empty_allowlist(tmp_path):
     allowlist_path = tmp_path / "tools" / "allowlist.yaml"
     _write_allowlist(allowlist_path, [])
+    # T3 ratification removed the repo's current drift; tmp-based mismatch tests
+    # still verify that new drift escalates to a failing exit code.
     result = docs_sync_check.run_check(REPO_ROOT / "config", REPO_ROOT / "docs", allowlist_path)
-    assert result.exit_code == 1
-    assert len(result.mismatches) == 7
+    assert result.exit_code == 0
+    assert result.mismatches == []
+    assert result.warnings == []
 
 
 def test_matching_docs_pass(tmp_path):
@@ -267,6 +271,33 @@ def test_api_reason_weight_mismatch_detected(tmp_path):
         "geo_asn": 0.10,
     }
     _write_docs(docs_dir, scoring_weights=_matching_weights(), reason_weights=reason_weights)
+    _write_allowlist(allowlist_path, [])
+
+    result = docs_sync_check.run_check(config_dir, docs_dir, allowlist_path)
+    assert result.exit_code == 1
+    assert ("docs/api.md", "reason_example", "ioc_match") in {
+        (mismatch.doc, mismatch.check, mismatch.key) for mismatch in result.mismatches
+    }
+
+
+def test_reason_example_reads_config_weight(tmp_path):
+    config_dir = tmp_path / "config"
+    docs_dir = tmp_path / "docs"
+    allowlist_path = tmp_path / "tools" / "allowlist.yaml"
+    _write_config(config_dir)
+    reason_weights = {
+        "ioc_match": 0.31,
+        "history": 0.20,
+        "attack_map": 0.15,
+        "campaign": 0.10,
+        "geo_asn": 0.10,
+    }
+    _write_docs(
+        docs_dir,
+        scoring_weights=_matching_weights(),
+        reason_weights=reason_weights,
+        reason_weight_key="config_weight",
+    )
     _write_allowlist(allowlist_path, [])
 
     result = docs_sync_check.run_check(config_dir, docs_dir, allowlist_path)

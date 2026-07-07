@@ -13,7 +13,7 @@ Indicators of compromise, one row per indicator, unique on `(type, value)`.
 | Column | Notes |
 |---|---|
 | type | `ip`, `domain`, `url`, `hash_md5/sha1/sha256`, `email`, `asn`, `certificate`, `ja3`, `ja4` |
-| value | normalized (lowercase, punycode-decoded, defanged input re-armed) |
+| value | normalized (lowercase, A-label punycode for IDN, defanged input re-armed) |
 | first_seen / last_seen | UTC |
 | sources | JSON array of feed ids |
 | tags | JSON array |
@@ -101,9 +101,16 @@ version checks.
 ## Normalization rules
 
 - All timestamps UTC ISO 8601.
-- IOC values canonicalized before insert (case, IDN, URL normalization);
+- IOC values canonicalized before insert (case normalization, A-label IDN
+  normalization, URL normalization). Internationalized domain names are
+  stored in A-label (`xn--` punycode) form, not U-label Unicode display form;
   matching is exact-after-normalization, plus CIDR containment for IPs and
   suffix match for domains.
+- U-label storage is not a safe canonical form because visually identical
+  homoglyph and mixed-script domains can remain distinct byte strings and
+  evade exact matching. Canonicalizing IDNs to A-label with IDNA via the
+  `idna` library collapses those variants to one stable representation and
+  preserves the soundness of exact-after-normalization matching.
 - Every derived row (`reputation`, `observation_stats`, `pattern`) records
   its inputs, so any answer can be traced to raw evidence — the same
   auditability rule Azazel-Edge applies to actions.
