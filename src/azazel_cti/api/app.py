@@ -16,6 +16,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,7 @@ from azazel_cti.security.auth import (
     verify,
 )
 from azazel_cti.security.redact import SecretRegistry
+from azazel_cti.worker import WorkerPaths
 
 
 @dataclass
@@ -61,6 +63,13 @@ class Settings:
 class AuthContext:
     key_id: str
     scopes: frozenset[Scope]
+
+
+class _AuditPlaceholder:
+    healthy = False
+
+    def append(self, event: dict) -> None:
+        raise AuditUnavailable("audit chain not initialized")
 
 
 def _parse_scopes(raw: str | None) -> frozenset[Scope]:
@@ -170,42 +179,82 @@ def ensure_warm_cache(request: Request) -> None:
         )
 
 
+def settings_from_env(
+    root: str | Path | None = None, config_dir: str | Path | None = None
+) -> Settings:
+    resolved_root = Path(root) if root is not None else Path(os.environ.get("AZAZEL_ROOT", "."))
+    resolved_config_dir = (
+        config_dir if config_dir is not None else os.environ.get("AZAZEL_CONFIG_DIR")
+    )
+    paths = WorkerPaths.from_root(resolved_root, config_dir=resolved_config_dir)
+    return Settings(
+        config_dir=paths.config_dir,
+        local_db_path=paths.local_db_path,
+        data_db_dir=paths.data_db_dir,
+        spool_root=paths.ingest_root,
+        audit_dir=paths.audit_dir,
+        secrets_dir=paths.secrets_dir,
+        context_deadline_ms=None,
+    )
+
+
+def _ensure_runtime_state(app: FastAPI) -> None:
+    if getattr(app.state, "_runtime_ready", False):
+        return
+    with app.state._runtime_lock:
+        if getattr(app.state, "_runtime_ready", False):
+            return
+        settings: Settings = app.state.settings
+        app.state.loader = TrackedConfigLoader(settings.config_dir)
+        app.state.repo = Repository(
+            settings.local_db_path, settings.data_db_dir, pool_size=settings.pool_size
+        )
+        app.state.spool = SpoolWriter(
+            settings.spool_root, quota_bytes=settings.ingest_quota_bytes
+        )
+        app.state.audit = AuditChain(
+            settings.audit_dir, settings.proc_id, settings.boot_id, app.state.registry.redact
+        )
+        app.state._runtime_ready = True
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
+    _ensure_runtime_state(app)
     yield
-    audit: AuditChain = app.state.audit
-    repo: Repository = app.state.repo
+    audit = getattr(app.state, "audit", None)
+    repo = getattr(app.state, "repo", None)
     try:
-        audit.close()
+        if isinstance(audit, AuditChain):
+            audit.close()
     except AuditUnavailable:
         pass
-    repo.close()
+    if isinstance(repo, Repository):
+        repo.close()
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
     app = FastAPI(title="Azazel-CTI API", lifespan=_lifespan)
 
     registry = SecretRegistry()
     if settings.secrets_dir is not None:
         registry.register_dir(settings.secrets_dir)
 
-    loader = TrackedConfigLoader(settings.config_dir)
-    repo = Repository(
-        settings.local_db_path, settings.data_db_dir, pool_size=settings.pool_size
-    )
-    spool = SpoolWriter(settings.spool_root, quota_bytes=settings.ingest_quota_bytes)
-    audit = AuditChain(
-        settings.audit_dir, settings.proc_id, settings.boot_id, registry.redact
-    )
-
     app.state.settings = settings
-    app.state.loader = loader
-    app.state.repo = repo
-    app.state.spool = spool
-    app.state.audit = audit
+    app.state.loader = None
+    app.state.repo = None
+    app.state.spool = None
+    app.state.audit = _AuditPlaceholder()
     app.state.registry = registry
     app.state.clock = settings.clock
     app.state.metrics = {"context_total": 0, "context_breaker_total": 0}
+    app.state._runtime_lock = threading.Lock()
+    app.state._runtime_ready = False
+
+    @app.middleware("http")
+    async def _runtime_state_middleware(request: Request, call_next):
+        _ensure_runtime_state(request.app)
+        return await call_next(request)
 
     from azazel_cti.api.middleware import AuditMiddleware
 
@@ -221,4 +270,10 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(admin.router)
     app.include_router(taxii_inbox.router)
 
+    if eager_runtime and settings.config_dir.is_dir():
+        _ensure_runtime_state(app)
+
     return app
+
+
+app = create_app(settings_from_env(), eager_runtime=False)
