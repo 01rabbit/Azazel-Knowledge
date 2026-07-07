@@ -29,13 +29,17 @@ validate → swap).
 A single signed artifact that moves the node's knowledge across an air gap:
 
 ```
-azazel-cti-bundle-YYYYMMDD-NNN.tar.zst
+azazel-cti-bundle-YYYYMMDD-NNN.tar.gz
 ├── manifest.json      # bundle version, base version (for diffs), feed list,
 │                      # per-file SHA-256, created_at, attack_version
 ├── manifest.sig       # detached signature (ed25519, offline signing key)
 ├── snapshots/         # full table snapshots (first install / periodic full)
 └── deltas/            # per-feed differential updates since base version
 ```
+
+Implementation note: Phase 1 currently uses stdlib gzip (`.tar.gz`); zstd
+remains deferred in S13 pending the dependency-minimality tradeoff noted in
+`bundle/verify.py`.
 
 - **Full bundle**: complete DB state; used for first provisioning and
   periodic re-baselining.
