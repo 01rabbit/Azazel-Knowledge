@@ -70,3 +70,15 @@ def test_redact_text_without_registry_still_redacts_token_regex():
     text = "leaked azcti_key02_anothersecret here"
     redacted = redact_text(text)
     assert "azcti_key02_anothersecret" not in redacted
+
+
+def test_register_dir_ignores_binary_files_and_redacts_text(tmp_path: Path):
+    (tmp_path / "node_signing_key").write_bytes(b"\x90\x00binary-ed25519-key")
+    (tmp_path / "api_token").write_text("text-secret", encoding="utf-8")
+
+    registry = SecretRegistry()
+    registry.register_dir(tmp_path)
+
+    redacted = registry.redact("text-secret remains the only registered secret")
+    assert redacted.count("[REDACTED]") == 1
+    assert "text-secret" not in redacted

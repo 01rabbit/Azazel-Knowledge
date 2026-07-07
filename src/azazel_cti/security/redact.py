@@ -19,7 +19,11 @@ class SecretRegistry:
     def register_file(self, path: str | Path) -> None:
         p = Path(path)
         if p.is_file():
-            self.register(p.read_text().strip())
+            try:
+                text = p.read_text()
+            except (OSError, UnicodeDecodeError):
+                return
+            self.register(text.strip())
 
     def register_dir(self, path: str | Path) -> None:
         p = Path(path)
