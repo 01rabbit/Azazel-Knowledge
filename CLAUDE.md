@@ -58,7 +58,7 @@ CTIノードが不在・低速・誤答でも Edge は完全に機能し続け�
 ## Codex 委任プロトコル
 
 Codex は別ツール(OpenAI)であり、あなたのネイティブなサブエージェントではない。
-2つの方式で使い分ける。詳細は開発指示書 §2/§2B。
+2つの方式で使い分ける。詳細は `docs/development-guide.md`(開発指示書)§2/§2B。
 
 - **Option A(手動リレー)**: 仕様をマスター経由で Codex に渡し、差分を受け取ってレビュー。
 - **Option B(Bash 配線)**: `codex exec` を Bash で直接呼ぶ。許可リストと worktree 分離が前提。
@@ -129,7 +129,7 @@ python azctl check-config --config-dir config   # メモリ算術 OK を確認
 - `tools/`(bundle_build / ttl_sweep / export_research_dataset) / `ops/`(compose・nftables・Pi4 profile)
 - `tests/unit/`(487)/ `docs/`(設計・ADR・operations)
 
-### 現在の残タスク(開発指示書 §4 の T1〜T6)
+### 現在の残タスク(`docs/development-guide.md` §4 の T1〜T6)
 
 CI 整備(T1)/ `docs-sync-check.py` 本実装(T2)/ 文書批准差分(T3)/
 S9 性能ハーネス(T4・実行は Pi 4)/ Issue 整理(T5)/ S13 持ち越し(T6・要マスター確認)。
