@@ -32,6 +32,7 @@ QUERY_PATH_FILES: tuple[str, ...] = (
 BEHAVIOR_PATH_FILES: tuple[str, ...] = (
     "behavior-classify.yaml",
     "behavior-similarity.yaml",
+    "behavior-shadow-rules.yaml",
 )
 
 _WEIGHT_SUM_TOLERANCE = 1e-9
@@ -145,6 +146,17 @@ class TrackedConfigLoader:
             self.raw("behavior-similarity.yaml"), "behavior-similarity.yaml"
         )
 
+    def behavior_shadow_rules(self) -> Mapping[str, Any]:
+        if "behavior-shadow-rules.yaml" not in self._documents:
+            raise ConfigError("behavior-shadow-rules.yaml is required for behavior shadow scoring")
+        document = _require_mapping(
+            self.raw("behavior-shadow-rules.yaml"), "behavior-shadow-rules.yaml"
+        )
+        return _require_mapping(
+            document.get("behavioral_shadow_rules", {}),
+            "behavior-shadow-rules.yaml:behavioral_shadow_rules",
+        )
+
     def behavior_config_hash(
         self, *, behavior_generation: int, generator_version: str
     ) -> str:
@@ -179,6 +191,7 @@ class TrackedConfigLoader:
         self._validate_reaction_adjustments(scoring)
         self._validate_behavior_classify()
         self._validate_behavior_similarity()
+        self._validate_behavior_shadow_rules()
 
     def _validate_weight_sum(self, scoring: Mapping[str, Any], key: str) -> None:
         block = scoring.get(key)
@@ -276,3 +289,106 @@ class TrackedConfigLoader:
             raise ConfigError(
                 f"behavior-similarity.yaml '{key}' must sum to 1.0, got {total!r}"
             )
+
+    def _validate_behavior_shadow_rules(self) -> None:
+        if "behavior-shadow-rules.yaml" not in self._documents:
+            return
+        document = _require_mapping(
+            self._documents.get("behavior-shadow-rules.yaml"),
+            "behavior-shadow-rules.yaml",
+        )
+        ruleset = _require_mapping(
+            document.get("behavioral_shadow_rules", {}),
+            "behavior-shadow-rules.yaml:behavioral_shadow_rules",
+        )
+        mode = ruleset.get("mode")
+        if mode != "shadow":
+            raise ConfigError(
+                f"behavioral_shadow_rules.mode must be 'shadow', got {mode!r} "
+                "(F2-15: the loader never accepts 'active')"
+            )
+
+        max_delta = self._validate_behavior_shadow_int(
+            ruleset, "max_delta", minimum=0
+        )
+        self._validate_behavior_shadow_int(ruleset, "max_total_delta", minimum=0)
+        rules = ruleset.get("rules")
+        if not isinstance(rules, list):
+            raise ConfigError("behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules' must be a list")
+        for index, rule in enumerate(rules):
+            if not isinstance(rule, Mapping):
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}]' must be a mapping"
+                )
+            if not isinstance(rule.get("id"), str) or not str(rule["id"]).strip():
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].id' is required"
+                )
+            when = rule.get("when")
+            if not isinstance(when, Mapping) or not when:
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].when' "
+                    "must be a non-empty mapping"
+                )
+            if set(when) - {"behavior_class", "action_applied", "reaction_contains"}:
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].when' "
+                    "contains unsupported keys"
+                )
+            shadow_effect = rule.get("shadow_effect")
+            if not isinstance(shadow_effect, Mapping):
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].shadow_effect' "
+                    "must be a mapping"
+                )
+            component = shadow_effect.get("component")
+            if not isinstance(component, str) or not component.strip():
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].shadow_effect.component' "
+                    "is required"
+                )
+            delta = self._validate_behavior_shadow_effect_delta(
+                shadow_effect,
+                f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].shadow_effect.delta'",
+            )
+            if abs(delta) > max_delta:
+                raise ConfigError(
+                    "behavior-shadow-rules.yaml rule delta exceeds behavioral_shadow_rules.max_delta"
+                )
+            explanation = rule.get("explanation")
+            if not isinstance(explanation, str) or not explanation.strip():
+                raise ConfigError(
+                    f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.rules[{index}].explanation' "
+                    "is required"
+                )
+
+    def _validate_behavior_shadow_int(
+        self,
+        document: Mapping[str, Any],
+        key: str,
+        *,
+        minimum: int,
+    ) -> int:
+        value = document.get(key)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.{key}' must be an integer"
+            ) from exc
+        if parsed < minimum:
+            raise ConfigError(
+                f"behavior-shadow-rules.yaml 'behavioral_shadow_rules.{key}' must be >= {minimum}"
+            )
+        return parsed
+
+    def _validate_behavior_shadow_effect_delta(
+        self,
+        shadow_effect: Mapping[str, Any],
+        where: str,
+    ) -> int:
+        value = shadow_effect.get("delta")
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"{where} must be an integer") from exc
