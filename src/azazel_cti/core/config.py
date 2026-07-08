@@ -29,6 +29,7 @@ QUERY_PATH_FILES: tuple[str, ...] = (
     "feeds.yaml",
     "research_metrics.yaml",
 )
+BEHAVIOR_PATH_FILES: tuple[str, ...] = ("behavior-classify.yaml",)
 
 _WEIGHT_SUM_TOLERANCE = 1e-9
 
@@ -62,6 +63,10 @@ class TrackedConfigLoader:
 
         self._validate()
         self._config_hash = self._compute_config_hash()
+        self._behavior_documents = {
+            name: self._documents.get(name, {})
+            for name in BEHAVIOR_PATH_FILES
+        }
 
     @property
     def config_dir(self) -> Path:
@@ -123,6 +128,28 @@ class TrackedConfigLoader:
     def research_metrics(self) -> Mapping[str, Any]:
         return self.raw("research_metrics.yaml")
 
+    def behavior_classify(self) -> Mapping[str, Any]:
+        if "behavior-classify.yaml" not in self._documents:
+            raise ConfigError("behavior-classify.yaml is required for behavior generation")
+        return _require_mapping(
+            self.raw("behavior-classify.yaml"), "behavior-classify.yaml"
+        )
+
+    def behavior_config_hash(
+        self, *, behavior_generation: int, generator_version: str
+    ) -> str:
+        digest = hashlib.sha256()
+        for name in BEHAVIOR_PATH_FILES:
+            document = self._behavior_documents.get(name, {})
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\x00")
+            digest.update(_canonical_json_bytes(document))
+            digest.update(b"\x00")
+        digest.update(str(int(behavior_generation)).encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(generator_version.encode("utf-8"))
+        return digest.hexdigest()
+
     def _compute_config_hash(self) -> str:
         digest = hashlib.sha256()
         for name in QUERY_PATH_FILES:
@@ -140,6 +167,7 @@ class TrackedConfigLoader:
         self._validate_weight_sum(scoring, "weights")
         self._validate_weight_sum(scoring, "confidence_weights")
         self._validate_reaction_adjustments(scoring)
+        self._validate_behavior_classify()
 
     def _validate_weight_sum(self, scoring: Mapping[str, Any], key: str) -> None:
         block = scoring.get(key)
@@ -184,3 +212,25 @@ class TrackedConfigLoader:
             raise ConfigError(
                 "research.shadow_scoring.enabled=true requires reaction_adjustments.mode == 'shadow'"
             )
+
+    def _validate_behavior_classify(self) -> None:
+        if "behavior-classify.yaml" not in self._documents:
+            return
+        document = _require_mapping(
+            self._documents.get("behavior-classify.yaml"), "behavior-classify.yaml"
+        )
+        if "version" not in document:
+            raise ConfigError("behavior-classify.yaml 'version' is required")
+        rules = document.get("rules")
+        if not isinstance(rules, list) or not rules:
+            raise ConfigError("behavior-classify.yaml 'rules' must be a non-empty list")
+        for index, rule in enumerate(rules):
+            if not isinstance(rule, Mapping):
+                raise ConfigError(f"behavior-classify.yaml 'rules[{index}]' must be a mapping")
+            if "class" not in rule:
+                raise ConfigError(f"behavior-classify.yaml 'rules[{index}].class' is required")
+            when_all = rule.get("when_all")
+            if not isinstance(when_all, list) or not when_all:
+                raise ConfigError(
+                    f"behavior-classify.yaml 'rules[{index}].when_all' must be a non-empty list"
+                )
