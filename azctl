@@ -44,6 +44,7 @@ from azazel_cti.db import generations  # noqa: E402
 from azazel_cti.db.repository import apply_migrations  # noqa: E402
 from azazel_cti.db.writer import P0, WRITER_PRAGMAS, PrioritySingleWriterQueue, WriterLockHeld  # noqa: E402
 from azazel_cti.normalize.exclusions import ExclusionPolicy  # noqa: E402
+from azazel_cti.patterns.behavior_generate import apply_generation_plan, plan_generation  # noqa: E402
 from azazel_cti.security import auth  # noqa: E402
 from azazel_cti.worker import (  # noqa: E402
     WorkerPaths,
@@ -478,6 +479,84 @@ def cmd_feed_approve(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# behavior generate|rebuild|dry-run
+# --------------------------------------------------------------------------
+
+
+def _behavior_mode(mode: str) -> str:
+    if mode not in {"incremental", "rebuild"}:
+        raise SystemExit(f"unsupported behavior mode: {mode}")
+    return mode
+
+
+def cmd_behavior_generate(args: argparse.Namespace) -> int:
+    from azazel_cti.core.clock import SystemClock
+
+    paths = _paths(args)
+    paths.ensure_dirs()
+    ensure_local_db(paths.local_db_path)
+    loader = TrackedConfigLoader(paths.config_dir)
+    writer = PrioritySingleWriterQueue(paths.local_db_path, paths.local_lock_path)
+    try:
+        writer.open()
+    except WriterLockHeld as exc:
+        raise SystemExit(f"writer lock held (is the worker running?): {exc}") from exc
+    result: dict[str, Any] = {}
+    try:
+        def _txn(conn: sqlite3.Connection) -> None:
+            plan = apply_generation_plan(
+                conn,
+                loader,
+                query_as_of=SystemClock().query_as_of(),
+                mode=_behavior_mode(args.behavior_mode),
+            )
+            result["generation"] = plan.behavior_generation
+            result["patterns"] = len(plan.patterns)
+            result["carried_forward"] = plan.carried_forward
+
+        writer.submit(P0, _txn)
+        writer.process_pending()
+    finally:
+        writer.close()
+    print(
+        f"behavior_generation={result.get('generation')} "
+        f"patterns_written={result.get('patterns', 0)} "
+        f"carried_forward={result.get('carried_forward', 0)}"
+    )
+    return 0
+
+
+def cmd_behavior_dry_run(args: argparse.Namespace) -> int:
+    from azazel_cti.core.clock import SystemClock
+
+    paths = _paths(args)
+    ensure_local_db(paths.local_db_path)
+    loader = TrackedConfigLoader(paths.config_dir)
+    conn = sqlite3.connect(f"file:{paths.local_db_path}?mode=ro", uri=True)
+    try:
+        plan = plan_generation(
+            conn,
+            loader,
+            query_as_of=SystemClock().query_as_of(),
+            mode=_behavior_mode(args.behavior_mode),
+        )
+    finally:
+        conn.close()
+    print(
+        json.dumps(
+            {
+                "behavior_generation": plan.behavior_generation,
+                "behavior_config_hash": plan.behavior_config_hash,
+                "patterns": plan.to_debug_rows(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------
 # keys list|add|remove|set-threshold
 # --------------------------------------------------------------------------
 
@@ -851,6 +930,27 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root_args(p)
     p.add_argument("feed_id")
     p.set_defaults(func=cmd_feed_approve)
+
+    behavior = sub.add_parser("behavior", help="behavior generate|rebuild|dry-run")
+    behavior_sub = behavior.add_subparsers(dest="behavior_command", required=True)
+
+    p = behavior_sub.add_parser("generate", help="incrementally generate behavior patterns")
+    _add_root_args(p)
+    p.set_defaults(func=cmd_behavior_generate, behavior_mode="incremental")
+
+    p = behavior_sub.add_parser("rebuild", help="rebuild the full behavior generation from source")
+    _add_root_args(p)
+    p.set_defaults(func=cmd_behavior_generate, behavior_mode="rebuild")
+
+    p = behavior_sub.add_parser("dry-run", help="print would-be behavior rows without writing")
+    _add_root_args(p)
+    p.add_argument(
+        "--mode",
+        choices=("incremental", "rebuild"),
+        default="incremental",
+        dest="behavior_mode",
+    )
+    p.set_defaults(func=cmd_behavior_dry_run)
 
     keys = sub.add_parser("keys", help="keys list|add|remove|set-threshold")
     keys_sub = keys.add_subparsers(dest="keys_command", required=True)

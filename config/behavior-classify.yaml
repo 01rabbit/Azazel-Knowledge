@@ -1,0 +1,46 @@
+version: 1
+session_gap_s: 3600
+action_selection: dominant_then_first
+fallback_class: unknown
+unknown_thresholds:
+  min_total_evidence_modality_count: 2
+rules:
+  - class: scripted_automation
+    when_all:
+      - continued_scanning_after_friction
+  - class: adaptive_probe
+    when_all:
+      - shifted_port_after_friction
+  - class: adaptive_probe
+    when_all:
+      - shifted_protocol_after_friction
+  - class: adaptive_probe
+    when_all:
+      - shifted_target_after_decoy_or_delay
+  - class: decoy_engaged
+    when_all:
+      - followed_decoy
+  - class: adaptive_probe
+    when_all:
+      - auth_pattern_changed
+  - class: disengaged_after_friction
+    when_all:
+      - disengaged_after_friction
+  - class: unknown
+    when_all:
+      - sparse_evidence
+  - class: simple_scanner
+    when_all:
+      - pure_repetitive_scan
+scoring:
+  confidence:
+    base: 15
+    modality_weight: 12
+    sequence_weight: 8
+    action_diversity_weight: 10
+    decoy_bonus: 12
+  novelty:
+    base: 5
+    unique_reaction_weight: 12
+    action_diversity_weight: 10
+    decoy_bonus: 18

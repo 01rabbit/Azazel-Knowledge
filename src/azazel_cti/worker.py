@@ -61,6 +61,7 @@ from azazel_cti.ingest.burst_guard import BurstGuard
 from azazel_cti.ingest.drain import DrainStats, drain_endpoint
 from azazel_cti.ingest.spool import BatchStatus, SpoolWriter
 from azazel_cti.normalize.exclusions import ExclusionPolicy
+from azazel_cti.patterns.behavior_generate import apply_generation_plan
 from azazel_cti.reactions import linkage
 from azazel_cti.scoring.confidence import noisy_or
 
@@ -471,9 +472,18 @@ def run_p2(
     intel_writer.process_pending()
 
     trend_updated = {"n": 0}
+    behavior_built = {"generation": None, "patterns": 0, "mode": "incremental"}
 
     def _trend(conn: sqlite3.Connection) -> None:
         trend_updated["n"] = aggregate_observation_stats_trend(conn)
+        plan = apply_generation_plan(
+            conn,
+            config_loader,
+            query_as_of=clock.query_as_of(),
+            mode="incremental",
+        )
+        behavior_built["generation"] = plan.behavior_generation
+        behavior_built["patterns"] = len(plan.patterns)
 
     local_writer.submit(P2, _trend)
     local_writer.process_pending()
@@ -485,6 +495,8 @@ def run_p2(
         ],
         "ttl_swept": swept["n"],
         "stats_trend_updated": trend_updated["n"],
+        "behavior_generation": behavior_built["generation"],
+        "behavior_patterns_written": behavior_built["patterns"],
     }
 
 
