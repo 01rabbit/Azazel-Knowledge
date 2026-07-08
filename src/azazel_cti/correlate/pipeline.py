@@ -49,6 +49,20 @@ _HISTORY_CORROBORATION_THRESHOLD = 50
 ADVISORY_NOTICE = (
     "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
 )
+_BEHAVIORAL_CTI_SUB_BUDGET_S = 0.02
+_BEHAVIORAL_CTI_LIMITATIONS = (
+    "Behavioral similarity is not attribution.",
+    "AI usage is not directly proven.",
+    ADVISORY_NOTICE,
+)
+_BEHAVIOR_CLASS_TO_POSTURE = {
+    "simple_scanner": "observe",
+    "scripted_automation": "delay",
+    "adaptive_probe": "delay",
+    "decoy_engaged": "decoy",
+    "disengaged_after_friction": "no_change",
+    "unknown": "unknown",
+}
 
 
 class ContextTimeout(Exception):
@@ -56,6 +70,10 @@ class ContextTimeout(Exception):
 
 
 class ContextRequestTooLarge(Exception):
+    pass
+
+
+class _BehavioralLookupTimeout(Exception):
     pass
 
 
@@ -93,6 +111,18 @@ class AdvisoryResult:
 def _deadline_check(deadline: float | None) -> None:
     if deadline is not None and time.monotonic() > deadline:
         raise ContextTimeout("context deadline exceeded between stages")
+
+
+def _behavioral_subdeadline(deadline: float | None) -> float:
+    subdeadline = time.monotonic() + _BEHAVIORAL_CTI_SUB_BUDGET_S
+    if deadline is None:
+        return subdeadline
+    return min(deadline, subdeadline)
+
+
+def _behavioral_deadline_check(subdeadline: float) -> None:
+    if time.monotonic() > subdeadline:
+        raise _BehavioralLookupTimeout("behavioral lookup sub-deadline exceeded")
 
 
 def _parse_ts(value: object) -> datetime | None:
@@ -193,6 +223,102 @@ def _read_attack_version(conn: sqlite3.Connection, loader: TrackedConfigLoader) 
     except sqlite3.Error:
         pass
     return str(loader.raw("attack-map.yaml").get("version", "unknown"))
+
+
+def _behavior_evidence_ref(
+    resolved: Any,
+) -> str | None:
+    evidence_type = resolved.evidence.evidence_type
+    payload = resolved.payload
+    if evidence_type == "observation":
+        return f"obs-{payload['observation_id']}"
+    if evidence_type == "reaction":
+        return f"rxn-{payload['reaction_id']}"
+    return None
+
+
+def _behavior_explanation_short(
+    behavior_class: str,
+    similarity: float | None,
+    evidence_refs: Sequence[str],
+) -> str:
+    label = behavior_class.replace("_", " ")
+    if similarity is not None and evidence_refs:
+        return (
+            f"Observed {label} behavior matched a stored pattern with "
+            f"precomputed similarity {similarity:.2f} and linked evidence."
+        )
+    if similarity is not None:
+        return (
+            f"Observed {label} behavior matched a stored pattern with "
+            f"precomputed similarity {similarity:.2f}."
+        )
+    if evidence_refs:
+        return f"Observed {label} behavior matched a stored pattern with linked evidence."
+    return f"Observed {label} behavior matched a stored pattern."
+
+
+def _build_behavioral_cti(
+    conn: sqlite3.Connection,
+    repo: Repository,
+    *,
+    actor_key: str,
+    deadline: float | None,
+) -> dict[str, Any] | None:
+    if not actor_key:
+        return None
+    subdeadline = _behavioral_subdeadline(deadline)
+    _behavioral_deadline_check(subdeadline)
+
+    patterns = repo.get_behavior_patterns(conn, actor_key=actor_key)
+    _behavioral_deadline_check(subdeadline)
+    if not patterns:
+        return None
+
+    pattern = patterns[0]
+    similarities = repo.get_behavior_pattern_similarities(
+        conn, pattern.pattern_id, pattern.behavior_generation
+    )
+    _behavioral_deadline_check(subdeadline)
+    similarity = similarities[0] if similarities else None
+
+    evidence_rows = repo.get_behavior_pattern_evidence(
+        conn, pattern.pattern_id, pattern.behavior_generation
+    )
+    evidence_refs: list[str] = []
+    for evidence_row in evidence_rows:
+        resolved = repo.resolve_behavior_evidence(conn, evidence_row)
+        if resolved is None:
+            continue
+        ref = _behavior_evidence_ref(resolved)
+        if ref is not None:
+            evidence_refs.append(ref)
+        _behavioral_deadline_check(subdeadline)
+
+    similarity_value = round(similarity.similarity, 2) if similarity is not None else None
+    repeatability_score = (
+        similarity.repeatability if similarity is not None else pattern.repeatability_score
+    )
+    block = {
+        "behavior_seen_before": True,
+        "behavior_class": pattern.behavior_class,
+        "pattern_id": pattern.pattern_id,
+        "repeatability_score": repeatability_score,
+        "novelty_score": pattern.novelty_score,
+        "suggested_posture": _BEHAVIOR_CLASS_TO_POSTURE[pattern.behavior_class],
+        "confidence": pattern.confidence,
+        "evidence_refs": evidence_refs,
+        "explanation_short": _behavior_explanation_short(
+            pattern.behavior_class, similarity_value, evidence_refs
+        ),
+        "limitations": list(_BEHAVIORAL_CTI_LIMITATIONS),
+        "behavior_generation": pattern.behavior_generation,
+        "generator_version": pattern.generator_version,
+        "behavior_config_hash": pattern.behavior_config_hash,
+    }
+    if similarity_value is not None:
+        block["similarity"] = similarity_value
+    return block
 
 
 def _normalize_entities(request: ContextRequest) -> list[tuple[str, str]]:
@@ -506,108 +632,121 @@ def run_context(
         )
         _deadline_check(deadline)
 
-    corroborated = any(
-        m.match_tier == "exact" and m.type in _EXACT_CORROBORATION_TYPES
-        for m in ioc_matches
-    ) or (history.effective_events >= _HISTORY_CORROBORATION_THRESHOLD)
-
-    ctx = ScoringContext(
-        query_as_of=query_as_of,
-        intel_generation=intel_generation,
-        local_generation=local_generation,
-        stats_generation=stats_generation,
-        attack_version=attack_version,
-        config_hash=loader.config_hash,
-        config=scoring_cfg,
-        event=dict(request.event),
-        ioc_matches=tuple(ioc_matches),
-        primary_index=primary_index,
-        corroborated=corroborated,
-        history=history,
-        stats_stale=stats_stale,
-        attack=attack,
-        campaign=campaign,
-        geo_asn=geo_asn,
-        cve_applicable=cve_applicable,
-        cve_kev_hits=cve_hits,
-        cve_added=cve_added,
-        reputation_score=reputation_score,
-        max_staleness_s=max_staleness_s,
-    )
-
-    _deadline_check(deadline)
-    score = score_event(ctx)
-    _deadline_check(deadline)
-
-    recommendation = recommend(
-        score.threat_score, score.confidence, loader.action_bands()
-    )
-
-    primary_ioc_id = (
-        ioc_matches[primary_index].ioc_id if primary_index is not None else None
-    )
-    multi_ioc_scope = {
-        "matched_count": len(ioc_matches),
-        "primary_ioc_id": primary_ioc_id,
-    }
-
-    all_last_seen = [m.last_seen for m in ioc_matches]
-    oldest_feed_days = (
-        round(conf.age_days(query_as_of, min(all_last_seen)), 6) if all_last_seen else None
-    )
-    source_freshness = {
-        "oldest_feed_days": oldest_feed_days,
-        "attack_version": attack_version,
-    }
-
-    threat_context = {
-        "ioc_matches": [
-            {
-                "type": m.type,
-                "value": m.value,
-                "match_tier": m.match_tier,
-                "agg_raw_confidence": m.agg_raw_confidence,
-                "sources": sorted({s.group for s in m.sources}),
-            }
+        corroborated = any(
+            m.match_tier == "exact" and m.type in _EXACT_CORROBORATION_TYPES
             for m in ioc_matches
-        ],
-        "campaign": (
-            {
-                "name": campaign.name,
-                "actor": campaign.actor,
-                "ioc_overlap": campaign.ioc_overlap,
-                "technique_overlap": campaign.technique_overlap,
-            }
-            if campaign.matched
+        ) or (history.effective_events >= _HISTORY_CORROBORATION_THRESHOLD)
+
+        ctx = ScoringContext(
+            query_as_of=query_as_of,
+            intel_generation=intel_generation,
+            local_generation=local_generation,
+            stats_generation=stats_generation,
+            attack_version=attack_version,
+            config_hash=loader.config_hash,
+            config=scoring_cfg,
+            event=dict(request.event),
+            ioc_matches=tuple(ioc_matches),
+            primary_index=primary_index,
+            corroborated=corroborated,
+            history=history,
+            stats_stale=stats_stale,
+            attack=attack,
+            campaign=campaign,
+            geo_asn=geo_asn,
+            cve_applicable=cve_applicable,
+            cve_kev_hits=cve_hits,
+            cve_added=cve_added,
+            reputation_score=reputation_score,
+            max_staleness_s=max_staleness_s,
+        )
+
+        _deadline_check(deadline)
+        score = score_event(ctx)
+        _deadline_check(deadline)
+
+        recommendation = recommend(
+            score.threat_score, score.confidence, loader.action_bands()
+        )
+
+        primary_ioc_id = (
+            ioc_matches[primary_index].ioc_id if primary_index is not None else None
+        )
+        multi_ioc_scope = {
+            "matched_count": len(ioc_matches),
+            "primary_ioc_id": primary_ioc_id,
+        }
+
+        all_last_seen = [m.last_seen for m in ioc_matches]
+        oldest_feed_days = (
+            round(conf.age_days(query_as_of, min(all_last_seen)), 6)
+            if all_last_seen
             else None
-        ),
-        "attack_mapping": [{"technique": t} for t in attack.techniques],
-        "pattern_match": None,
-        "history": {
-            "prior_observations": history.total_events,
-            "trend": history.trend,
-        },
-    }
+        )
+        source_freshness = {
+            "oldest_feed_days": oldest_feed_days,
+            "attack_version": attack_version,
+        }
 
-    determinism = {
-        "intel_generation": intel_generation,
-        "local_generation": local_generation,
-        "stats_generation": stats_generation,
-        "attack_version": attack_version,
-        "config_hash": loader.config_hash,
-        "query_as_of": to_rfc3339(query_as_of),
-    }
+        threat_context = {
+            "ioc_matches": [
+                {
+                    "type": m.type,
+                    "value": m.value,
+                    "match_tier": m.match_tier,
+                    "agg_raw_confidence": m.agg_raw_confidence,
+                    "sources": sorted({s.group for s in m.sources}),
+                }
+                for m in ioc_matches
+            ],
+            "campaign": (
+                {
+                    "name": campaign.name,
+                    "actor": campaign.actor,
+                    "ioc_overlap": campaign.ioc_overlap,
+                    "technique_overlap": campaign.technique_overlap,
+                }
+                if campaign.matched
+                else None
+            ),
+            "attack_mapping": [{"technique": t} for t in attack.techniques],
+            "pattern_match": None,
+            "history": {
+                "prior_observations": history.total_events,
+                "trend": history.trend,
+            },
+        }
+        try:
+            behavioral_cti = _build_behavioral_cti(
+                conn,
+                repo,
+                actor_key=request.actor_key,
+                deadline=deadline,
+            )
+        except (sqlite3.Error, ValueError, _BehavioralLookupTimeout):
+            behavioral_cti = None
+        if behavioral_cti is not None:
+            threat_context["behavioral_cti"] = behavioral_cti
 
-    return AdvisoryResult(
-        advisory_id=uuid.uuid4().hex,
-        threat_score=score.threat_score,
-        confidence=score.confidence,
-        reason=score.reason,
-        confidence_reason=score.confidence_reason,
-        recommendation=recommendation,
-        threat_context=threat_context,
-        source_freshness=source_freshness,
-        multi_ioc_scope=multi_ioc_scope,
-        content_hash=score.content_hash,
-        determinism=determinism,
-    )
+        determinism = {
+            "intel_generation": intel_generation,
+            "local_generation": local_generation,
+            "stats_generation": stats_generation,
+            "attack_version": attack_version,
+            "config_hash": loader.config_hash,
+            "query_as_of": to_rfc3339(query_as_of),
+        }
+
+        return AdvisoryResult(
+            advisory_id=uuid.uuid4().hex,
+            threat_score=score.threat_score,
+            confidence=score.confidence,
+            reason=score.reason,
+            confidence_reason=score.confidence_reason,
+            recommendation=recommendation,
+            threat_context=threat_context,
+            source_freshness=source_freshness,
+            multi_ioc_scope=multi_ioc_scope,
+            content_hash=score.content_hash,
+            determinism=determinism,
+        )

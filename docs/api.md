@@ -366,6 +366,11 @@ object. The top-level `threat_score`, `confidence`, `reason[]`,
   `unknown`. No field in this block instructs Edge to block, drop, redirect,
   or delay directly — final authority always remains with the Azazel-Edge
   Deterministic Arbiter.
+- **`suggested_posture` is derived by a deterministic class-to-posture map.**
+  The current mapping is:
+  `simple_scanner -> observe`, `scripted_automation -> delay`,
+  `adaptive_probe -> delay`, `decoy_engaged -> decoy`,
+  `disengaged_after_friction -> no_change`, `unknown -> unknown`.
 - **Best-effort, never a failure mode.** The block runs under a small
   sub-budget inside the existing context deadline; if the lookup times out or
   errors, the block is simply omitted and the `/v1/context` response still
