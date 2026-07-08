@@ -107,8 +107,10 @@ changes the `threat_score` determinism envelope, and it never commands
 Azazel-Edge. It only characterizes observed attacker behavior under friction
 and offers advisory posture suggestions.
 
-> Behavioral CTI characterizes adaptive or automation-like behavior. It does
-> not prove that an attacker used AI.
+> Behavioral CTI characterizes adaptive or automation-like behavior. It does not prove that an attacker used AI.
+
+Behavior patterns are advisory, rebuildable derived artifacts built from
+`reaction` and `observation` evidence, and they are not verdicts.
 
 ### Placement — `local.db`, not a bundle table [F2-2]
 
@@ -141,7 +143,8 @@ tables are **excluded from the F-1 non-decrease invariant**
 `reaction`/`observation`/`advisory_log`/`edge_reported_ioc`) and carry **no
 immutability triggers**. `reaction` and `observation` rows themselves remain
 immutable and untouched by generation — the derived lane reads them, never
-writes them.
+writes them. The resulting behavior patterns remain advisory/rebuildable
+derived artifacts rather than verdicts.
 
 ### behavior_pattern
 

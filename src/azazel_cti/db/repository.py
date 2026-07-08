@@ -10,6 +10,13 @@ from collections.abc import Callable, Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+from azazel_cti.db.behavior import (
+    BehaviorPattern,
+    BehaviorPatternEvidence,
+    BehaviorPatternSimilarity,
+    ResolvedBehaviorEvidence,
+)
+
 MIGRATIONS_ROOT = Path(__file__).resolve().parent / "migrations"
 
 
@@ -185,3 +192,91 @@ class Repository:
             "WHERE entity_key = ? ORDER BY window_start DESC",
             (key,),
         ).fetchall()
+
+    def get_current_behavior_generation(self, conn: sqlite3.Connection) -> int | None:
+        row = conn.execute(
+            "SELECT value FROM behavior_meta WHERE key = 'current_behavior_generation'"
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row[0])
+
+    def get_behavior_patterns(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        actor_key: str,
+        behavior_generation: int | None = None,
+    ) -> list[BehaviorPattern]:
+        conn.row_factory = sqlite3.Row
+        generation = behavior_generation
+        if generation is None:
+            generation = self.get_current_behavior_generation(conn)
+        if generation is None:
+            return []
+        rows = conn.execute(
+            "SELECT pattern_id, behavior_generation, version, actor_key, actor_cluster_key, "
+            "edge_id, observation_start, observation_end, action_applied, reaction_sequence, "
+            "reaction_window_s, behavior_class, confidence, novelty_score, "
+            "repeatability_score, suspected_stage, related_iocs, related_ttps, "
+            "generated_at, generator_version, behavior_config_hash, provenance "
+            "FROM behavior_pattern WHERE actor_key = ? AND behavior_generation = ? "
+            "ORDER BY observation_start ASC, pattern_id ASC",
+            (actor_key, generation),
+        ).fetchall()
+        return [BehaviorPattern.from_row(row) for row in rows]
+
+    def get_behavior_pattern_evidence(
+        self, conn: sqlite3.Connection, pattern_id: str, behavior_generation: int
+    ) -> list[BehaviorPatternEvidence]:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT pattern_id, behavior_generation, evidence_type, evidence_id, role "
+            "FROM behavior_pattern_evidence WHERE pattern_id = ? AND behavior_generation = ? "
+            "ORDER BY evidence_type ASC, evidence_id ASC, role ASC",
+            (pattern_id, behavior_generation),
+        ).fetchall()
+        return [BehaviorPatternEvidence.from_row(row) for row in rows]
+
+    def get_behavior_pattern_similarities(
+        self, conn: sqlite3.Connection, pattern_id: str, behavior_generation: int
+    ) -> list[BehaviorPatternSimilarity]:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT pattern_id, behavior_generation, other_pattern_id, similarity, "
+            "repeatability, shared_features, differences, evidence_refs "
+            "FROM behavior_pattern_similarity "
+            "WHERE pattern_id = ? AND behavior_generation = ? "
+            "ORDER BY similarity DESC, other_pattern_id ASC",
+            (pattern_id, behavior_generation),
+        ).fetchall()
+        return [BehaviorPatternSimilarity.from_row(row) for row in rows]
+
+    def resolve_behavior_evidence(
+        self, conn: sqlite3.Connection, evidence: BehaviorPatternEvidence
+    ) -> ResolvedBehaviorEvidence | None:
+        conn.row_factory = sqlite3.Row
+        if evidence.evidence_type == "observation":
+            row = conn.execute(
+                "SELECT observation_id, event_id, edge_id, kind, observed_at, "
+                "entities, raw, created_at FROM observation WHERE observation_id = ?",
+                (int(evidence.evidence_id),),
+            ).fetchone()
+        elif evidence.evidence_type == "reaction":
+            row = conn.execute(
+                "SELECT reaction_id, edge_id, actor_key, action_applied, applied_at, "
+                "reaction, reaction_window_s, evidence_refs, created_at "
+                "FROM reaction WHERE reaction_id = ?",
+                (int(evidence.evidence_id),),
+            ).fetchone()
+        elif evidence.evidence_type == "pattern":
+            row = conn.execute(
+                "SELECT pattern_id, version, match_spec, attack_refs, provenance, "
+                "advisory, confidence, created_at FROM pattern WHERE pattern_id = ?",
+                (evidence.evidence_id,),
+            ).fetchone()
+        else:
+            raise ValueError(f"unsupported evidence_type: {evidence.evidence_type}")
+        if row is None:
+            return None
+        return ResolvedBehaviorEvidence(evidence=evidence, payload=dict(row))
