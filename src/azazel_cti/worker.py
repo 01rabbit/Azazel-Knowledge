@@ -62,6 +62,7 @@ from azazel_cti.ingest.drain import DrainStats, drain_endpoint
 from azazel_cti.ingest.spool import BatchStatus, SpoolWriter
 from azazel_cti.normalize.exclusions import ExclusionPolicy
 from azazel_cti.patterns.behavior_generate import apply_generation_plan
+from azazel_cti.scoring.behavior_similarity import run_similarity
 from azazel_cti.reactions import linkage
 from azazel_cti.scoring.confidence import noisy_or
 
@@ -481,6 +482,9 @@ def run_p2(
             config_loader,
             query_as_of=clock.query_as_of(),
             mode="incremental",
+            before_meta_swap=lambda generation: run_similarity(
+                conn, config_loader, generation
+            ),
         )
         behavior_built["generation"] = plan.behavior_generation
         behavior_built["patterns"] = len(plan.patterns)

@@ -1,0 +1,13 @@
+version: 1
+notice: "Behavioral similarity is advisory pattern matching, not attribution."
+max_patterns_compared: 200
+max_eval_ms: 5
+weights:
+  reaction_sequence: 0.30
+  behavior_class: 0.18
+  decoy_engaged: 0.14
+  action_applied: 0.12
+  retry_interval: 0.08
+  ioc_overlap: 0.08
+  actor_identity: 0.06
+  ttp_overlap: 0.04
