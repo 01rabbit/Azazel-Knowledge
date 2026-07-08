@@ -95,8 +95,10 @@ def ingest_reaction(
         "INSERT OR IGNORE INTO reaction "
         "(edge_id, actor_key, action_applied, applied_at, reaction, reaction_window_s, "
         "events_in_window, classifier, classifier_version, evidence_refs, "
-        "evidence_modality_count, trust_tier, advisory_id, advisory_linkage, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "evidence_modality_count, trust_tier, advisory_id, advisory_linkage, created_at, "
+        "actor_cluster_key, action_profile, decoy_touched, decoy_profile, "
+        "retry_interval_ms, timeout_adaptation, payload_ext) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             validated["edge_id"],
             validated["actor_key"],
@@ -113,6 +115,13 @@ def ingest_reaction(
             validated.get("advisory_id"),
             advisory_linkage,
             to_rfc3339(now),
+            validated.get("actor_cluster_key"),
+            validated.get("action_profile"),
+            validated.get("decoy_touched"),
+            validated.get("decoy_profile"),
+            validated.get("retry_interval_ms"),
+            validated.get("timeout_adaptation"),
+            json.dumps(validated.get("payload_ext", {}), sort_keys=True),
         ),
     )
     if cursor.rowcount == 0:
