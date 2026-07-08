@@ -61,6 +61,20 @@ _ENTITY_FIELD_TYPES: dict[str, str] = {
 
 Result = tuple[bool, dict[str, Any] | str]
 
+_PHASE2_PROMOTED_FIELDS = frozenset(
+    {
+        "actor_cluster_key",
+        "action_profile",
+        "decoy_touched",
+        "decoy_profile",
+        "retry_interval_ms",
+        "timeout_adaptation",
+    }
+)
+_PHASE2_PAYLOAD_FIELDS = frozenset(
+    {"pre_action_summary", "post_action_summary", "raw_refs"}
+)
+
 
 def _check_size(line: str) -> str | None:
     if len(line.encode("utf-8")) > MAX_LINE_BYTES:
@@ -87,6 +101,41 @@ def _require_nonempty_str(obj: Mapping[str, Any], name: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return f"invalid field: {name}"
     return None
+
+
+def _optional_string(
+    obj: Mapping[str, Any], name: str
+) -> tuple[str | None, str | None]:
+    value = obj.get(name)
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{name} must be a string when present"
+    return value, None
+
+
+def _optional_nonnegative_int(
+    obj: Mapping[str, Any], name: str
+) -> tuple[int | None, str | None]:
+    value = obj.get(name)
+    if value is None:
+        return None, None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None, f"{name} must be a non-negative integer when present"
+    return value, None
+
+
+def _optional_decoy_touched(
+    obj: Mapping[str, Any],
+) -> tuple[int | None, str | None]:
+    value = obj.get("decoy_touched")
+    if value is None:
+        return None, None
+    if isinstance(value, bool):
+        return int(value), None
+    if isinstance(value, int) and value in (0, 1):
+        return value, None
+    return None, "decoy_touched must be a boolean or 0/1 when present"
 
 
 def _parse_and_check_skew(value: Any, *, now: datetime) -> tuple[datetime | None, str | None]:
@@ -287,6 +336,45 @@ def validate_reaction_line(line: str, *, now: datetime) -> Result:
     if advisory_id is not None and not isinstance(advisory_id, str):
         return False, "advisory_id must be a string when present"
 
+    actor_cluster_key, error = _optional_string(obj, "actor_cluster_key")
+    if error:
+        return False, error
+    action_profile, error = _optional_string(obj, "action_profile")
+    if error:
+        return False, error
+    decoy_profile, error = _optional_string(obj, "decoy_profile")
+    if error:
+        return False, error
+    timeout_adaptation, error = _optional_string(obj, "timeout_adaptation")
+    if error:
+        return False, error
+    retry_interval_ms, error = _optional_nonnegative_int(obj, "retry_interval_ms")
+    if error:
+        return False, error
+    decoy_touched, error = _optional_decoy_touched(obj)
+    if error:
+        return False, error
+
+    raw_refs = obj.get("raw_refs")
+    if raw_refs is not None and not isinstance(raw_refs, list):
+        return False, "raw_refs must be a list when present"
+
+    known_fields = set(required) | {
+        "advisory_id",
+        *_PHASE2_PROMOTED_FIELDS,
+        *_PHASE2_PAYLOAD_FIELDS,
+    }
+    payload_ext: dict[str, Any] = {}
+    if "pre_action_summary" in obj:
+        payload_ext["pre_action_summary"] = obj["pre_action_summary"]
+    if "post_action_summary" in obj:
+        payload_ext["post_action_summary"] = obj["post_action_summary"]
+    if raw_refs is not None:
+        payload_ext["raw_refs"] = raw_refs
+    for key, value in obj.items():
+        if key not in known_fields:
+            payload_ext[key] = value
+
     return True, {
         "edge_id": obj["edge_id"],
         "actor_key": obj["actor_key"],
@@ -296,4 +384,11 @@ def validate_reaction_line(line: str, *, now: datetime) -> Result:
         "reaction_window_s": window,
         "evidence_refs": [str(ref) for ref in evidence_refs],
         "advisory_id": advisory_id,
+        "actor_cluster_key": actor_cluster_key,
+        "action_profile": action_profile,
+        "decoy_touched": decoy_touched,
+        "decoy_profile": decoy_profile,
+        "retry_interval_ms": retry_interval_ms,
+        "timeout_adaptation": timeout_adaptation,
+        "payload_ext": payload_ext,
     }

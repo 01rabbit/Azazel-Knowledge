@@ -243,6 +243,14 @@ the pattern generator queries them directly; everything else stays in
 `payload_ext` for auditability and forward-compatibility. The 8-class
 `reaction` taxonomy itself is unchanged.
 
+Per Phase 2 §6.1 routing, the six promoted context fields above plus
+`payload_ext` are the only schema additions. `pre_action_summary` and
+`post_action_summary` are not narrowed to strings: they are accepted as any
+JSON value and stored verbatim in `payload_ext`, alongside `raw_refs` and any
+future unknown optional fields. This keeps `reaction` queryable where needed
+without sacrificing auditability or forward compatibility. `reaction`
+remains INSERT-only and immutable after these additions.
+
 ## Normalization rules
 
 - All timestamps UTC ISO 8601.

@@ -49,20 +49,30 @@ Recommended Phase 2 payload:
 
 ```json
 {
-  "actor_key": "203.0.113.7",
-  "edge_id": "edge-pi4-07",
+  "edge_id": "edge-demo-01",
+  "actor_key": "ip:203.0.113.7",
+  "actor_cluster_key": "optional-session-or-ja3-cluster",
   "action_applied": "delay",
-  "applied_at": "2026-07-08T03:14:00Z",
-  "reaction": "shifted_port",
-  "reaction_window_s": 45,
-  "pre_action_summary": "SYN scan across 12 ports over 90s",
-  "post_action_summary": "Retried on adjacent port after delay, then backed off",
-  "decoy_touched": false,
-  "decoy_profile": null,
-  "retry_interval_ms": 1500,
-  "timeout_adaptation": "backoff_increased",
-  "evidence_refs": ["obs-2026-0708-0001", "rxn-2026-0708-0007"],
-  "raw_refs": ["edge-audit-id:9f21c8"]
+  "action_profile": "aggressive-30s",
+  "applied_at": "2026-07-08T01:00:00Z",
+  "reaction": "shifted_protocol",
+  "reaction_window_s": 60,
+  "pre_action_summary": {
+    "ports": [22, 80],
+    "protocols": ["tcp", "http"],
+    "event_count": 12
+  },
+  "post_action_summary": {
+    "ports": [8080, 2222],
+    "protocols": ["http", "ssh"],
+    "event_count": 8
+  },
+  "decoy_touched": true,
+  "decoy_profile": "ssh-canary-profile-2",
+  "retry_interval_ms": 1400,
+  "timeout_adaptation": "increased",
+  "evidence_refs": ["obs-1", "obs-2"],
+  "raw_refs": ["edge-audit-1"]
 }
 ```
 
@@ -74,6 +84,18 @@ batch's `invalid[]` status (`GET /v1/ingest/{batch_id}`), never causing the
 whole batch to be rejected. All timestamps are normalized to UTC on ingest.
 `reaction` rows stay INSERT-only/immutable — Phase 2 adds nullable columns
 via migration, it does not add triggers that would allow UPDATE/DELETE.
+
+Field routing on ingest:
+
+- Promoted nullable columns: `actor_cluster_key`, `action_profile`,
+  `decoy_touched`, `decoy_profile`, `retry_interval_ms`,
+  `timeout_adaptation`
+- Preserved verbatim in `payload_ext`: `pre_action_summary`,
+  `post_action_summary`, `raw_refs`, and any unknown optional field
+
+`pre_action_summary` / `post_action_summary` are accepted as arbitrary JSON
+values, including objects, arrays, or scalars; CTI stores them verbatim in
+`payload_ext` without narrowing their type.
 
 ## Lookup and context (Edge → CTI, synchronous, triggered)
 
