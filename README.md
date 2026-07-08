@@ -4,7 +4,13 @@
 > deferred (AZ-01 = Azazel-Edge, AZ-02 = Azazel-Gadget, AZ-03 = Azazel-Boot
 > are already assigned). See [ADR-0001](docs/adr/0001-repository-naming.md).
 
-**Status: design phase. No implementation yet.**
+**Status: implemented and under active development.** Phase 1 (the full node —
+ingest, IOC/JA3/JA4 search, deterministic `/v1/context`, reaction recording,
+offline bundles, TAXII) and the Phase 2 **Behavioral CTI** lane
+([design](docs/design/phase2-implementation.md)) are merged on `main`. The unit
+suite is the baseline gate (currently 583 tests); the advisory-only,
+determinism, and offline-first contracts below are enforced by static and
+replay tests, not just convention.
 
 Azazel-CTI is an independent, on-premises Cyber Threat Intelligence node built
 on a portable Raspberry Pi 4. It pairs with
@@ -20,7 +26,11 @@ threats* — a Threat Knowledge Plane for the Azazel family:
   bundle transfer.
 - Improves Azazel-Edge decision quality without degrading its real-time path.
 - Turns delaying defense into a CTI sensor: attacker reactions under friction
-  (throttle, redirect, isolate) become structured intelligence.
+  (throttle, redirect, isolate, deception) become structured intelligence.
+- **Behavioral CTI (Phase 2):** compiles those reactions into evidence-backed
+  behavior patterns, scores their similarity and repeatability, and returns
+  them to Edge as *advisory* behavioral context — never a command, never a
+  claim of AI attribution.
 
 ## The one rule that shapes everything
 
@@ -39,14 +49,16 @@ fully functional when the CTI node is absent, slow, or wrong.
       ┌──────────────────────────────┐
       │  Raspberry Pi 4              │
       │  Azazel-CTI (working name)   │   Intelligence / Correlation /
-      │  Threat Knowledge Plane      │   Campaign analysis / IOC management
+      │  Threat Knowledge Plane      │   Campaign analysis / IOC management /
+      │                              │   Behavioral CTI (patterns, similarity)
       └──────────────────────────────┘
                ▲            │
    Evidence    │            │  Threat context (advisory)
    (EVE, DNS,  │            │  confidence / reason / ATT&CK /
-   JA3/JA4,    │            │  recommended action + alternatives
-   flows,      │            ▼
-   delay hist) │
+   JA3/JA4,    │            │  recommended action + alternatives /
+   flows,      │            │  behavioral_cti (seen-before, posture suggestion)
+   delay hist, │            ▼
+   reactions)  │
       ┌──────────────────────────────┐
       │  Raspberry Pi 5              │
       │  Azazel-Edge (AZ-01)         │   Detection / Delay / Deception /
@@ -56,6 +68,35 @@ fully functional when the CTI node is absent, slow, or wrong.
               Protected network
 ```
 
+## Behavioral CTI (Phase 2)
+
+Behavioral CTI is a **separate, additive lane** beside the Phase 1 scoring
+envelope — it never touches the frozen `threat_score` / `reason[]` / replay
+contract ([design](docs/design/phase2-implementation.md),
+[ADR-0009](docs/adr/0009-behavioral-cti.md)):
+
+- **Patterns** — immutable `reaction` rows (+ linked observations) are compiled
+  deterministically into rebuildable `behavior_pattern` rows in `local.db`,
+  every one traceable to raw evidence. Regeneration is atomic via a
+  `behavior_generation` swap.
+- **Classification** — config-versioned mapping into six behavior classes
+  (`simple_scanner`, `scripted_automation`, `adaptive_probe`, `decoy_engaged`,
+  `disengaged_after_friction`, `unknown`). Never an attribution label.
+- **Similarity & repeatability** — deterministic, explainable, precomputed
+  offline (no ML, no query-time computation).
+- **Advisory** — `/v1/context` gains an optional, best-effort
+  `threat_context.behavioral_cti` block (a *posture suggestion*, never a
+  command); its absence never blocks or errors an answer.
+- **Operator surfaces** — `GET /v1/behavior-patterns/*` and
+  `/v1/reports/friction-timeline` plus `azctl behavior report` render the
+  observe → track → classify → advise narrative.
+- **Shadow scoring** — research-only, default-off, shadow-only hooks whose
+  `shadow_score_delta` never reaches `threat_score`, the `/v1/context`
+  response, or `reason[]`; output goes to a JSONL research log alone.
+
+**Non-attribution doctrine:** Behavioral CTI characterizes adaptive or
+automation-like behavior. It does not prove that an attacker used AI.
+
 ## Relationship to Azazel-Edge roadmap
 
 This repository is the concrete home for the post-2026 research items tracked
@@ -63,9 +104,9 @@ in [Azazel-Edge #283](https://github.com/01rabbit/Azazel-Edge/issues/283):
 
 | #283 research item | Where it lands here |
 |---|---|
-| Tactical CTI Sensor extension | Attacker-reaction observation schema ([data model](docs/data-model.md)) |
-| Tactical Pattern Memory | Pattern generator + pattern store ([architecture](docs/architecture.md)) |
-| Richer correlation / knowledge model | Correlation engine, historical observation DB |
+| Tactical CTI Sensor extension | Attacker-reaction store ([data model](docs/data-model.md)); Edge payload contract [Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305) |
+| Tactical Pattern Memory | Pattern store + deterministic Behavioral CTI generator ([architecture](docs/architecture.md), [Phase 2 design](docs/design/phase2-implementation.md)) |
+| Richer correlation / knowledge model | Correlation engine, historical observation DB, behavioral similarity |
 | External SOC/SIEM integration | STIX 2.1 / TAXII 2.1 boundary (already prototyped in Azazel-Edge) |
 
 Research framing: **"How does CTI optimize delaying defense?"** — not
@@ -74,11 +115,14 @@ Research framing: **"How does CTI optimize delaying defense?"** — not
 ## Documentation
 
 - [Architecture](docs/architecture.md) — planes, components, data flows, failure modes
-- [Data model](docs/data-model.md) — IOC, ATT&CK, campaign, observation, pattern stores
-- [API](docs/api.md) — Edge-facing REST contract and query discipline
+- [Data model](docs/data-model.md) — IOC, ATT&CK, campaign, observation, pattern, behavioral stores
+- [API](docs/api.md) — Edge-facing REST contract, behavioral advisory, query discipline
+- [Scoring](docs/scoring.md) — deterministic, explainable confidence; shadow reaction-informed scoring
 - [Sync and offline operation](docs/sync-offline.md) — feed adapters, signed offline bundles
-- [Scoring](docs/scoring.md) — deterministic, explainable confidence calculation
-- [Roadmap](docs/roadmap.md) — Phase 1–4, BHUSA research direction
+- [Operations](docs/operations.md) — provisioning, feeds, connecting an Edge, behavioral generation
+- [Roadmap](docs/roadmap.md) — scaling phases and the CTI-optimized-delay research loop
+- [Development guide](docs/development-guide.md) — the commander/adversarial-reviewer + Codex delegation loop
+- [Design records](docs/design/) — Phase 1 and Phase 2 implementation designs
 - [Decision records](docs/adr/) — resolved design questions with rationale
 
 ## Non-goals
@@ -88,6 +132,8 @@ Research framing: **"How does CTI optimize delaying defense?"** — not
   report generation, never verdicts.
 - Not a cloud TIP replacement: single-site, constrained-hardware, offline-first.
 - Not authoritative over Azazel-Edge: advisory output only, by contract.
+- Not an AI-attribution engine: it names adaptive/automation-like behavior,
+  never a proof of AI usage.
 
 ## Target hardware
 

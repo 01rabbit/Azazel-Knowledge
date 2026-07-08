@@ -1,6 +1,14 @@
 # Roadmap
 
-## Phase 1 — one Edge, one CTI node (first milestone)
+> **Two axes, don't conflate them.** This roadmap's phases are a *scaling*
+> ladder (one Edge → several → site → region). The *implementation* milestones
+> in [`design/`](design/) are a different axis: `phase1-implementation.md` (the
+> full single-site node) and `phase2-implementation.md` (the **Behavioral CTI**
+> lane — reaction→pattern→similarity→advisory→shadow). Both implementation
+> milestones are **delivered on `main`**; the scaling phases below are largely
+> future work layered on top.
+
+## Phase 1 — one Edge, one CTI node (first milestone) — delivered
 
 Scope: everything in [architecture.md](architecture.md) at single-site scale.
 
@@ -17,10 +25,19 @@ Edge behavior except missing enrichment.
 
 ## Phase 2 — several Edges, one CTI node
 
-- Multi-edge ingest (`edge_id` becomes meaningful), cross-edge correlation:
-  same actor seen at two Edges is itself intelligence.
-- Pattern Generator goes live: reactions + observations compiled into
-  Tactical Pattern Memory; patterns exported to Edges as advisory context.
+The Behavioral CTI *mechanism* this phase depends on is already implemented
+(see the Behavioral CTI implementation milestone,
+[phase2-implementation.md](design/phase2-implementation.md)); what remains here
+is the multi-edge *scale-out* around it.
+
+- Pattern Generator is **live**: reactions + observations are compiled into
+  Tactical Pattern Memory and evidence-backed behavior patterns, scored for
+  similarity/repeatability, and surfaced to Edges as advisory context
+  (`threat_context.behavioral_cti`). The schema already carries `edge_id` on
+  every behavior pattern.
+- **Remaining:** cross-edge correlation (same actor seen at two Edges is itself
+  intelligence — the schema tolerates multiple `edge_id` but cross-site logic is
+  not yet enabled) and multi-edge ingest scale.
 - Evaluate SQLite → PostgreSQL against measured write load (ADR-0003 exit
   criteria).
 
@@ -70,10 +87,16 @@ This is the concrete continuation of Azazel-Edge #283's long-term questions:
 
 | #283 long-term question | Where it is answered |
 |---|---|
-| Can delaying defense produce reusable CTI observations? | `reaction` store + Phase 2 pattern generation |
-| What evidence schema is needed for attacker-reaction tracking? | [data-model.md](data-model.md#reaction--the-tactical-cti-sensor-core-azazel-edge-283) |
+| Can delaying defense produce reusable CTI observations? | **Implemented:** `reaction` store → deterministic behavior-pattern generation, similarity, and the `friction-timeline` report |
+| What evidence schema is needed for attacker-reaction tracking? | [data-model.md](data-model.md#reaction--the-tactical-cti-sensor-core-azazel-edge-283) + the Behavioral CTI tables; Edge payload contract [Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305) |
 | Which parts belong in Azazel-Edge vs. external tooling? | Plane separation: Edge keeps decision, CTI node keeps knowledge |
 | Is Agentic Edge SOC/NOC a useful framing? | Out of scope here; this repo stays deterministic-advisory |
+
+The closed loop is now exercisable end to end: friction applied → reaction
+recorded → behavior pattern compiled → advisory posture suggested. Turning
+reaction evidence back into *better* delay/decoy advice (the upper arrow) is the
+open research question, with the default-off shadow-scoring hooks as its
+measurement harness.
 
 ## Standing constraints (all phases)
 

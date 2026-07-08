@@ -174,7 +174,53 @@ the matching `advisory_log` row has landed -- see
 full state machine; unresolved or missing linkage never invalidates the
 underlying reaction row (design F-6).
 
-## 5. Reading health and staleness
+## 5. Behavioral CTI: generation, reports, shadow (Phase 2)
+
+Once reactions are landing, the node compiles them into evidence-backed
+behavior patterns. Generation is an **offline** deterministic pass — it never
+sits on the `/v1/context` hot path — and it only reads immutable
+`reaction`/`observation` rows, so it can be replayed safely.
+
+```sh
+# Preview what would be generated, without writing (safe, read-only):
+azctl behavior dry-run
+
+# Incrementally generate patterns from unprocessed reactions:
+azctl behavior generate
+
+# Rebuild the whole current generation from source (idempotent):
+azctl behavior rebuild
+```
+
+The worker also runs generation on its P2 cycle. Each run stages
+`behavior_generation = N+1`, precomputes similarity/repeatability, and swaps
+`behavior_meta` atomically in a single writer transaction — a reader only ever
+sees the prior complete generation, never a half-built one. `azctl behavior`
+refuses to write while the worker holds the local writer lock (run it against a
+paused worker, or let the P2 pass own generation).
+
+Operator-facing read surfaces (all `Scope.READ`, SELECT-only):
+
+```sh
+# Same read code as the API, rendered for a human/demo:
+azctl behavior report <pattern-id>
+```
+
+- `GET /v1/behavior-patterns/{pattern_id}` — one pattern + evidence + similarity
+- `GET /v1/behavior-patterns/summary` — recent patterns by class/edge/window
+- `GET /v1/reports/friction-timeline` — the observe → track → classify → advise
+  narrative, with a mandatory CTI-advisory disclaimer and no attribution terms
+
+**Shadow reaction-informed scoring** ships **default-off and shadow-only**
+(`config/behavior-shadow-rules.yaml`, `enabled: false`, `mode: shadow` — the
+loader rejects `mode: active`). When the P2 pass runs, potential
+reaction-informed adjustments are written to the JSONL research log at
+`var/research/behavioral_shadow.jsonl` **only**. A `shadow_score_delta` never
+changes the production `threat_score`, never appears in the `/v1/context`
+response, and never adds or removes a `reason[]` line — it is research data, not
+a verdict.
+
+## 6. Reading health and staleness
 
 ```sh
 azctl health
