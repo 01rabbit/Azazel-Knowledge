@@ -62,6 +62,11 @@ from azazel_cti.ingest.drain import DrainStats, drain_endpoint
 from azazel_cti.ingest.spool import BatchStatus, SpoolWriter
 from azazel_cti.normalize.exclusions import ExclusionPolicy
 from azazel_cti.patterns.behavior_generate import apply_generation_plan
+from azazel_cti.scoring.behavior_shadow import (
+    build_behavioral_shadow_record,
+    emit_behavioral_shadow_record,
+    evaluate_behavioral_shadow,
+)
 from azazel_cti.scoring.behavior_similarity import run_similarity
 from azazel_cti.reactions import linkage
 from azazel_cti.scoring.confidence import noisy_or
@@ -159,6 +164,14 @@ class WorkerPaths:
         return self.var_dir / "audit"
 
     @property
+    def research_dir(self) -> Path:
+        return self.var_dir / "research"
+
+    @property
+    def behavior_shadow_log_path(self) -> Path:
+        return self.research_dir / "behavioral_shadow.jsonl"
+
+    @property
     def trust_dir(self) -> Path:
         return self.secrets_dir / "trust"
 
@@ -177,7 +190,14 @@ class WorkerPaths:
     def ensure_dirs(self) -> None:
         for endpoint in (*INGEST_ENDPOINTS, ADVISORY_ENDPOINT):
             (self.ingest_root / endpoint).mkdir(parents=True, exist_ok=True)
-        for d in (self.run_dir, self.audit_dir, self.data_db_dir, self.trust_dir, self.secrets_dir):
+        for d in (
+            self.run_dir,
+            self.audit_dir,
+            self.data_db_dir,
+            self.trust_dir,
+            self.secrets_dir,
+            self.research_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -455,6 +475,7 @@ def run_p2(
     *,
     clock: Clock,
     online: bool,
+    behavior_shadow_log_path: Path | None = None,
     exclusion_policy: ExclusionPolicy | None = None,
 ) -> dict[str, Any]:
     feed_outcomes: list[FeedRunOutcome] = []
@@ -474,6 +495,7 @@ def run_p2(
 
     trend_updated = {"n": 0}
     behavior_built = {"generation": None, "patterns": 0, "mode": "incremental"}
+    shadow_records: list[dict[str, Any]] = []
 
     def _trend(conn: sqlite3.Connection) -> None:
         trend_updated["n"] = aggregate_observation_stats_trend(conn)
@@ -488,9 +510,21 @@ def run_p2(
         )
         behavior_built["generation"] = plan.behavior_generation
         behavior_built["patterns"] = len(plan.patterns)
+        rules_block = config_loader.behavior_shadow_rules()
+        shadow_records.extend(
+            build_behavioral_shadow_record(
+                persisted.pattern,
+                evaluate_behavioral_shadow(persisted.pattern, rules_block),
+            )
+            for persisted in sorted(plan.patterns, key=lambda item: item.pattern.pattern_id)
+        )
 
     local_writer.submit(P2, _trend)
     local_writer.process_pending()
+
+    if behavior_shadow_log_path is not None:
+        for record in shadow_records:
+            emit_behavioral_shadow_record(behavior_shadow_log_path, record)
 
     return {
         "feeds": [
@@ -501,6 +535,7 @@ def run_p2(
         "stats_trend_updated": trend_updated["n"],
         "behavior_generation": behavior_built["generation"],
         "behavior_patterns_written": behavior_built["patterns"],
+        "behavior_shadow_emitted": len(shadow_records),
     }
 
 
@@ -602,7 +637,8 @@ def run_once(
         stage_hook("p2")
     p2 = run_p2(
         intel_writer, local_writer, config_loader,
-        clock=clock, online=online, exclusion_policy=exclusion_policy,
+        clock=clock, online=online, behavior_shadow_log_path=paths.behavior_shadow_log_path,
+        exclusion_policy=exclusion_policy,
     )
 
     if stage_hook is not None:

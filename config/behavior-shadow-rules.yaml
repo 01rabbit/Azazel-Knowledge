@@ -1,0 +1,15 @@
+behavioral_shadow_rules:
+  enabled: false
+  mode: shadow
+  max_delta: 30
+  max_total_delta: 20
+  rules:
+    - id: continued-scan-after-delay
+      when:
+        behavior_class: scripted_automation
+        action_applied: delay
+        reaction_contains: continued_scanning
+      shadow_effect:
+        component: history
+        delta: 5
+      explanation: Actor continued scanning after delay; shadow-only history adjustment.
