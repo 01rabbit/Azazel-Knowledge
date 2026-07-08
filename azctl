@@ -45,6 +45,10 @@ from azazel_cti.db.repository import apply_migrations  # noqa: E402
 from azazel_cti.db.writer import P0, WRITER_PRAGMAS, PrioritySingleWriterQueue, WriterLockHeld  # noqa: E402
 from azazel_cti.normalize.exclusions import ExclusionPolicy  # noqa: E402
 from azazel_cti.patterns.behavior_generate import apply_generation_plan, plan_generation  # noqa: E402
+from azazel_cti.reports.friction_timeline import (  # noqa: E402
+    build_friction_timeline_report,
+    get_behavior_patterns_summary,
+)
 from azazel_cti.security import auth  # noqa: E402
 from azazel_cti.worker import (  # noqa: E402
     WorkerPaths,
@@ -556,6 +560,40 @@ def cmd_behavior_dry_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_behavior_report(args: argparse.Namespace) -> int:
+    from azazel_cti.core.clock import SystemClock
+    from azazel_cti.db.repository import Repository
+
+    paths = _paths(args)
+    ensure_local_db(paths.local_db_path)
+    repo = Repository(paths.local_db_path, paths.data_db_dir)
+    query_as_of = SystemClock().query_as_of()
+    if args.report_format == "summary":
+        payload = get_behavior_patterns_summary(
+            repo,
+            query_as_of=query_as_of,
+            behavior_class=args.behavior_class,
+            edge_id=args.edge_id,
+            window_hours=args.window_hours,
+            limit=args.limit,
+        )
+    else:
+        payload = build_friction_timeline_report(
+            repo,
+            query_as_of=query_as_of,
+            pattern_id=args.pattern_id,
+            actor_key=args.actor_key,
+            edge_id=args.edge_id,
+        )
+
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    if args.output is not None:
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+    else:
+        print(rendered)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # keys list|add|remove|set-threshold
 # --------------------------------------------------------------------------
@@ -931,7 +969,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("feed_id")
     p.set_defaults(func=cmd_feed_approve)
 
-    behavior = sub.add_parser("behavior", help="behavior generate|rebuild|dry-run")
+    behavior = sub.add_parser("behavior", help="behavior generate|rebuild|dry-run|report")
     behavior_sub = behavior.add_subparsers(dest="behavior_command", required=True)
 
     p = behavior_sub.add_parser("generate", help="incrementally generate behavior patterns")
@@ -951,6 +989,23 @@ def build_parser() -> argparse.ArgumentParser:
         dest="behavior_mode",
     )
     p.set_defaults(func=cmd_behavior_dry_run)
+
+    p = behavior_sub.add_parser("report", help="print a behavior report or summary as static JSON")
+    _add_root_args(p)
+    p.add_argument(
+        "--format",
+        choices=("timeline", "summary"),
+        default="timeline",
+        dest="report_format",
+    )
+    p.add_argument("--pattern-id", default=None)
+    p.add_argument("--actor-key", default=None)
+    p.add_argument("--edge-id", default=None)
+    p.add_argument("--behavior-class", default=None)
+    p.add_argument("--window-hours", type=int, default=168)
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--output", default=None)
+    p.set_defaults(func=cmd_behavior_report)
 
     keys = sub.add_parser("keys", help="keys list|add|remove|set-threshold")
     keys_sub = keys.add_subparsers(dest="keys_command", required=True)
