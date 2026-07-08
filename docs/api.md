@@ -30,6 +30,51 @@ Responses are `202 Accepted` with a batch id; validation problems are
 reported in logs and a `GET /v1/ingest/{batch_id}` status, never by
 rejecting the whole batch mid-operation.
 
+### `POST /v1/reactions` payload (Phase 2 additions)
+
+The Phase 1 minimal record (seven required fields) remains valid on its own;
+Phase 2 adds further **optional** fields that enrich a reaction record for the
+behavioral-pattern generator (`docs/design/phase2-implementation.md` §6.1).
+The 8-class reaction taxonomy is unchanged — these fields describe context
+around a reaction, they never add or rename a reaction class.
+
+Generator-relevant fields are promoted to typed nullable columns
+(`actor_cluster_key`, `action_profile`, `decoy_touched`, `decoy_profile`,
+`retry_interval_ms`, `timeout_adaptation`); free-form/forward-compat fields
+(`pre_action_summary`, `post_action_summary`, `raw_refs`, and any other
+unknown optional field) are preserved verbatim in `payload_ext` for audit —
+never silently dropped.
+
+Recommended Phase 2 payload:
+
+```json
+{
+  "actor_key": "203.0.113.7",
+  "edge_id": "edge-pi4-07",
+  "action_applied": "delay",
+  "applied_at": "2026-07-08T03:14:00Z",
+  "reaction": "shifted_port",
+  "reaction_window_s": 45,
+  "pre_action_summary": "SYN scan across 12 ports over 90s",
+  "post_action_summary": "Retried on adjacent port after delay, then backed off",
+  "decoy_touched": false,
+  "decoy_profile": null,
+  "retry_interval_ms": 1500,
+  "timeout_adaptation": "backoff_increased",
+  "evidence_refs": ["obs-2026-0708-0001", "rxn-2026-0708-0007"],
+  "raw_refs": ["edge-audit-id:9f21c8"]
+}
+```
+
+`evidence_refs` remains **required and non-empty**; unresolved references are
+resolved lazily via the existing linkage state machine and are simply
+excluded from behavioral-pattern generation until resolvable — they are never
+a reason to reject the record. A malformed line is **quarantined** into the
+batch's `invalid[]` status (`GET /v1/ingest/{batch_id}`), never causing the
+whole batch to be rejected. All timestamps are normalized to UTC on ingest.
+`reaction` rows stay INSERT-only/immutable — Phase 2 adds nullable columns
+via migration, it does not add triggers that would allow UPDATE/DELETE.
+
 ## Lookup and context (Edge → CTI, synchronous, triggered)
 
 ### `POST /v1/ioc/search`
@@ -116,6 +161,69 @@ for the post-applicability renormalized value; in the example above
 `Σ contribution == threat_score` after excluding the non-applicable
 `cve_exploited` weight from the denominator.
 
+### `threat_context.behavioral_cti` (Phase 2, additive, optional)
+
+When a current-generation behavior pattern (from the Phase 2 behavioral CTI
+lane; `docs/design/phase2-implementation.md` §5.1) matches the request's
+`actor_key`, the response gains an **additive** `threat_context.behavioral_cti`
+object. The top-level `threat_score`, `confidence`, `reason[]`,
+`confidence_reason[]`, and `advisory_notice` contracts documented above are
+**unchanged** by its presence:
+
+```json
+{
+  "threat_context": {
+    "behavioral_cti": {
+      "behavior_seen_before": true,
+      "behavior_class": "adaptive_probe",
+      "pattern_id": "bp-9f2c1a77b0e4d135",
+      "similarity": 0.84,
+      "repeatability_score": 72,
+      "novelty_score": 28,
+      "suggested_posture": "delay",
+      "confidence": 68,
+      "evidence_refs": ["obs-...", "rxn-..."],
+      "explanation_short": "Actor shifted protocol and retried after delay; similar reaction sequence observed previously.",
+      "limitations": [
+        "Behavioral similarity is not attribution.",
+        "AI usage is not directly proven.",
+        "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
+      ],
+      "behavior_generation": 7,
+      "generator_version": "bpg-1",
+      "behavior_config_hash": "…"
+    }
+  }
+}
+```
+
+- **Match-gated, entirely omitted otherwise.** `threat_context.behavioral_cti`
+  is present only when an indexed point-read against the current
+  `behavior_generation` finds a pattern for the request's `actor_key`. When no
+  pattern matches, the key is **omitted entirely** from the response — it is
+  never sent as `null` or as an empty object.
+- **`limitations[]` is mandatory whenever the block is present.** It always
+  carries the advisory disclaimer verbatim: "Recommendation is advisory.
+  Final authority: Azazel-Edge Deterministic Arbiter."
+- **`suggested_posture` is a posture suggestion, not an action command.**
+  Valid values: `observe`, `delay`, `decoy`, `escalate`, `no_change`,
+  `unknown`. No field in this block instructs Edge to block, drop, redirect,
+  or delay directly — final authority always remains with the Azazel-Edge
+  Deterministic Arbiter.
+- **Best-effort, never a failure mode.** The block runs under a small
+  sub-budget inside the existing context deadline; if the lookup times out or
+  errors, the block is simply omitted and the `/v1/context` response still
+  succeeds with its normal scored `200`. Its absence is never an error and
+  never a `503` — the fail-closed semantics of `threat_score`/`reason[]`
+  (`503 context_timeout`) and the audit chain (`503 audit_unavailable`) are
+  unaffected.
+- **Additive per the existing versioning rule** (see Versioning, below):
+  clients that do not understand `behavioral_cti` can ignore it safely; all
+  Phase 1 fields keep their existing meaning and shape.
+
+Recommendation is advisory. Final authority: Azazel-Edge Deterministic
+Arbiter.
+
 ### Other read endpoints
 
 | Endpoint | Purpose |
@@ -123,8 +231,19 @@ for the post-applicability renormalized value; in the example above
 | `GET /v1/campaigns` / `GET /v1/campaigns/{id}` | campaign browsing for operators |
 | `GET /v1/recommendations/rules` | pending advisory rule drafts (ADR-0007: never auto-deployed) |
 | `GET /v1/reactions/summary` | attacker-reaction statistics (research/report view) |
+| `GET /v1/behavior-patterns/{pattern_id}` | one behavioral CTI pattern + its evidence links + precomputed similarity edges (Phase 2, Scope.READ) |
+| `GET /v1/behavior-patterns/summary` | recent behavioral patterns grouped by class/edge/window (Phase 2, Scope.READ) |
+| `GET /v1/reports/friction-timeline` | operator-facing friction timeline: observation → action → reaction → classification → pattern → evidence → advisory implication → disclaimer (Phase 2, Scope.READ) |
 | `GET /v1/health` | liveness + DB/feed staleness summary |
 | TAXII 2.1 collections | STIX export for upstream sharing (Phase 4) |
+
+The three Phase 2 endpoints above are read-only (`Scope.READ`, no write SQL —
+see Absolute Constraint 1). They carry a mandatory `limitations[]` array and
+the same advisory disclaimer as `/v1/context`, and their prose avoids
+AI-attribution language: behavior is described as "adaptive" or
+"automation-like," never as proof of AI usage or of a specific actor/model.
+`GET /v1/reports/friction-timeline` degrades gracefully when advisory data is
+absent — it still renders the stages for which source evidence exists.
 
 ## Versioning
 

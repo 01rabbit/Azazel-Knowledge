@@ -14,6 +14,34 @@ beside — never inside — the Azazel-Edge decision loop.
 The Knowledge Plane enriches evidence and explains context. It never selects,
 schedules, or vetoes an action.
 
+## Aegis-like framing (Phase 2, doctrine unchanged)
+
+Architecture subtitle for Phase 2: *Azazel: Aegis-like cyber defense through
+tactical delay, deception, and behavioral CTI.* This is an **explanatory
+analogy only** — observe → track → classify → advise — never a product
+rename (the brand stays **Azazel**, per ADR-0001) and never an interception
+claim. Aegis is interception-centric and physical; Azazel is delay-centric,
+deception-aware, CTI-driven, and cyber (issue #29). The analogy names a
+posture, not a mechanism swap.
+
+Phase 2 introduces **Behavioral CTI**: reaction records are compiled into
+evidence-backed behavior patterns, compared for similarity and
+repeatability, and surfaced to Azazel-Edge as advisory context. It stays
+entirely inside the Knowledge Plane defined above: it enriches evidence,
+generates rebuildable behavior patterns, and *suggests* posture — it never
+selects, schedules, or vetoes an action. The deterministic Edge arbiter
+remains final. Behavioral CTI never enters the Edge hot decision loop; on the
+query path it is a single indexed point-read, and its absence never blocks
+or errors an answer (same fail-open discipline as the rest of this plane).
+
+**Non-attribution doctrine:** Azazel does not claim to identify AI usage
+directly. It characterizes AI-enabled, adaptive, and automation-like
+behavior patterns — never a proof of AI involvement or an attribution to a
+specific actor or model.
+
+Full Phase 2 design: [phase2-implementation.md](design/phase2-implementation.md)
+and [ADR-0009](adr/0009-behavioral-cti.md).
+
 ## Components (single Pi 4, Docker Compose)
 
 ```

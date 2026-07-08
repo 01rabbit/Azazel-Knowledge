@@ -98,6 +98,148 @@ Per-feed cursor: last run, last success, item counts, checksum of last
 snapshot, enabled flag. Drives both online pulls and offline bundle
 version checks.
 
+## Behavioral CTI (Phase 2)
+
+Design source: [phase2-implementation.md](design/phase2-implementation.md) §2,
+§6.1, §12; [ADR-0009](adr/0009-behavioral-cti.md). Behavioral CTI is a
+**separate, additive lane** beside the Phase 1 verdict path (F2-1): it never
+changes the `threat_score` determinism envelope, and it never commands
+Azazel-Edge. It only characterizes observed attacker behavior under friction
+and offers advisory posture suggestions.
+
+> Behavioral CTI characterizes adaptive or automation-like behavior. It does
+> not prove that an attacker used AI.
+
+### Placement — `local.db`, not a bundle table [F2-2]
+
+`behavior_pattern`, `behavior_pattern_evidence`, `behavior_pattern_similarity`,
+and `behavior_meta` are **local-tier** tables (migration
+`db/migrations/local/0002_behavior.sql`). They derive from `reaction` and
+`observation`, which are themselves local-tier and F-1-permanent, so the
+derived behavioral tables live in `local.db` alongside them. Intel-tier
+bundles are STIX/ATT&CK/campaign data only; a bundle naming any behavioral
+table hard-aborts under the existing `BUNDLE_TOUCHES_LOCAL_TIER` guard — the
+same guard that already protects `reaction`/`observation`.
+
+### Derived, rebuildable — not a verdict, not F-1-immutable [F2-3]
+
+Unlike `reaction`/`observation` rows, behavior patterns are **compiled,
+rebuildable artifacts**, in the same spirit as the `pattern` store above but
+with their own rebuild mechanism: a **local-tier generation integer**,
+`behavior_generation`, rather than the intel-tier directory+symlink
+generation swap (`db/generations.py` is not reused; it is single-file-
+incompatible with `local.db`). The generator writes all rows for
+`behavior_generation = N+1` and, in the same writer transaction, bumps
+`behavior_meta['current_behavior_generation'] = N+1`; readers resolve the
+current generation once and read `WHERE behavior_generation = <current>`, so
+a stale read only ever sees the prior complete generation, never a
+half-built one. A P3 retention pass sweeps generations older than `keep = 2`.
+
+Because regeneration may legitimately reduce row counts, the four behavioral
+tables are **excluded from the F-1 non-decrease invariant**
+(`test_local_rows_never_decrease_across_full_import` names only
+`reaction`/`observation`/`advisory_log`/`edge_reported_ioc`) and carry **no
+immutability triggers**. `reaction` and `observation` rows themselves remain
+immutable and untouched by generation — the derived lane reads them, never
+writes them.
+
+### behavior_pattern
+
+One row per generated episode per generation; primary key
+`(pattern_id, behavior_generation)`.
+
+| Column | Notes |
+|---|---|
+| pattern_id | `"bp-" + sha256(edge_id, actor_key, observation_start, observation_end, generator_version)[:16]`; stable across generations for the same episode |
+| behavior_generation | local generation this row belongs to |
+| version | generator schema version, default 1 |
+| actor_key | source entity (ip / ja3 / session cluster), as in `reaction` |
+| actor_cluster_key | optional cross-episode actor grouping key |
+| edge_id | source Edge node |
+| observation_start / observation_end | episode window (min/max `applied_at` of its reactions) |
+| action_applied | the episode's applied Edge action(s) |
+| reaction_sequence | ordered JSON array of `reaction` classes in the episode |
+| reaction_window_s | seconds observed after the action |
+| behavior_class | one of `simple_scanner`, `scripted_automation`, `adaptive_probe`, `decoy_engaged`, `disengaged_after_friction`, `unknown` — never an attribution label |
+| confidence | 0–100, deterministic function of evidence richness |
+| novelty_score | 0–100, deterministic function of evidence richness |
+| repeatability_score | 0–100; `0` = not yet computed / insufficient prior data, filled by the similarity pass |
+| suspected_stage | optional |
+| related_iocs / related_ttps | JSON arrays |
+| generated_at, generator_version, behavior_config_hash | provenance/replay stamp |
+| provenance | JSON |
+
+Indexes: `(actor_key, behavior_generation)`, `(behavior_generation)`,
+`(edge_id, behavior_generation)`. The `/v1/context` behavioral lookup is a
+single indexed point-read on the actor index (§5, F2-19) — never a
+full-table scan and never computed at query time.
+
+### behavior_pattern_evidence
+
+Links every `behavior_pattern` back to the raw evidence it was built from —
+the same "derived answers must be walkable back to observations" rule the
+`pattern` store and `reputation` already follow.
+
+| Column | Notes |
+|---|---|
+| pattern_id, behavior_generation | FK to `behavior_pattern` |
+| evidence_type | `observation`, `reaction`, or `pattern` |
+| evidence_id | `reaction_id` / `observation_id` / `event_id` as text |
+| role | `source` (seed reactions), `supporting`, or `derived_from` |
+
+Primary key `(pattern_id, behavior_generation, evidence_type, evidence_id,
+role)`. Every `behavior_pattern` row has **≥1** evidence row; an episode whose
+`reaction.evidence_refs` resolve to zero `observation`/`reaction` rows
+produces **no** pattern at all (F2-7).
+
+### behavior_pattern_similarity
+
+Precomputed similarity edges, written during the same P2 generation pass that
+stages a new `behavior_generation`, comparing it against the prior
+generation. Never computed at query time (F2-9, F2-19).
+
+| Column | Notes |
+|---|---|
+| pattern_id, behavior_generation | the query pattern |
+| other_pattern_id | the matched prior-generation pattern |
+| similarity | 0.0–1.0, feature-weighted per `behavior-similarity.yaml` |
+| repeatability | 0–100 |
+| shared_features / differences | JSON arrays, explain the match |
+| evidence_refs | JSON array |
+
+Primary key `(pattern_id, behavior_generation, other_pattern_id)`.
+
+### behavior_meta
+
+Key/value table holding the swap state: `current_behavior_generation`,
+`generator_version`, `built_at`. The P2 writer updates
+`current_behavior_generation` atomically with the new generation's rows so
+readers never observe a half-built generation.
+
+### Reaction extension (Phase 2 payload, #36)
+
+`reaction` gains additive, **nullable** columns (migration
+`db/migrations/local/0003_reaction_ext.sql`). `reaction` stays INSERT-only
+and immutable — these are `ADD COLUMN` DDL, not a change to the existing
+UPDATE/DELETE-rejecting triggers — and Phase 1 minimal records (only the
+seven original required fields) remain valid rows.
+
+| Column | Notes |
+|---|---|
+| actor_cluster_key | optional cross-episode actor grouping key |
+| action_profile | optional refinement of `action_applied` |
+| decoy_touched | 0/1, whether the actor engaged a decoy |
+| decoy_profile | which decoy profile, if touched |
+| retry_interval_ms | observed retry timing, if any |
+| timeout_adaptation | observed timeout-handling change, if any |
+| payload_ext | JSON, default `{}`; holds `pre_action_summary`, `post_action_summary`, `raw_refs`, and any unknown optional fields — preserved, never silently dropped |
+
+`actor_cluster_key, action_profile, decoy_touched, decoy_profile,
+retry_interval_ms, timeout_adaptation` are promoted to typed columns because
+the pattern generator queries them directly; everything else stays in
+`payload_ext` for auditability and forward-compatibility. The 8-class
+`reaction` taxonomy itself is unchanged.
+
 ## Normalization rules
 
 - All timestamps UTC ISO 8601.
