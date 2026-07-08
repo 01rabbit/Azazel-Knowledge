@@ -1,7 +1,8 @@
 # Architecture Decision Records
 
-The eight design questions left open in the initial concept discussion,
-resolved (or explicitly deferred) with rationale:
+The design questions resolved (or explicitly deferred) with rationale. ADR-0001
+through 0008 were left open in the initial concept discussion; ADR-0009 records
+the Phase 2 Behavioral CTI lane:
 
 | ADR | Question | Decision |
 |---|---|---|
@@ -13,3 +14,4 @@ resolved (or explicitly deferred) with rationale:
 | [0006](0006-scoring.md) | Scoring and weighting | Deterministic weighted YAML config, mandatory reason breakdown |
 | [0007](0007-rule-generation.md) | How far to automate rule generation | Advisory drafts with provenance; never auto-deploy |
 | [0008](0008-research-theme.md) | Black Hat research framing | "CTI-optimized delaying defense" friction loop, not "lightweight CTI node" |
+| [0009](0009-behavioral-cti.md) | Phase 2 Behavioral CTI: envelope, tier, authority, ML | Separate additive lane; own `behavior_config_hash`; local-tier rebuildable; advisory-only + shadow-gated; no ML; no AI attribution |
