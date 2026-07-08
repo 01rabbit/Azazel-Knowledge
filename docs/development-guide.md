@@ -6,23 +6,31 @@
 
 ## 0. 現状分析
 
-### main に入っているもの(PR #15、487テスト合格)
+### main に入っているもの(Phase 1 + Phase 2 Behavioral CTI、現在 583テスト合格)
 
 - 5巡の敵対的設計レビューを経た最終設計 `docs/design/phase1-implementation.md`(修正登録簿 F-1〜F-20 付き。以後「設計書」)
-- Phase 1 実装一式: `src/azazel_cti/`(api / core / db / normalize / feeds / ingest / correlate / scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii)、`worker.py`、`azctl`、`tools/`、`ops/`、`docs/operations.md`、`tests/unit`(487)
+- Phase 1 実装一式: `src/azazel_cti/`(api / core / db / normalize / feeds / ingest / correlate / scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii)、`worker.py`、`azctl`、`tools/`、`ops/`、`docs/operations.md`、`tests/unit`
+- Phase 2 **Behavioral CTI**(issue #31〜#37、設計 `docs/design/phase2-implementation.md` の F2-1〜F2-20、[ADR-0009](adr/0009-behavioral-cti.md)): 行動パターン schema(`migrations/local/0002_behavior.sql`)、決定論生成器(`patterns/behavior_generate.py` + P2 + `azctl behavior`)、類似度/再現性(`scoring/behavior_similarity.py`)、friction timeline レポート(`reports/` + `reads.py`)、`/v1/context` の `behavioral_cti` ブロック、reaction ペイロード拡張(`0003_reaction_ext.sql`)、shadow scoring(`scoring/behavior_shadow.py`、default-off)
+- テスト基準線の推移: Phase 1 = 487 → Phase 1 整備完了 = 518 → Phase 2 完了 = **583**(削除ゼロ)
+
+### 完了タスク(Phase 1 整備 T1〜T6)
+
+| # | タスク | 状態 |
+| --- | --- | --- |
+| T1 | GitHub Actions CI | ✅ 完了(pytest + check-config が全 PR で緑) |
+| T2 | `tools/docs-sync-check.py` 本実装 | ✅ 完了 |
+| T3 | 文書批准差分(data-model.md / scoring.md / api.md) | ✅ 完了(オーナー批准済み) |
+| T4 | `tools/bench/` S9性能ゲートハーネス | ✅ 開発完了(実機実行は下記の残項目) |
+| T5 | Issue 整理・クローズ | ✅ Phase 1/2 の子 Issue はクローズ済み |
+| T6 | S13持ち越し(GenCache / RLIMIT_AS・cgroup / zstd化) | ✅ 計測完了(`tools/bench/compression_bench.py` ほか、zstd 不採用寄りで記録) |
 
 ### 残タスク(= 今後の開発対象)
 
 | # | タスク | MacBookで可能か |
 | --- | --- | --- |
-| T1 | GitHub Actions CI(現在 `.github/` が存在しない) | ○ |
-| T2 | `tools/docs-sync-check.py` 本実装(設計書S13で持ち越したスタブ) | ○ |
-| T3 | 文書批准差分の作成(A-label IDN → data-model.md、重み表 → scoring.md、KEV `sources[]`/`rejected_alternatives` → api.md)→ オーナー批准用PR | ○ |
-| T4 | `tools/bench/` S9性能ゲートハーネス(実行は Pi 4、**開発と dry-run は Mac で可能**) | ○(実行は実機) |
-| T5 | Issue #12 の子Issue(#1〜#11)の消化確認とクローズ整理 | ○ |
-| T6 | S13持ち越し: 共有メモリGenCache、RLIMIT_AS/cgroupギャップ、zstd化の検討 | ○ |
-| — | Pi 4 実機での性能ゲート実行(S9)、LUKS/Adiantum検証 | ×(実機必須) |
-| — | Edge側SLO確認(220msブレーカー、advisory_idエコー) | ×(Azazel-Edge側判断) |
+| — | Pi 4 実機での性能ゲート実行(S9)、LUKS/Adiantum検証 | ×(実機必須。issue #21) |
+| — | Edge側SLO確認(220msブレーカー、advisory_idエコー)、Behavioral CTI 用 reaction ペイロード送信([Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305)) | ×(Azazel-Edge側判断) |
+| — | roadmap Phase 2 のスケール項目(cross-edge 相関、multi-edge ingest、SQLite→Postgres 評価) | ○ |
 
 ### 絶対制約(全タスクの受け入れ基準。違反はレビューで即差し戻し)
 
@@ -51,7 +59,7 @@ source .venv/bin/activate
 pip install -e ".[api,dev]"
 
 # 4) 健全性確認(ここが緑になるまで先に進まない)
-python -m pytest tests/unit -q          # 期待値: 487 passed
+python -m pytest tests/unit -q          # 期待値: 583 passed(現行基準線)
 python azctl check-config --config-dir config   # メモリ算術が OK と出ること
 
 # 5) スモーク(任意だが推奨)
@@ -118,7 +126,7 @@ VS Code 設定(`.vscode/settings.json` 推奨):
 - Codex への指示には必ず「対象ファイル所有権」「受け入れ基準」「絶対制約」を含める(曖昧な指示を出さない)
 - レビューは最低1回の敵対的パス(指摘ゼロでも「なぜ問題ないか」を書かせる)
 - `main` 直接コミット禁止。1タスク=1ブランチ=1PR
-- テスト487本を1本でも壊した状態でのコミット禁止
+- 現行基準線のテスト(583本)を1本でも壊した状態でのコミット禁止
 - 設計書と矛盾する実装が必要になったら、実装で黙って変えず、設計書の改訂を同じPRに含めて明示する
 
 ---
@@ -338,13 +346,13 @@ Issue #12 の子Issue #1〜#11 それぞれについて、PR #15 の実装がど
 ## 5. 敵対的レビューチェックリスト
 
 毎PRで使うチェックリストは `CLAUDE.md` の「敵対的レビューチェックリスト」を唯一の正とする
-(絶対制約1〜8対応・テスト基準線487・依存追加の扱いを含む)。本書では再掲しない。
+(絶対制約1〜8対応・テスト基準線・依存追加の扱いを含む)。本書では再掲しない。
 
 ---
 
 ## 6. 最初の1時間でやること(チェックリスト)
 
-1. [ ] §1 の環境構築 → 487 テスト緑を確認
+1. [ ] §1 の環境構築 → 583 テスト緑を確認
 2. [ ] VS Code + Claude Code + Codex の認証確認(`codex login` 済みも確認)
 3. [ ] Claude Code に §3 の CLAUDE.md / AGENTS.md を作成させ、最初のコミット(ブランチ chore/agent-guides)
 4. [ ] まず **Option A(手動リレー)** で T1(CI)を1本通す — 体制の感触を掴む最小タスク

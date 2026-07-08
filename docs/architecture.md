@@ -56,8 +56,9 @@ and [ADR-0009](adr/0009-behavioral-cti.md).
 │         │                    │             └─────────────┘  │
 │         ▼                    ▼                    │         │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │ SQLite (WAL)  — IOC / ATT&CK / campaign /           │    │
-│  │ observations / reputation / patterns / feed state   │    │
+│  │ SQLite (WAL)  — intel.db: IOC / ATT&CK / campaign;  │    │
+│  │ local.db: observations / reactions / reputation /   │    │
+│  │ patterns / behavior patterns + similarity / feeds   │    │
 │  └─────────────────────────────────────────────────────┘    │
 │         ▲                                    ▲              │
 │  ┌──────────────┐                    ┌──────────────────┐   │
@@ -84,6 +85,15 @@ and [ADR-0009](adr/0009-behavioral-cti.md).
 - **Pattern Generator** — compiles CTI + local observations into lightweight
   tactical patterns (Tactical Pattern Memory, per Azazel-Edge #283). Patterns
   accelerate matching and enrich explanations; they never replace evaluators.
+- **Behavioral CTI generator (Phase 2)** — a P2 worker pass compiles immutable
+  `reaction` rows into rebuildable `behavior_pattern` rows, classifies them
+  deterministically, precomputes similarity/repeatability, and swaps the
+  `behavior_generation` atomically. Exposed offline via `azctl behavior
+  generate|rebuild|dry-run`; surfaced read-only via
+  `GET /v1/behavior-patterns/*` and `/v1/reports/friction-timeline`. A
+  research-only, default-off **shadow scoring** hook writes potential
+  reaction-informed adjustments to a JSONL research log only — never to the
+  production `threat_score`, `/v1/context` response, or `reason[]`.
 - **Feed Importer** — per-feed adapters, online only, rate-limited,
   checkpointed ([sync-offline.md](sync-offline.md)).
 - **Bundle Importer** — offline update path; verifies signed bundles from
@@ -111,11 +121,16 @@ contact, high local score) Edge queries the CTI node and receives:
 ioc_match, confidence, campaign, attack_mapping (MITRE ATT&CK),
 threat_score, reason[] (component breakdown),
 recommended_rule, recommended_delay, recommended_decoy,
-rejected_alternatives[], source_freshness
+rejected_alternatives[], source_freshness,
+threat_context.behavioral_cti  (Phase 2, additive/optional):
+  behavior_class, similarity, repeatability_score, suggested_posture,
+  evidence_refs, limitations[]  — omitted entirely when no pattern matches
 ```
 
 All advisory. Edge treats the response as one more piece of evidence for its
-deterministic evaluators.
+deterministic evaluators. The behavioral block is a best-effort, single indexed
+point-read under a sub-deadline: its absence is never an error, and its
+`suggested_posture` is a suggestion, never an action command.
 
 ### 3. Feed update (Internet → CTI, optional)
 
