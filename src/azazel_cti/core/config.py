@@ -29,7 +29,10 @@ QUERY_PATH_FILES: tuple[str, ...] = (
     "feeds.yaml",
     "research_metrics.yaml",
 )
-BEHAVIOR_PATH_FILES: tuple[str, ...] = ("behavior-classify.yaml",)
+BEHAVIOR_PATH_FILES: tuple[str, ...] = (
+    "behavior-classify.yaml",
+    "behavior-similarity.yaml",
+)
 
 _WEIGHT_SUM_TOLERANCE = 1e-9
 
@@ -135,6 +138,13 @@ class TrackedConfigLoader:
             self.raw("behavior-classify.yaml"), "behavior-classify.yaml"
         )
 
+    def behavior_similarity(self) -> Mapping[str, Any]:
+        if "behavior-similarity.yaml" not in self._documents:
+            raise ConfigError("behavior-similarity.yaml is required for behavior similarity")
+        return _require_mapping(
+            self.raw("behavior-similarity.yaml"), "behavior-similarity.yaml"
+        )
+
     def behavior_config_hash(
         self, *, behavior_generation: int, generator_version: str
     ) -> str:
@@ -168,6 +178,7 @@ class TrackedConfigLoader:
         self._validate_weight_sum(scoring, "confidence_weights")
         self._validate_reaction_adjustments(scoring)
         self._validate_behavior_classify()
+        self._validate_behavior_similarity()
 
     def _validate_weight_sum(self, scoring: Mapping[str, Any], key: str) -> None:
         block = scoring.get(key)
@@ -234,3 +245,34 @@ class TrackedConfigLoader:
                 raise ConfigError(
                     f"behavior-classify.yaml 'rules[{index}].when_all' must be a non-empty list"
                 )
+
+    def _validate_behavior_similarity(self) -> None:
+        if "behavior-similarity.yaml" not in self._documents:
+            return
+        document = _require_mapping(
+            self._documents.get("behavior-similarity.yaml"), "behavior-similarity.yaml"
+        )
+        if "version" not in document:
+            raise ConfigError("behavior-similarity.yaml 'version' is required")
+        self._validate_behavior_similarity_weight_sum(document, "weights")
+
+    def _validate_behavior_similarity_weight_sum(
+        self, document: Mapping[str, Any], key: str
+    ) -> None:
+        block = document.get(key)
+        if not isinstance(block, Mapping) or not block:
+            raise ConfigError(
+                f"behavior-similarity.yaml '{key}' must be a non-empty mapping"
+            )
+        total = 0.0
+        for name, value in block.items():
+            try:
+                total += float(value)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"behavior-similarity.yaml '{key}.{name}' is not numeric: {value!r}"
+                ) from exc
+        if abs(total - 1.0) > _WEIGHT_SUM_TOLERANCE:
+            raise ConfigError(
+                f"behavior-similarity.yaml '{key}' must sum to 1.0, got {total!r}"
+            )
