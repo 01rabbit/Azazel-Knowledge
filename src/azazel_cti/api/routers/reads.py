@@ -18,6 +18,11 @@ from azazel_cti.api.app import open_local_readonly, require_scope_dep
 from azazel_cti.core.clock import parse_rfc3339, to_rfc3339
 from azazel_cti.db import generations
 from azazel_cti.reactions import linkage
+from azazel_cti.reports.friction_timeline import (
+    build_friction_timeline_report,
+    get_behavior_pattern_detail,
+    get_behavior_patterns_summary,
+)
 from azazel_cti.scoring import confidence as conf
 from azazel_cti.security.auth import Scope
 
@@ -99,6 +104,60 @@ def get_campaign(campaign_id: str, request: Request, auth=_READ_SCOPE) -> dict[s
     if row is None:
         raise HTTPException(status_code=404, detail={"error": "campaign_not_found"})
     return {"id": row["campaign_id"], "name": row["name"], "actor": row["actor"], "last_seen": row["last_seen"]}
+
+
+@router.get("/behavior-patterns/summary")
+def behavior_patterns_summary(
+    request: Request,
+    behavior_class: str | None = None,
+    edge_id: str | None = None,
+    window_hours: int = 168,
+    limit: int = 20,
+    auth=_READ_SCOPE,
+) -> dict[str, Any]:
+    state = request.app.state
+    return get_behavior_patterns_summary(
+        state.repo,
+        query_as_of=state.clock.query_as_of(),
+        behavior_class=behavior_class,
+        edge_id=edge_id,
+        window_hours=window_hours,
+        limit=limit,
+    )
+
+
+@router.get("/behavior-patterns/{pattern_id}")
+def behavior_pattern_detail(
+    pattern_id: str,
+    request: Request,
+    auth=_READ_SCOPE,
+) -> dict[str, Any]:
+    repo = request.app.state.repo
+    try:
+        return get_behavior_pattern_detail(repo, pattern_id=pattern_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"error": "behavior_pattern_not_found"}) from exc
+
+
+@router.get("/reports/friction-timeline")
+def friction_timeline_report(
+    request: Request,
+    pattern_id: str | None = None,
+    actor_key: str | None = None,
+    edge_id: str | None = None,
+    auth=_READ_SCOPE,
+) -> dict[str, Any]:
+    state = request.app.state
+    try:
+        return build_friction_timeline_report(
+            state.repo,
+            query_as_of=state.clock.query_as_of(),
+            pattern_id=pattern_id,
+            actor_key=actor_key,
+            edge_id=edge_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"error": "friction_timeline_not_found"}) from exc
 
 
 @router.get("/recommendations/rules")

@@ -17,6 +17,140 @@ Everything else flows asynchronously via `POST /v1/events`. Edge enforces a
 query timeout (default 250 ms) and proceeds without the answer on expiry.
 The CTI node must never be a synchronous dependency of the arbiter.
 
+## Read surfaces (operator-facing, advisory-only)
+
+These endpoints are `Scope.READ` only, return plain JSON, and stay on the
+read-only path. They surface behavioral CTI for operator review without
+changing the `/v1/context` advisory contract or granting any action
+authority to the CTI node.
+
+### `GET /v1/behavior-patterns/{pattern_id}`
+
+Returns one current-generation behavior pattern plus its resolved evidence
+links and any precomputed similarity rows:
+
+```json
+{
+  "pattern": {
+    "pattern_id": "bp-9f2c1a77b0e4d135",
+    "behavior_generation": 7,
+    "actor_key": "ip:203.0.113.7",
+    "edge_id": "edge-demo-01",
+    "action_applied": "delay",
+    "reaction_sequence": ["unknown", "shifted_protocol"],
+    "behavior_class": "adaptive_probe"
+  },
+  "evidence": [
+    {
+      "evidence_type": "reaction",
+      "evidence_id": "41",
+      "role": "source",
+      "evidence_ref": "reaction:41",
+      "resolved": { "reaction_id": 41, "reaction": "shifted_protocol" }
+    }
+  ],
+  "similarity": [],
+  "limitations": [
+    "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
+  ],
+  "advisory_notice": "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
+}
+```
+
+`similarity` may be empty before the similarity pass has populated
+`behavior_pattern_similarity`; this is not an error.
+
+### `GET /v1/behavior-patterns/summary`
+
+Lists recent current-generation patterns with optional filters:
+
+- `behavior_class`
+- `edge_id`
+- `window_hours` (default `168`)
+- `limit` (default `20`)
+
+Response shape:
+
+```json
+{
+  "behavior_generation": 7,
+  "time_window": {
+    "start": "2026-07-01T00:00:00Z",
+    "end": "2026-07-08T00:00:00Z"
+  },
+  "filters": {
+    "behavior_class": "adaptive_probe",
+    "edge_id": "edge-demo-01",
+    "window_hours": 168,
+    "limit": 20
+  },
+  "patterns": [
+    {
+      "pattern_id": "bp-9f2c1a77b0e4d135",
+      "behavior_class": "adaptive_probe",
+      "action_applied": "delay",
+      "actor_key": "ip:203.0.113.7"
+    }
+  ],
+  "limitations": [
+    "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
+  ]
+}
+```
+
+### `GET /v1/reports/friction-timeline`
+
+Builds the operator-facing friction timeline narrative for one selected
+current-generation pattern. Query parameters:
+
+- `pattern_id` to select an exact pattern
+- `actor_key` and/or `edge_id` to select the most recent matching pattern
+
+Response shape:
+
+```json
+{
+  "report_id": "friction-bp-9f2c1a77b0e4d135",
+  "actor_key": "ip:203.0.113.7",
+  "edge_id": "edge-demo-01",
+  "time_window": {
+    "start": "2026-07-08T00:00:00Z",
+    "end": "2026-07-08T00:01:00Z"
+  },
+  "timeline": [
+    {
+      "timestamp": "2026-07-08T00:00:00Z",
+      "event_type": "initial_observation",
+      "evidence_refs": ["observation:obs-1"],
+      "explanation_short": "Initial observation captured before defensive friction was applied."
+    },
+    {
+      "timestamp": "2026-07-08T00:01:00Z",
+      "event_type": "cti_advisory_disclaimer",
+      "evidence_refs": [],
+      "explanation_short": "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
+    }
+  ],
+  "behavior_patterns": [
+    {
+      "pattern_id": "bp-9f2c1a77b0e4d135",
+      "behavior_class": "adaptive_probe"
+    }
+  ],
+  "advisory_summary": null,
+  "limitations": [
+    "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
+  ]
+}
+```
+
+The timeline always states that CTI is advisory-only and that the
+Azazel-Edge Deterministic Arbiter remains final authority. Human-readable
+text avoids attribution claims such as "AI attacker confirmed", "LLM
+identified", or "autonomous intrusion proven"; preferred wording is
+"adaptive behavior observed", "automation-like reaction pattern", and
+"behavioral CTI generated from defensive friction".
+
 ## Ingest (Edge → CTI, fire-and-forget)
 
 | Endpoint | Payload |
