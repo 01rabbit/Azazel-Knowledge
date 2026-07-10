@@ -1,12 +1,15 @@
-# Azazel-Knowledge Advisor — On-Premises Tactical Threat Knowledge Advisor for the Azazel System
+# AZ-04 Azazel-Knowledge - On-Premises Tactical Threat Knowledge Advisor
+
+> **Codename:** `GRIMOIRE`
 
 > **Formerly Azazel-CTI.** The formal series name is **Azazel-Knowledge Advisor**
 > (**AZ-04**), ratified 2026-07-10; the `Advisor` Role suffix is used in
 > formal/external contexts. The repository was renamed
 > `01rabbit/Azazel-CTI` → `01rabbit/Azazel-Knowledge` (old URLs redirect).
-> Development codename: **Grimoire** — the accumulated book of threats; a
-> grimoire never casts its own spells (used for changelogs and release names,
-> never in formal external naming).
+> The codename `GRIMOIRE` follows the series convention (Edge: `SENTINEL`,
+> Gadget: `TACMOD`): the accumulated book of threats — a grimoire never casts
+> its own spells. Codenames are for changelogs and release names, never formal
+> external naming.
 > `Knowledge` is the class that accumulates and correlates IOC, ATT&CK, attacker
 > reactions, and behavioral patterns — the series' Threat Knowledge Plane;
 > `Advisor` returns evidence, confidence, history, and recommendations, never

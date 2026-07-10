@@ -62,9 +62,10 @@ The owner ratified the formal naming on 2026-07-10, superseding the deferral abo
   drafts that it never deploys (ADR-0007). The advisory-only doctrine is
   unchanged.
 - **Alternatives considered and superseded before merge:** Azazel-Grimoire
-  Advisor, Azazel-Keep Oracle. `Grimoire` was retained as this product's
-  development codename (changelogs, release names, milestones — never formal
-  external naming).
+  Advisor, Azazel-Keep Oracle. `GRIMOIRE` was retained as this product's
+  development codename, following the series codename convention
+  (Edge: `SENTINEL`, Gadget: `TACMOD`) — changelogs, release names,
+  milestones, never formal external naming.
 - **AZ-xx meaning:** accession order (series order), no longer appliance-only —
   which is what frees a rear-echelon knowledge node to take a number.
 - **Sibling rename (same sweep):** `Azazel-Common` → `Azazel-Fabric` (AZ-05),
