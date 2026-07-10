@@ -31,6 +31,7 @@
 | — | Pi 4 実機での性能ゲート実行(S9)、LUKS/Adiantum検証 | ×(実機必須。issue #21) |
 | — | Edge側SLO確認(220msブレーカー、advisory_idエコー)、Behavioral CTI 用 reaction ペイロード送信([Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305)) | ×(Azazel-Edge側判断) |
 | — | roadmap Phase 2 のスケール項目(cross-edge 相関、multi-edge ingest、SQLite→Postgres 評価) | ○ |
+| — | [Azazel-Common](https://github.com/01rabbit/Azazel-Common)(`azazel_common.cti_contracts`)の採用可否評価(要 pyproject.toml 変更 + 新規ADR + マスター判断。詳細は `docs/roadmap.md`) | ○(調査のみ) |
 
 ### 絶対制約(全タスクの受け入れ基準。違反はレビューで即差し戻し)
 

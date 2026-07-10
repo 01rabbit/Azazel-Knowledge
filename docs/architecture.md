@@ -14,6 +14,16 @@ beside — never inside — the Azazel-Edge decision loop.
 The Knowledge Plane enriches evidence and explains context. It never selects,
 schedules, or vetoes an action.
 
+[Azazel-Common](https://github.com/01rabbit/Azazel-Common) is the Azazel
+series' shared contracts library (`azazel_common`, pydantic v2 as its sole
+dependency). Its `cti_contracts` module independently defines request and
+response shapes for a boundary matching this repo's `/v1/context` above, and
+encodes the same advisory-only invariant at the type level. Azazel-Common is
+maintained independently of this repository and is not a dependency here;
+the two contract shapes are conceptually aligned but not contractually
+linked today, and any alignment or adoption remains aspirational until
+ratified by an ADR (see [`docs/adr/`](adr/)).
+
 ## Aegis-like framing (Phase 2, doctrine unchanged)
 
 Architecture subtitle for Phase 2: *Azazel: Aegis-like cyber defense through

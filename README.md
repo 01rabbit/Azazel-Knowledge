@@ -112,6 +112,32 @@ in [Azazel-Edge #283](https://github.com/01rabbit/Azazel-Edge/issues/283):
 Research framing: **"How does CTI optimize delaying defense?"** — not
 "a lightweight CTI platform." See [ADR-0008](docs/adr/0008-research-theme.md).
 
+## Azazel series context
+
+The Azazel family, as currently assigned:
+
+- **[Azazel](https://01rabbit.github.io/Azazel/)** — the umbrella doctrine
+  hub and GitHub Pages site (Apache-2.0).
+- **Azazel-Edge (AZ-01)** — resident edge-class gateway (Pi 5), MIT. Pairs
+  with this repo as described above.
+- **Azazel-Gadget (AZ-02)** — USB-gadget-class portable device, MIT. No CTI
+  integration is planned.
+- **Azazel-Boot (AZ-03)** — reserved; no repository yet.
+- **Azazel-CTI** (this repository) — working name, AZ designation deferred;
+  see [ADR-0001](docs/adr/0001-repository-naming.md) above.
+- **[Azazel-Common](https://github.com/01rabbit/Azazel-Common)** — a shared
+  contracts library for the series (distribution name `azazel-common`, installed via pinned git tag; `azazel_common`
+  package, pydantic v2 as its sole dependency). Its `cti_contracts` module
+  type-enforces the same advisory-only invariant this repo's
+  [API contract](docs/api.md) defines — directive-shaped fields such as
+  `directive`/`must_execute`/`override`/`required_action` are rejected by
+  its validators — and Azazel-Gadget already consumes it. **This repository
+  does not depend on Azazel-Common today.** Its `cti_contracts` shapes
+  mirror this repo's `/v1/context` boundary but were developed
+  independently; evaluating adoption is future work that would require a
+  `pyproject.toml` change and a new ADR under this repo's
+  dependency-minimality constraint. No commitment either way exists yet.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) — planes, components, data flows, failure modes
