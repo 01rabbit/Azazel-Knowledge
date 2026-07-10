@@ -29,7 +29,7 @@ validate → swap).
 A single signed artifact that moves the node's knowledge across an air gap:
 
 ```
-azazel-cti-bundle-YYYYMMDD-NNN.tar.gz
+azazel-grimoire-bundle-YYYYMMDD-NNN.tar.gz
 ├── manifest.json      # bundle version, base version (for diffs), feed list,
 │                      # per-file SHA-256, created_at, attack_version
 ├── manifest.sig       # detached signature (ed25519, offline signing key)
@@ -51,7 +51,7 @@ remains deferred in S13 pending the dependency-minimality tradeoff noted in
   [architecture.md](architecture.md#security-boundary).
 
 Transport is whatever the field allows: USB, SSD, or LAN copy from a
-better-connected site. The bundle builder runs on any online Azazel-CTI node
+better-connected site. The bundle builder runs on any online Azazel-Grimoire (formerly Azazel-CTI) node
 (or a plain workstation with the toolchain) — this is also the Phase 4
 Regional CTI distribution mechanism.
 

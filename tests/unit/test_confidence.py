@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from azazel_cti.core.config import TrackedConfigLoader
-from azazel_cti.scoring import confidence as conf
-from azazel_cti.scoring.compute import (
+from azazel_grimoire.core.config import TrackedConfigLoader
+from azazel_grimoire.scoring import confidence as conf
+from azazel_grimoire.scoring.compute import (
     HistoryInput,
     IocMatchInput,
     ScoringContext,

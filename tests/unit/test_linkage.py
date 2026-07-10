@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.reactions import classifier, linkage
+from azazel_grimoire.db.repository import apply_migrations
+from azazel_grimoire.reactions import classifier, linkage
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
 

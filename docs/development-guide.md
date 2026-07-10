@@ -1,6 +1,6 @@
-# Azazel-CTI 開発指示書 — MacBook 環境(Claude Code 指揮 × Codex 実装)
+# Azazel-Grimoire(旧 Azazel-CTI)開発指示書 — MacBook 環境(Claude Code 指揮 × Codex 実装)
 
-作成日: 2026-07-06 / 対象: `01rabbit/Azazel-CTI` main(PR #15 マージ後)
+作成日: 2026-07-06 / 対象: `01rabbit/Azazel-Grimoire` main(PR #15 マージ後)
 
 ---
 
@@ -9,7 +9,7 @@
 ### main に入っているもの(Phase 1 + Phase 2 Behavioral CTI、現在 583テスト合格)
 
 - 5巡の敵対的設計レビューを経た最終設計 `docs/design/phase1-implementation.md`(修正登録簿 F-1〜F-20 付き。以後「設計書」)
-- Phase 1 実装一式: `src/azazel_cti/`(api / core / db / normalize / feeds / ingest / correlate / scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii)、`worker.py`、`azctl`、`tools/`、`ops/`、`docs/operations.md`、`tests/unit`
+- Phase 1 実装一式: `src/azazel_grimoire/`(api / core / db / normalize / feeds / ingest / correlate / scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii)、`worker.py`、`azctl`、`tools/`、`ops/`、`docs/operations.md`、`tests/unit`
 - Phase 2 **Behavioral CTI**(issue #31〜#37、設計 `docs/design/phase2-implementation.md` の F2-1〜F2-20、[ADR-0009](adr/0009-behavioral-cti.md)): 行動パターン schema(`migrations/local/0002_behavior.sql`)、決定論生成器(`patterns/behavior_generate.py` + P2 + `azctl behavior`)、類似度/再現性(`scoring/behavior_similarity.py`)、friction timeline レポート(`reports/` + `reads.py`)、`/v1/context` の `behavioral_cti` ブロック、reaction ペイロード拡張(`0003_reaction_ext.sql`)、shadow scoring(`scoring/behavior_shadow.py`、default-off)
 - テスト基準線の推移: Phase 1 = 487 → Phase 1 整備完了 = 518 → Phase 2 完了 = **583**(削除ゼロ)
 
@@ -31,7 +31,7 @@
 | — | Pi 4 実機での性能ゲート実行(S9)、LUKS/Adiantum検証 | ×(実機必須。issue #21) |
 | — | Edge側SLO確認(220msブレーカー、advisory_idエコー)、Behavioral CTI 用 reaction ペイロード送信([Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305)) | ×(Azazel-Edge側判断) |
 | — | roadmap Phase 2 のスケール項目(cross-edge 相関、multi-edge ingest、SQLite→Postgres 評価) | ○ |
-| — | [Azazel-Common](https://github.com/01rabbit/Azazel-Common)(`azazel_common.cti_contracts`)の採用可否評価(要 pyproject.toml 変更 + 新規ADR + マスター判断。詳細は `docs/roadmap.md`) | ○(調査のみ) |
+| — | [Azazel-Covenant](https://github.com/01rabbit/Azazel-Covenant)(旧 Azazel-Common、`azazel_covenant.cti_contracts`)の採用可否評価(要 pyproject.toml 変更 + 新規ADR + マスター判断。詳細は `docs/roadmap.md`) | ○(調査のみ) |
 
 ### 絶対制約(全タスクの受け入れ基準。違反はレビューで即差し戻し)
 
@@ -51,8 +51,8 @@ brew install --cask orbstack   # または docker-desktop
 
 # 2) リポジトリ取得
 gh auth login
-git clone https://github.com/01rabbit/Azazel-CTI.git
-cd Azazel-CTI
+git clone https://github.com/01rabbit/Azazel-Grimoire.git
+cd Azazel-Grimoire
 
 # 3) Python 環境(venv 必須。システムPythonに直接入れない)
 python3.11 -m venv .venv
@@ -65,7 +65,7 @@ python azctl check-config --config-dir config   # メモリ算術が OK と出�
 
 # 5) スモーク(任意だが推奨)
 mkdir -p /tmp/azctl-smoke && cd /tmp/azctl-smoke
-PYTHONPATH=~/path/to/Azazel-CTI/src python ~/path/to/Azazel-CTI/azctl provision
+PYTHONPATH=~/path/to/Azazel-Grimoire/src python ~/path/to/Azazel-Grimoire/azctl provision
 cd -
 ```
 

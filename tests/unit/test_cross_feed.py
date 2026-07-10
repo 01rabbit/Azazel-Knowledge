@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from azazel_cti.normalize.cross_feed_check import CrossFeedCheck, CrossFeedDecision
+from azazel_grimoire.normalize.cross_feed_check import CrossFeedCheck, CrossFeedDecision
 
 
 def _make_check(tmp_path: Path, **kwargs) -> CrossFeedCheck:

@@ -1,6 +1,6 @@
 # Architecture
 
-Azazel-CTI is the **Threat Knowledge Plane** of the Azazel system. It sits
+Azazel-Grimoire (formerly Azazel-CTI) is the **Threat Knowledge Plane** of the Azazel system. It sits
 beside — never inside — the Azazel-Edge decision loop.
 
 ## Plane separation
@@ -9,16 +9,17 @@ beside — never inside — the Azazel-Edge decision loop.
 |---|---|---|---|
 | Evidence Plane | Azazel-Edge (Pi 5) | Collect Suricata EVE, DNS, HTTP metadata, JA3/JA4, flows, canary hits, delay history | — |
 | Decision Plane | Azazel-Edge (Pi 5) | Deterministic evaluators + Action Arbiter select bounded actions | **Final** |
-| Knowledge Plane | Azazel-CTI (Pi 4) | IOC management, correlation, campaign analysis, pattern memory, feed ingestion | Advisory only |
+| Knowledge Plane | Azazel-Grimoire (Pi 4) | IOC management, correlation, campaign analysis, pattern memory, feed ingestion | Advisory only |
 
 The Knowledge Plane enriches evidence and explains context. It never selects,
 schedules, or vetoes an action.
 
-[Azazel-Common](https://github.com/01rabbit/Azazel-Common) is the Azazel
-series' shared contracts library (`azazel_common`, pydantic v2 as its sole
-dependency). Its `cti_contracts` module independently defines request and
-response shapes for a boundary matching this repo's `/v1/context` above, and
-encodes the same advisory-only invariant at the type level. Azazel-Common is
+[Azazel-Covenant](https://github.com/01rabbit/Azazel-Covenant) (AZ-05, formerly
+Azazel-Common) is the Azazel series' shared contracts library (`azazel_covenant`
+from its v0.3.0, pydantic v2 as its sole dependency). Its `cti_contracts` module
+independently defines request and response shapes for a boundary matching this
+repo's `/v1/context` above, and encodes the same advisory-only invariant at the
+type level. Azazel-Covenant is
 maintained independently of this repository and is not a dependency here;
 the two contract shapes are conceptually aligned but not contractually
 linked today, and any alignment or adoption remains aspirational until
@@ -55,7 +56,7 @@ and [ADR-0009](adr/0009-behavioral-cti.md).
 ## Components (single Pi 4, Docker Compose)
 
 ```
-┌─ Azazel-CTI ────────────────────────────────────────────────┐
+┌─ Azazel-Grimoire ────────────────────────────────────────────────┐
 │                                                             │
 │  ┌──────────────┐   ┌──────────────────┐   ┌─────────────┐  │
 │  │ REST API     │   │ Correlation      │   │ Pattern     │  │

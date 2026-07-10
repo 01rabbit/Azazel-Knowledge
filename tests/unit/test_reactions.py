@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.reactions import classifier, eligibility, quarantine
+from azazel_grimoire.db.repository import apply_migrations
+from azazel_grimoire.reactions import classifier, eligibility, quarantine
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
 

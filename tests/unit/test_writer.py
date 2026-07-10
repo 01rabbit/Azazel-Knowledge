@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.db.writer import P0, P1, P2, P3, PrioritySingleWriterQueue, WriterLockHeld
+from azazel_grimoire.db.repository import apply_migrations
+from azazel_grimoire.db.writer import P0, P1, P2, P3, PrioritySingleWriterQueue, WriterLockHeld
 
 
 def _make_local_db(path) -> None:

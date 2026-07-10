@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI for building, signing, inspecting, and key-generating offline bundles.
 
-Bundles are `.tar.gz` (see `azazel_cti.bundle.verify` module docstring for
+Bundles are `.tar.gz` (see `azazel_grimoire.bundle.verify` module docstring for
 why not `.tar.zst`), always with `manifest.json` then `manifest.sig` as
 the first two tar members, followed by content files sorted by name.
 Table dumps are ordered by primary key so identical source-database
@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from nacl.signing import SigningKey  # noqa: E402
 
-from azazel_cti.bundle.verify import (  # noqa: E402
+from azazel_grimoire.bundle.verify import (  # noqa: E402
     LOCAL_TIER_TABLES,
     MANIFEST_MEMBER,
     SIGNATURE_MEMBER,

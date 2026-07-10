@@ -1,4 +1,4 @@
-# Azazel-CTI Phase 1 deployment (design S2/S11): exactly two containers,
+# Azazel-Grimoire Phase 1 deployment (design S2/S11): exactly two containers,
 # one writer. `worker` is the sole process that opens data/db/*.db for
 # writing (db/writer.py:PrioritySingleWriterQueue, flock-guarded on
 # var/run/{local,intel}.lock); `api` only ever opens read-only WAL
@@ -13,10 +13,10 @@ services:
     build:
       context: ..
       dockerfile: ops/Dockerfile
-    image: azazel-cti:latest
+    image: azazel-grimoire:latest
     command:
       - gunicorn
-      - azazel_cti.api.app:app
+      - azazel_grimoire.api.app:app
       - -k
       - uvicorn.workers.UvicornWorker
       - -w
@@ -61,8 +61,8 @@ services:
     build:
       context: ..
       dockerfile: ops/Dockerfile
-    image: azazel-cti:latest
-    command: ["python", "-m", "azazel_cti.worker", "--online", "--interval-s", "5"]
+    image: azazel-grimoire:latest
+    command: ["python", "-m", "azazel_grimoire.worker", "--online", "--interval-s", "5"]
     read_only: true
     tmpfs:
       - /tmp

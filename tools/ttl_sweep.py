@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 try:
-    from azazel_cti.scoring.confidence import noisy_or as _noisy_or  # type: ignore
+    from azazel_grimoire.scoring.confidence import noisy_or as _noisy_or  # type: ignore
 except ImportError:
     def _noisy_or(confidences: list[float]) -> float:
         product = 1.0

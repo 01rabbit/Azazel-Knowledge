@@ -4,12 +4,12 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from azazel_cti.core.clock import FixedClock
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.db.writer import PrioritySingleWriterQueue
-from azazel_cti.ingest.burst_guard import BurstGuard
-from azazel_cti.ingest.drain import drain_endpoint
-from azazel_cti.ingest.spool import SpoolWriter
+from azazel_grimoire.core.clock import FixedClock
+from azazel_grimoire.db.repository import apply_migrations
+from azazel_grimoire.db.writer import PrioritySingleWriterQueue
+from azazel_grimoire.ingest.burst_guard import BurstGuard
+from azazel_grimoire.ingest.drain import drain_endpoint
+from azazel_grimoire.ingest.spool import SpoolWriter
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
 

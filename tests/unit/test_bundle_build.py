@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from azazel_cti.bundle.verify import LOCAL_TIER_TABLES, peek_manifest
-from azazel_cti.db.repository import apply_migrations
+from azazel_grimoire.bundle.verify import LOCAL_TIER_TABLES, peek_manifest
+from azazel_grimoire.db.repository import apply_migrations
 
 _TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 

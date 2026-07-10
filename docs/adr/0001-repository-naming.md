@@ -1,6 +1,9 @@
 # ADR-0001: Repository naming and family positioning
 
-Status: **deferred by owner decision (2026-07-05)** — working name `Azazel-CTI`
+Status: **Accepted (2026-07-10)** — formal name `Azazel-Grimoire Advisor`, AZ-04,
+repository `01rabbit/Azazel-Grimoire` (formerly `Azazel-CTI`). See the
+**Resolution** section for the ratified decision; the original deferral context
+and decision below are preserved as history.
 
 ## Context
 
@@ -41,3 +44,26 @@ Before first public release:
   vocabulary decision is the real task and belongs in the Azazel repo.
 - Until then, external-facing text must present `Azazel-CTI` as a working
   name.
+
+## Resolution (2026-07-10)
+
+The owner ratified the formal naming on 2026-07-10, superseding the deferral above.
+
+- **Formal series name:** `Azazel-Grimoire Advisor`, series number **AZ-04**.
+- **Short name (prose):** `Azazel-Grimoire` — with the `Advisor` Role suffix
+  used in formal/external contexts, mirroring `Edge`/`Gadget`.
+- **Repository:** `01rabbit/Azazel-CTI` → `01rabbit/Azazel-Grimoire` (old URLs
+  redirect); Python import namespace `azazel_cti` → `azazel_grimoire`.
+- **Rationale:** a grimoire never casts its own spells — the reader
+  (Azazel-Edge's deterministic arbiter) decides; likewise this node's generated
+  Suricata/Sigma rules are drafts that it never deploys (ADR-0007). The
+  advisory-only doctrine is unchanged.
+- **AZ-xx meaning:** accession order (series order), no longer appliance-only —
+  which is what frees a rear-echelon knowledge node to take a number.
+- **Sibling rename (same sweep):** `Azazel-Common` → `Azazel-Covenant` (AZ-05),
+  import namespace `azazel_common` → `azazel_covenant` from its v0.3.0. This
+  repository does not depend on it; references in docs are updated accordingly.
+
+Full series after this decision: Azazel (umbrella), AZ-01 Azazel-Edge, AZ-02
+Azazel-Gadget, AZ-03 Azazel-Boot (reserved), AZ-04 Azazel-Grimoire (this repo,
+formerly Azazel-CTI), AZ-05 Azazel-Covenant (formerly Azazel-Common).

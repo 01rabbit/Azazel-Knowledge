@@ -7,7 +7,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "ops" / "install-pi.sh"
-_SYSTEMD_TEMPLATE = _REPO_ROOT / "ops" / "azazel-cti.service"
+_SYSTEMD_TEMPLATE = _REPO_ROOT / "ops" / "azazel-grimoire.service"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -68,11 +68,11 @@ def test_install_pi_check_previews_systemd_unit_without_writing_etc(tmp_path: Pa
     )
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    assert "systemd unit preview: /etc/systemd/system/azazel-cti.service" in result.stdout
+    assert "systemd unit preview: /etc/systemd/system/azazel-grimoire.service" in result.stdout
     assert "RequiresMountsFor=" in result.stdout
     assert "WorkingDirectory=" in result.stdout
     assert "ExecStart=" in result.stdout
-    assert not Path("/etc/systemd/system/azazel-cti.service").exists()
+    assert not Path("/etc/systemd/system/azazel-grimoire.service").exists()
 
 
 def test_install_pi_check_edge_addr_validation_is_config_only(tmp_path: Path) -> None:

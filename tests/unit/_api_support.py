@@ -3,7 +3,7 @@
 Mirrors the seeding pattern in `test_pipeline.py` (raw `sqlite3` +
 `apply_migrations`, one intel generation dir, `generations.swap_current`)
 but adds an `api_client` row per test client and wires everything
-through `azazel_cti.api.app.create_app`.
+through `azazel_grimoire.api.app.create_app`.
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from azazel_cti.api.app import Settings, create_app
-from azazel_cti.core.clock import FixedClock
-from azazel_cti.db import generations
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.security.auth import mint_token
+from azazel_grimoire.api.app import Settings, create_app
+from azazel_grimoire.core.clock import FixedClock
+from azazel_grimoire.db import generations
+from azazel_grimoire.db.repository import apply_migrations
+from azazel_grimoire.security.auth import mint_token
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 QUERY_AS_OF = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)

@@ -1,4 +1,4 @@
-# AGENTS.md — Azazel-CTI 実装規範(Codex = 実装者)
+# AGENTS.md — Azazel-Grimoire 実装規範(Codex = 実装者)
 
 あなた(Codex)はこのリポジトリの **実装者** である。指揮・仕様化・敵対的レビュー・
 git 操作は Claude Code(指揮官)が行い、あなたは **隔離 worktree 上での実装労働** に専念する。

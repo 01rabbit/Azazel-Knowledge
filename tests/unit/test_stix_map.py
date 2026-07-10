@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from azazel_cti.bundle.stix_map import (
+from azazel_grimoire.bundle.stix_map import (
     ioc_to_indicator,
     indicator_to_ioc,
     native_to_stix,

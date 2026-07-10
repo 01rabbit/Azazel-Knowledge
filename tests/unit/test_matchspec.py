@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from azazel_cti.patterns.index import PatternIndex
-from azazel_cti.patterns.matchspec import (
+from azazel_grimoire.patterns.index import PatternIndex
+from azazel_grimoire.patterns.matchspec import (
     MAX_DEPTH,
     Pattern,
     SkipSpec,
@@ -165,7 +165,7 @@ def test_indexed_cap_200():
 
 
 def test_time_ceiling_truncates(monkeypatch):
-    import azazel_cti.patterns.matchspec as ms
+    import azazel_grimoire.patterns.matchspec as ms
 
     ticks = iter([0.0] + [i * 1.0 for i in range(1, 300)])
     monkeypatch.setattr(ms.time, "monotonic", lambda: next(ticks))

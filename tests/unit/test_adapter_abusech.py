@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from azazel_cti.core.clock import FixedClock
-from azazel_cti.feeds.adapters.malwarebazaar import MalwarebazaarAdapter
-from azazel_cti.feeds.adapters.threatfox import ThreatfoxAdapter
-from azazel_cti.feeds.adapters.urlhaus import UrlhausAdapter
-from azazel_cti.normalize.exclusions import ExclusionPolicy
+from azazel_grimoire.core.clock import FixedClock
+from azazel_grimoire.feeds.adapters.malwarebazaar import MalwarebazaarAdapter
+from azazel_grimoire.feeds.adapters.threatfox import ThreatfoxAdapter
+from azazel_grimoire.feeds.adapters.urlhaus import UrlhausAdapter
+from azazel_grimoire.normalize.exclusions import ExclusionPolicy
 
 from _feeds_support import make_intel_writer, make_local_writer
 

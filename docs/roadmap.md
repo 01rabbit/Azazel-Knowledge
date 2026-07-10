@@ -40,8 +40,8 @@ is the multi-edge *scale-out* around it.
   not yet enabled) and multi-edge ingest scale.
 - Evaluate SQLite → PostgreSQL against measured write load (ADR-0003 exit
   criteria).
-- Evaluate alignment/adoption of `azazel_common.cti_contracts`
-  ([Azazel-Common](https://github.com/01rabbit/Azazel-Common)) for the
+- Evaluate alignment/adoption of `azazel_covenant.cti_contracts`
+  ([Azazel-Covenant](https://github.com/01rabbit/Azazel-Covenant), formerly Azazel-Common) for the
   Edge-facing boundary (requires an ADR + owner decision; Edge side defers
   CTI integration to FY2027+ per Azazel-Edge's adapter plan,
   `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` in the Azazel-Edge repo).
