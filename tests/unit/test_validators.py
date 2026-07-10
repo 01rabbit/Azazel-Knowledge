@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from azazel_cti.ingest.validators import (
+from azazel_knowledge.ingest.validators import (
     MAX_LINE_BYTES,
     validate_event_line,
     validate_flow_line,

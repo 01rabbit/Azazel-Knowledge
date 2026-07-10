@@ -94,7 +94,7 @@ def test_provision_admin_token_verifies_against_stored_hash(tmp_path):
     conn.close()
     assert row is not None
 
-    from azazel_cti.security import auth
+    from azazel_knowledge.security import auth
 
     assert auth.verify(token, row[0])
 
@@ -107,7 +107,7 @@ def test_bundle_build_sign_inspect_import_roundtrip(tmp_path):
     conn.execute(
         "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
     )
-    from azazel_cti.db.repository import apply_migrations
+    from azazel_knowledge.db.repository import apply_migrations
 
     conn.close()
     conn = sqlite3.connect(source_db)
@@ -180,7 +180,7 @@ def test_bundle_build_sign_inspect_import_roundtrip(tmp_path):
 def test_bundle_import_fingerprint_does_not_import(tmp_path):
     root = _provision(tmp_path)
     source_db = tmp_path / "source_intel.db"
-    from azazel_cti.db.repository import apply_migrations
+    from azazel_knowledge.db.repository import apply_migrations
 
     conn = sqlite3.connect(source_db)
     apply_migrations(conn, "intel")
@@ -212,7 +212,7 @@ def test_backup_produces_both_db_files_and_restore_sets_needs_full_rebaseline(tm
     _run("provision", "--root", str(restore_root))
     _run("restore", "--root", str(restore_root), "--backup-dir", str(backup_dir), "--confirm")
 
-    from azazel_cti.bundle.rollback_anchor import read_state
+    from azazel_knowledge.bundle.rollback_anchor import read_state
 
     state = read_state(restore_root / "secrets" / "trust" / "state.toml")
     assert state.needs_full_rebaseline is True
@@ -228,7 +228,7 @@ def test_restore_without_confirm_is_refused(tmp_path):
 
 def test_audit_verify_passes_on_clean_chain_and_fails_on_tampered_chain(tmp_path):
     root = _provision(tmp_path)
-    from azazel_cti.audit.logger import AuditChain
+    from azazel_knowledge.audit.logger import AuditChain
 
     chain = AuditChain(root / "var" / "audit" / "azctl", "proc1", "boot1", lambda t: t)
     chain.append({"kind": "test", "n": 1})
@@ -289,7 +289,7 @@ def test_client_add_list_revoke(tmp_path):
     conn.close()
     assert enabled == 0
 
-    from azazel_cti.security import auth
+    from azazel_knowledge.security import auth
 
     assert token.startswith("azcti_")
 

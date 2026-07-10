@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "azazel-cti"
+name = "azazel-knowledge"
 version = "0.1.0"
-description = "Azazel-CTI: advisory-only, deterministic cyber threat intelligence node."
+description = "Azazel-Knowledge Advisor: on-premises tactical threat knowledge advisor — advisory-only and deterministic (formerly Azazel-CTI)."
 requires-python = ">=3.11"
 dependencies = [
     "PyYAML",

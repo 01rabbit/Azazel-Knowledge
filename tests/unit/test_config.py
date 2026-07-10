@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from azazel_cti.core.config import ConfigError, QUERY_PATH_FILES, TrackedConfigLoader
+from azazel_knowledge.core.config import ConfigError, QUERY_PATH_FILES, TrackedConfigLoader
 
 REPO_CONFIG = Path(__file__).resolve().parents[2] / "config"
 

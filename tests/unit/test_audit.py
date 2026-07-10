@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from nacl.signing import SigningKey
 
-from azazel_cti.audit.logger import (
+from azazel_knowledge.audit.logger import (
     GENESIS_HASH,
     AuditChain,
     AuditUnavailable,
@@ -14,7 +14,7 @@ from azazel_cti.audit.logger import (
     verify_anchors,
     verify_chain,
 )
-from azazel_cti.security.redact import SecretRegistry
+from azazel_knowledge.security.redact import SecretRegistry
 
 
 def _identity(text: str) -> str:

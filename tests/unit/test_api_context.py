@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from azazel_cti.api import limits
-from azazel_cti.audit.logger import AuditUnavailable
+from azazel_knowledge.api import limits
+from azazel_knowledge.audit.logger import AuditUnavailable
 from _api_support import add_api_client, auth_header, make_client
 
 _ADVISORY_NOTICE = (

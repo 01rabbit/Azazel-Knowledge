@@ -4,9 +4,9 @@ import json
 
 import yaml
 
-from azazel_cti.rules.lint import lint_sigma, lint_suricata, parse_suricata
-from azazel_cti.rules.sigma import build_sigma
-from azazel_cti.rules.suricata import (
+from azazel_knowledge.rules.lint import lint_sigma, lint_suricata, parse_suricata
+from azazel_knowledge.rules.sigma import build_sigma
+from azazel_knowledge.rules.suricata import (
     SuricataSlots,
     allocate_sid,
     build_suricata,
@@ -198,7 +198,7 @@ def test_sigma_grammar_failures_return_none():
 def test_no_deploy_channel_in_rules_modules():
     import inspect
 
-    from azazel_cti.rules import lint, sigma, suricata
+    from azazel_knowledge.rules import lint, sigma, suricata
 
     for module in (suricata, sigma, lint):
         source = inspect.getsource(module)

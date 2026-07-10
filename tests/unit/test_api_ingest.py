@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from azazel_cti.api import limits
+from azazel_knowledge.api import limits
 from _api_support import add_api_client, auth_header, make_client
 
 
@@ -55,7 +55,7 @@ def test_batch_status_reflects_drained_status_file(tmp_path):
     resp = client.post("/v1/events", content=b'{"a": 1}\n', headers=auth_header(token))
     batch_id = resp.json()["batch_id"]
 
-    from azazel_cti.ingest.spool import BatchStatus, SpoolWriter
+    from azazel_knowledge.ingest.spool import BatchStatus, SpoolWriter
 
     spool = SpoolWriter(settings.spool_root)
     spool.write_status(
@@ -74,8 +74,8 @@ def test_ingest_quota_exceeded_returns_503(tmp_path):
     data_db_dir = tmp_path / "data" / "db"
     local_db_path = tmp_path / "data" / "local.db"
     from _api_support import make_intel_generation, make_local_db
-    from azazel_cti.api.app import Settings, create_app
-    from azazel_cti.core.clock import FixedClock
+    from azazel_knowledge.api.app import Settings, create_app
+    from azazel_knowledge.core.clock import FixedClock
     from _api_support import CONFIG_DIR, QUERY_AS_OF
     from fastapi.testclient import TestClient
 

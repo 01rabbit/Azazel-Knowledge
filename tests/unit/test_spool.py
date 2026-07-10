@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from azazel_cti.ingest.spool import BatchStatus, QuotaExceeded, SpoolWriter, new_batch_id
+from azazel_knowledge.ingest.spool import BatchStatus, QuotaExceeded, SpoolWriter, new_batch_id
 
 
 def test_new_batch_id_is_sortable_and_unique():

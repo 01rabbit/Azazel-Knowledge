@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from azazel_cti.core.config import ConfigError, TrackedConfigLoader
-from azazel_cti.db.behavior import BehaviorPattern, behavior_pattern_id
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.patterns.behavior_generate import GENERATOR_VERSION, apply_generation_plan
-from azazel_cti.scoring.behavior_similarity import (
+from azazel_knowledge.core.config import ConfigError, TrackedConfigLoader
+from azazel_knowledge.db.behavior import BehaviorPattern, behavior_pattern_id
+from azazel_knowledge.db.repository import apply_migrations
+from azazel_knowledge.patterns.behavior_generate import GENERATOR_VERSION, apply_generation_plan
+from azazel_knowledge.scoring.behavior_similarity import (
     find_similar_by_actor_or_time_window,
     find_similar_by_pattern_id,
     run_similarity,
@@ -454,7 +454,7 @@ def test_similarity_explains_shared_features_and_differences(tmp_path: Path) -> 
 
 
 def test_behavior_similarity_module_has_no_ml_or_llm_dependency(tmp_path: Path) -> None:
-    module_path = Path(__file__).resolve().parents[2] / "src/azazel_cti/scoring/behavior_similarity.py"
+    module_path = Path(__file__).resolve().parents[2] / "src/azazel_knowledge/scoring/behavior_similarity.py"
     source = module_path.read_text(encoding="utf-8").lower()
     for forbidden in ("sklearn", "embedding", "openai", "llm", "numpy", "torch"):
         assert forbidden not in source

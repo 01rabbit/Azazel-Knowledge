@@ -1,4 +1,4 @@
-"""Makes `azazel_cti` importable from a src-layout checkout without an
+"""Makes `azazel_knowledge` importable from a src-layout checkout without an
 editable install: tests run against the working tree via `sys.path`,
 not a pip-installed copy.
 """

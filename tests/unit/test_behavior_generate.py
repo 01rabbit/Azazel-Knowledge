@@ -6,16 +6,16 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from azazel_cti.core.config import TrackedConfigLoader
-from azazel_cti.db.repository import apply_migrations
-from azazel_cti.patterns.behavior_generate import (
+from azazel_knowledge.core.config import TrackedConfigLoader
+from azazel_knowledge.db.repository import apply_migrations
+from azazel_knowledge.patterns.behavior_generate import (
     GENERATOR_VERSION,
     apply_generation_plan,
     plan_generation,
 )
-from azazel_cti.worker import WorkerPaths, current_intel_db_path, ensure_local_db, run_p2
-from azazel_cti.db.writer import PrioritySingleWriterQueue
-from azazel_cti.core.clock import FixedClock
+from azazel_knowledge.worker import WorkerPaths, current_intel_db_path, ensure_local_db, run_p2
+from azazel_knowledge.db.writer import PrioritySingleWriterQueue
+from azazel_knowledge.core.clock import FixedClock
 
 NOW = datetime(2026, 7, 8, 0, 0, 0, tzinfo=timezone.utc)
 REPO_CONFIG = Path(__file__).resolve().parents[2] / "config"

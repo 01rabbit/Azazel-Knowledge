@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""azctl -- Azazel-CTI operations CLI (design S11).
+"""azctl -- Azazel-Knowledge operations CLI (design S11).
 
 Wires existing library functions into an operator-facing surface:
 provisioning a node's directory tree, validating configuration,
@@ -7,7 +7,7 @@ building/signing/inspecting/importing offline bundles, running an
 offline feed pull, managing trust anchors and API client tokens,
 backup/restore, audit-chain verification, a health snapshot, and the
 crypto-erase stub. Nothing here re-implements scoring, ingest, or
-storage logic -- it only sequences calls into `azazel_cti.*`.
+storage logic -- it only sequences calls into `azazel_knowledge.*`.
 """
 
 from __future__ import annotations
@@ -32,25 +32,25 @@ sys.path.insert(0, str(_REPO_ROOT / "tools"))
 from nacl.signing import SigningKey  # noqa: E402
 
 import bundle_build  # noqa: E402
-from azazel_cti.bundle.importer import apply_differential, import_full  # noqa: E402
-from azazel_cti.bundle.rollback_anchor import (  # noqa: E402
+from azazel_knowledge.bundle.importer import apply_differential, import_full  # noqa: E402
+from azazel_knowledge.bundle.rollback_anchor import (  # noqa: E402
     mark_needs_full_rebaseline,
     read_state,
 )
-from azazel_cti.bundle.verify import peek_manifest  # noqa: E402
-from azazel_cti.audit.logger import MerkleAnchor, verify_anchors, verify_chain  # noqa: E402
-from azazel_cti.core.config import ConfigError, TrackedConfigLoader  # noqa: E402
-from azazel_cti.db import generations  # noqa: E402
-from azazel_cti.db.repository import apply_migrations  # noqa: E402
-from azazel_cti.db.writer import P0, WRITER_PRAGMAS, PrioritySingleWriterQueue, WriterLockHeld  # noqa: E402
-from azazel_cti.normalize.exclusions import ExclusionPolicy  # noqa: E402
-from azazel_cti.patterns.behavior_generate import apply_generation_plan, plan_generation  # noqa: E402
-from azazel_cti.reports.friction_timeline import (  # noqa: E402
+from azazel_knowledge.bundle.verify import peek_manifest  # noqa: E402
+from azazel_knowledge.audit.logger import MerkleAnchor, verify_anchors, verify_chain  # noqa: E402
+from azazel_knowledge.core.config import ConfigError, TrackedConfigLoader  # noqa: E402
+from azazel_knowledge.db import generations  # noqa: E402
+from azazel_knowledge.db.repository import apply_migrations  # noqa: E402
+from azazel_knowledge.db.writer import P0, WRITER_PRAGMAS, PrioritySingleWriterQueue, WriterLockHeld  # noqa: E402
+from azazel_knowledge.normalize.exclusions import ExclusionPolicy  # noqa: E402
+from azazel_knowledge.patterns.behavior_generate import apply_generation_plan, plan_generation  # noqa: E402
+from azazel_knowledge.reports.friction_timeline import (  # noqa: E402
     build_friction_timeline_report,
     get_behavior_patterns_summary,
 )
-from azazel_cti.security import auth  # noqa: E402
-from azazel_cti.worker import (  # noqa: E402
+from azazel_knowledge.security import auth  # noqa: E402
+from azazel_knowledge.worker import (  # noqa: E402
     WorkerPaths,
     build_feed_adapter,
     current_intel_db_path,
@@ -108,7 +108,7 @@ def _audit_event(paths: WorkerPaths, stream: str, event: dict[str, Any]) -> None
     command from completing (unlike the API's context path, which fails
     closed per F-17), so failures here are printed, not raised.
     """
-    from azazel_cti.audit.logger import AuditChain
+    from azazel_knowledge.audit.logger import AuditChain
 
     try:
         chain_dir = paths.audit_dir / stream
@@ -162,7 +162,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
         print(f"trust anchors already present: {paths.anchors_path}")
 
     if not paths.state_path.is_file():
-        from azazel_cti.bundle.rollback_anchor import RollbackState, write_state
+        from azazel_knowledge.bundle.rollback_anchor import RollbackState, write_state
 
         write_state(paths.state_path, RollbackState())
         print(f"wrote anti-rollback state: {paths.state_path}")
@@ -174,7 +174,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     scopes = ["ingest", "query", "read", "admin"]
 
     def _insert_admin(conn: sqlite3.Connection) -> None:
-        from azazel_cti.db.repository import utc_now_rfc3339
+        from azazel_knowledge.db.repository import utc_now_rfc3339
 
         conn.execute(
             "INSERT INTO api_client (key_id, token_sha256, scopes, quota_bytes, enabled, created_at) "
@@ -385,8 +385,8 @@ def cmd_feed_pull(args: argparse.Namespace) -> int:
         file_path = Path(args.file)
         fetch_bytes = file_path.read_bytes
     elif args.online:
-        from azazel_cti.feeds.base import fetch_https_with_pins
-        from azazel_cti.worker import FEED_ENDPOINTS
+        from azazel_knowledge.feeds.base import fetch_https_with_pins
+        from azazel_knowledge.worker import FEED_ENDPOINTS
 
         url = FEED_ENDPOINTS.get(args.feed_id)
         if url is None:
@@ -397,7 +397,7 @@ def cmd_feed_pull(args: argparse.Namespace) -> int:
     else:
         raise SystemExit("azctl feed pull requires --file PATH (offline) or --online")
 
-    from azazel_cti.core.clock import SystemClock
+    from azazel_knowledge.core.clock import SystemClock
 
     local_writer = PrioritySingleWriterQueue(paths.local_db_path, paths.local_lock_path)
     intel_writer = PrioritySingleWriterQueue(intel_db_path, paths.intel_lock_path)
@@ -462,7 +462,7 @@ def cmd_feed_approve(args: argparse.Namespace) -> int:
         finally:
             conn.close()
 
-    from azazel_cti.db.repository import utc_now_rfc3339
+    from azazel_knowledge.db.repository import utc_now_rfc3339
 
     with _writer_flock(paths.local_lock_path):
         local_conn = sqlite3.connect(paths.local_db_path, isolation_level=None)
@@ -494,7 +494,7 @@ def _behavior_mode(mode: str) -> str:
 
 
 def cmd_behavior_generate(args: argparse.Namespace) -> int:
-    from azazel_cti.core.clock import SystemClock
+    from azazel_knowledge.core.clock import SystemClock
 
     paths = _paths(args)
     paths.ensure_dirs()
@@ -531,7 +531,7 @@ def cmd_behavior_generate(args: argparse.Namespace) -> int:
 
 
 def cmd_behavior_dry_run(args: argparse.Namespace) -> int:
-    from azazel_cti.core.clock import SystemClock
+    from azazel_knowledge.core.clock import SystemClock
 
     paths = _paths(args)
     ensure_local_db(paths.local_db_path)
@@ -561,8 +561,8 @@ def cmd_behavior_dry_run(args: argparse.Namespace) -> int:
 
 
 def cmd_behavior_report(args: argparse.Namespace) -> int:
-    from azazel_cti.core.clock import SystemClock
-    from azazel_cti.db.repository import Repository
+    from azazel_knowledge.core.clock import SystemClock
+    from azazel_knowledge.db.repository import Repository
 
     paths = _paths(args)
     ensure_local_db(paths.local_db_path)
@@ -669,7 +669,7 @@ def cmd_client_add(args: argparse.Namespace) -> int:
     scopes = [s.strip() for s in args.scopes.split(",") if s.strip()]
     token, token_sha256 = auth.mint_token(key_id)
 
-    from azazel_cti.db.repository import utc_now_rfc3339
+    from azazel_knowledge.db.repository import utc_now_rfc3339
 
     def _insert(conn: sqlite3.Connection) -> None:
         conn.execute(

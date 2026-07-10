@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from azazel_cti.db.repository import apply_migrations
+from azazel_knowledge.db.repository import apply_migrations
 
 INTEL_TABLES = {
     "ioc",

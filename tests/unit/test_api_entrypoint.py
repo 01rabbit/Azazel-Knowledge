@@ -10,8 +10,8 @@ from _api_support import add_api_client, auth_header
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from azazel_cti.api.app import create_app, settings_from_env
-from azazel_cti.worker import WorkerPaths, ensure_intel_generation, ensure_local_db
+from azazel_knowledge.api.app import create_app, settings_from_env
+from azazel_knowledge.worker import WorkerPaths, ensure_intel_generation, ensure_local_db
 
 
 def test_module_exposes_asgi_app(tmp_path, monkeypatch):
@@ -20,8 +20,8 @@ def test_module_exposes_asgi_app(tmp_path, monkeypatch):
     monkeypatch.delenv("AZAZEL_CONFIG_DIR", raising=False)
 
     module = importlib.reload(
-        sys.modules.get("azazel_cti.api.app")
-        or importlib.import_module("azazel_cti.api.app")
+        sys.modules.get("azazel_knowledge.api.app")
+        or importlib.import_module("azazel_knowledge.api.app")
     )
 
     assert isinstance(module.app, FastAPI)

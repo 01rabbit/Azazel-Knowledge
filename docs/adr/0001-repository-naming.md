@@ -1,6 +1,9 @@
 # ADR-0001: Repository naming and family positioning
 
-Status: **deferred by owner decision (2026-07-05)** — working name `Azazel-CTI`
+Status: **Accepted (2026-07-10)** — formal name `Azazel-Knowledge Advisor`, AZ-04,
+repository `01rabbit/Azazel-Knowledge` (formerly `Azazel-CTI`). See the
+**Resolution** section for the ratified decision; the original deferral context
+and decision below are preserved as history.
 
 ## Context
 
@@ -41,3 +44,34 @@ Before first public release:
   vocabulary decision is the real task and belongs in the Azazel repo.
 - Until then, external-facing text must present `Azazel-CTI` as a working
   name.
+
+## Resolution (2026-07-10)
+
+The owner ratified the formal naming on 2026-07-10, superseding the deferral above.
+
+- **Formal series name:** `Azazel-Knowledge Advisor`, series number **AZ-04**.
+- **Short name (prose):** `Azazel-Knowledge` — with the `Advisor` Role suffix
+  used in formal/external contexts, mirroring `Edge`/`Gadget`.
+- **Repository:** `01rabbit/Azazel-CTI` → `01rabbit/Azazel-Knowledge` (old URLs
+  redirect); Python import namespace is `azazel_knowledge`.
+- **Rationale:** `Knowledge` is the class that accumulates and correlates IOC,
+  ATT&CK, attacker reactions, and behavioral patterns — the series' Threat
+  Knowledge Plane; `Advisor` returns evidence, confidence, history, and
+  recommendations, never commands, and final authority stays with Azazel-Edge's
+  deterministic arbiter. Likewise this node's generated Suricata/Sigma rules are
+  drafts that it never deploys (ADR-0007). The advisory-only doctrine is
+  unchanged.
+- **Alternatives considered and superseded before merge:** Azazel-Grimoire
+  Advisor, Azazel-Keep Oracle. `GRIMOIRE` was retained as this product's
+  development codename, following the series codename convention
+  (Edge: `SENTINEL`, Gadget: `TACMOD`) — changelogs, release names,
+  milestones, never formal external naming.
+- **AZ-xx meaning:** accession order (series order), no longer appliance-only —
+  which is what frees a rear-echelon knowledge node to take a number.
+- **Sibling rename (same sweep):** `Azazel-Common` → `Azazel-Fabric` (AZ-05),
+  import namespace `azazel_common` → `azazel_fabric` from its v0.3.0. This
+  repository does not depend on it; references in docs are updated accordingly.
+
+Full series after this decision: Azazel (umbrella), AZ-01 Azazel-Edge, AZ-02
+Azazel-Gadget, AZ-03 Azazel-Boot (reserved), AZ-04 Azazel-Knowledge (this repo,
+formerly Azazel-CTI), AZ-05 Azazel-Fabric (formerly Azazel-Common).

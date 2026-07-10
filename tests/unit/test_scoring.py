@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from azazel_cti.core.config import TrackedConfigLoader
-from azazel_cti.scoring.compute import (
+from azazel_knowledge.core.config import TrackedConfigLoader
+from azazel_knowledge.scoring.compute import (
     AttackMapInput,
     CampaignInput,
     GeoAsnInput,

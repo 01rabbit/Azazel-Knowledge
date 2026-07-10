@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from azazel_cti.attack.attack_stix import flatten
-from azazel_cti.core.clock import FixedClock
-from azazel_cti.feeds.adapters.attack import AttackAdapter
+from azazel_knowledge.attack.attack_stix import flatten
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.feeds.adapters.attack import AttackAdapter
 
 from _feeds_support import make_intel_writer
 

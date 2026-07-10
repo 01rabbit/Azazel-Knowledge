@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 
 from _api_support import add_api_client, auth_header, make_client
-from azazel_cti.core.clock import FixedClock
-from azazel_cti.core.config import TrackedConfigLoader
-from azazel_cti.correlate.pipeline import ContextRequest, Entity, run_context
-from azazel_cti.db import generations
-from azazel_cti.db.behavior import behavior_pattern_id
-from azazel_cti.db.repository import Repository, apply_migrations, entity_key
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.core.config import TrackedConfigLoader
+from azazel_knowledge.correlate.pipeline import ContextRequest, Entity, run_context
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.behavior import behavior_pattern_id
+from azazel_knowledge.db.repository import Repository, apply_migrations, entity_key
 
 REPO_CONFIG = Path(__file__).resolve().parents[2] / "config"
 LOADER = TrackedConfigLoader(REPO_CONFIG)

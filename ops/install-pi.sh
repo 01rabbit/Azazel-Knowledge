@@ -15,7 +15,7 @@ SKIP_THERMAL=0
 CHECK_ONLY=0
 AUTO_YES=0
 INSTALL_SYSTEMD=0
-SYSTEMD_UNIT_NAME="azazel-cti"
+SYSTEMD_UNIT_NAME="azazel-knowledge"
 SYSTEMD_NO_START=0
 EDGE_ADDR=""
 MGMT_IP=""
@@ -28,7 +28,7 @@ Usage:
 
 Options:
   --root DIR
-      Node working root (for example /srv/azazel-cti). Required.
+      Node working root (for example /srv/azazel-knowledge). Required.
   --secrets-device DEV
       Destructively format the secrets partition as LUKS2/Adiantum.
   --data-device DEV
@@ -46,7 +46,7 @@ Options:
   --install-systemd
       Render and install a systemd unit for docker compose boot persistence.
   --systemd-unit-name NAME
-      Override the installed systemd unit name. Default: azazel-cti.
+      Override the installed systemd unit name. Default: azazel-knowledge.
   --no-start
       Enable the systemd unit without starting it immediately.
   --edge-addr IP
@@ -315,7 +315,7 @@ render_systemd_unit() {
   local repo_root="$1"
   local docker_bin="$2"
   local compose_file="${repo_root}/ops/docker-compose.yml"
-  local template="${repo_root}/ops/azazel-cti.service"
+  local template="${repo_root}/ops/azazel-knowledge.service"
 
   [[ -f "${template}" ]] || fail "systemd template not found under ${template}"
 
@@ -518,7 +518,7 @@ run_azctl() {
   docker run --rm \
     -v "${repo_root}:${repo_root}" \
     -w "${repo_root}" \
-    azazel-cti:latest \
+    azazel-knowledge:latest \
     python azctl "$@"
 }
 

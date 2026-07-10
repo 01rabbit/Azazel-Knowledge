@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from azazel_cti.core.clock import to_rfc3339
-from azazel_cti.db.repository import entity_key
-from azazel_cti.feeds.promotion import PromotionEngine, PromotionReason, PromotionResult
+from azazel_knowledge.core.clock import to_rfc3339
+from azazel_knowledge.db.repository import entity_key
+from azazel_knowledge.feeds.promotion import PromotionEngine, PromotionReason, PromotionResult
 
 from _feeds_support import make_intel_writer, make_local_writer
 

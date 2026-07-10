@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from azazel_cti.normalize.exclusions import Decision, ExclusionPolicy
+from azazel_knowledge.normalize.exclusions import Decision, ExclusionPolicy
 
 
 def test_is_bogon_rfc1918():

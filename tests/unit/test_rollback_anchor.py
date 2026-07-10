@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from azazel_cti.bundle.rollback_anchor import (
+from azazel_knowledge.bundle.rollback_anchor import (
     IntegrityAlert,
     RollbackState,
     detect_version_gap,

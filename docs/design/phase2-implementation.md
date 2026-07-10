@@ -87,7 +87,7 @@ New ADR **[ADR-0009]** records this lane and its guardrails **[F2-16]**.
 
 `behavior_pattern`, `behavior_pattern_evidence`, `behavior_pattern_similarity`,
 and `behavior_meta` are **local-tier** tables in a new `local` migration file
-(`src/azazel_cti/db/migrations/local/0002_behavior.sql`). They derive from
+(`src/azazel_knowledge/db/migrations/local/0002_behavior.sql`). They derive from
 `reaction`/`observation`, which are local-tier and F-1-permanent; intel-tier
 bundles must never name them (existing `BUNDLE_TOUCHES_LOCAL_TIER` guard already
 covers any local table). The `#36` reaction extension is a second local

@@ -16,10 +16,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient
 
-from azazel_cti.api.app import Settings, create_app
-from azazel_cti.core.clock import FixedClock
-from azazel_cti.security.auth import mint_token
-from azazel_cti.worker import WorkerPaths, ensure_local_db
+from azazel_knowledge.api.app import Settings, create_app
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.security.auth import mint_token
+from azazel_knowledge.worker import WorkerPaths, ensure_local_db
 
 REFERENCE_ONLY_NOTE = (
     "NOTE: reference-only on this platform; not a pass/fail gate (run on Pi 4 for S9)"

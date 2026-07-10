@@ -1,8 +1,21 @@
-# Azazel-CTI — On-Premises Tactical CTI Node for the Azazel System
+# AZ-04 Azazel-Knowledge - On-Premises Tactical Threat Knowledge Advisor
 
-> **Working name.** The formal name and AZ-xx designation are deliberately
-> deferred (AZ-01 = Azazel-Edge, AZ-02 = Azazel-Gadget, AZ-03 = Azazel-Boot
-> are already assigned). See [ADR-0001](docs/adr/0001-repository-naming.md).
+> **Codename:** `GRIMOIRE`
+
+> **Formerly Azazel-CTI.** The formal series name is **Azazel-Knowledge Advisor**
+> (**AZ-04**), ratified 2026-07-10; the `Advisor` Role suffix is used in
+> formal/external contexts. The repository was renamed
+> `01rabbit/Azazel-CTI` → `01rabbit/Azazel-Knowledge` (old URLs redirect).
+> The codename `GRIMOIRE` follows the series convention (Edge: `SENTINEL`,
+> Gadget: `TACMOD`): the accumulated book of threats — a grimoire never casts
+> its own spells. Codenames are for changelogs and release names, never formal
+> external naming.
+> `Knowledge` is the class that accumulates and correlates IOC, ATT&CK, attacker
+> reactions, and behavioral patterns — the series' Threat Knowledge Plane;
+> `Advisor` returns evidence, confidence, history, and recommendations, never
+> commands, and final authority stays with Azazel-Edge's deterministic arbiter.
+> Likewise this node's generated Suricata/Sigma rules are drafts it never
+> deploys. See [ADR-0001](docs/adr/0001-repository-naming.md).
 
 **Status: implemented and under active development.** Phase 1 (the full node —
 ingest, IOC/JA3/JA4 search, deterministic `/v1/context`, reaction recording,
@@ -12,7 +25,7 @@ suite is the baseline gate (currently 583 tests); the advisory-only,
 determinism, and offline-first contracts below are enforced by static and
 replay tests, not just convention.
 
-Azazel-CTI is an independent, on-premises Cyber Threat Intelligence node built
+Azazel-Knowledge is an independent, on-premises Cyber Threat Intelligence node built
 on a portable Raspberry Pi 4. It pairs with
 [Azazel-Edge](https://github.com/01rabbit/Azazel-Edge) (AZ-01) but is
 deliberately a separate device and a separate repository.
@@ -48,7 +61,7 @@ fully functional when the CTI node is absent, slow, or wrong.
                      │
       ┌──────────────────────────────┐
       │  Raspberry Pi 4              │
-      │  Azazel-CTI (working name)   │   Intelligence / Correlation /
+      │  Azazel-Knowledge (AZ-04)     │   Intelligence / Correlation /
       │  Threat Knowledge Plane      │   Campaign analysis / IOC management /
       │                              │   Behavioral CTI (patterns, similarity)
       └──────────────────────────────┘
@@ -111,6 +124,35 @@ in [Azazel-Edge #283](https://github.com/01rabbit/Azazel-Edge/issues/283):
 
 Research framing: **"How does CTI optimize delaying defense?"** — not
 "a lightweight CTI platform." See [ADR-0008](docs/adr/0008-research-theme.md).
+
+## Azazel series context
+
+The Azazel family, as currently assigned:
+
+- **[Azazel](https://01rabbit.github.io/Azazel/)** — the umbrella doctrine
+  hub and GitHub Pages site (Apache-2.0).
+- **Azazel-Edge (AZ-01)** — resident edge-class gateway (Pi 5), MIT. Pairs
+  with this repo as described above.
+- **Azazel-Gadget (AZ-02)** — USB-gadget-class portable device, MIT. No CTI
+  integration is planned.
+- **Azazel-Boot (AZ-03)** — reserved; no repository yet.
+- **Azazel-Knowledge (AZ-04)** (this repository, formerly Azazel-CTI) — formal
+  series name `Azazel-Knowledge Advisor`; see
+  [ADR-0001](docs/adr/0001-repository-naming.md) above. AZ-xx now denotes series
+  accession order, no longer appliance-only.
+- **[Azazel-Fabric (AZ-05)](https://github.com/01rabbit/Azazel-Fabric)**
+  (formerly Azazel-Common) — a shared contracts library for the series
+  (distribution name `azazel-fabric`, installed via pinned git tag;
+  `azazel_fabric` package from its v0.3.0, pydantic v2 as its sole
+  dependency). Its `cti_contracts` module type-enforces the same advisory-only
+  invariant this repo's [API contract](docs/api.md) defines — directive-shaped
+  fields such as `directive`/`must_execute`/`override`/`required_action` are
+  rejected by its validators — and Azazel-Gadget already consumes it. **This
+  repository does not depend on Azazel-Fabric today.** Its `cti_contracts`
+  shapes mirror this repo's `/v1/context` boundary but were developed
+  independently; evaluating adoption is future work that would require a
+  `pyproject.toml` change and a new ADR under this repo's
+  dependency-minimality constraint. No commitment either way exists yet.
 
 ## Documentation
 
