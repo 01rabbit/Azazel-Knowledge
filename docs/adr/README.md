@@ -6,7 +6,7 @@ the Phase 2 Behavioral CTI lane:
 
 | ADR | Question | Decision |
 |---|---|---|
-| [0001](0001-repository-naming.md) | Repository / product name | **Accepted (2026-07-10)** — formal name `Azazel-Grimoire Advisor`, AZ-04, repo `01rabbit/Azazel-Grimoire` (formerly `Azazel-CTI`); namespace `azazel_grimoire` |
+| [0001](0001-repository-naming.md) | Repository / product name | **Accepted (2026-07-10)** — formal name `Azazel-Knowledge Advisor`, AZ-04, repo `01rabbit/Azazel-Knowledge` (formerly `Azazel-CTI`); namespace `azazel_knowledge` |
 | [0002](0002-data-model.md) | STIX 2.1 vs. lightweight native model | Native model internally; STIX 2.1 at boundaries only |
 | [0003](0003-database.md) | SQLite vs. PostgreSQL | SQLite WAL; PostgreSQL only on measured Phase 2 triggers |
 | [0004](0004-sync-strategy.md) | Pull / push / USB / differential sync | Scheduled pull online + signed offline bundles (full & differential) |

@@ -4,9 +4,9 @@ import inspect
 import json
 from pathlib import Path
 
-from azazel_grimoire.core.config import TrackedConfigLoader
-from azazel_grimoire.recommend import select
-from azazel_grimoire.recommend.select import recommend
+from azazel_knowledge.core.config import TrackedConfigLoader
+from azazel_knowledge.recommend import select
+from azazel_knowledge.recommend.select import recommend
 
 REPO_CONFIG = Path(__file__).resolve().parents[2] / "config"
 BANDS = TrackedConfigLoader(REPO_CONFIG).action_bands()
@@ -92,7 +92,7 @@ def test_recommend_reads_no_reaction_data():
     signature = inspect.signature(recommend)
     assert list(signature.parameters) == ["score", "confidence", "action_bands"]
     module_source = inspect.getsource(select)
-    assert "azazel_grimoire.reactions" not in module_source
+    assert "azazel_knowledge.reactions" not in module_source
     assert "sqlite" not in module_source.lower()
     assert "repository" not in module_source.lower()
 

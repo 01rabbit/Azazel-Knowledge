@@ -4,11 +4,11 @@ import json
 import sqlite3
 
 from _api_support import QUERY_AS_OF, add_api_client, auth_header, make_client
-from azazel_grimoire.core.config import TrackedConfigLoader
-from azazel_grimoire.correlate.pipeline import ADVISORY_NOTICE
-from azazel_grimoire.db.repository import Repository
-from azazel_grimoire.patterns.behavior_generate import apply_generation_plan
-from azazel_grimoire.reports.friction_timeline import (
+from azazel_knowledge.core.config import TrackedConfigLoader
+from azazel_knowledge.correlate.pipeline import ADVISORY_NOTICE
+from azazel_knowledge.db.repository import Repository
+from azazel_knowledge.patterns.behavior_generate import apply_generation_plan
+from azazel_knowledge.reports.friction_timeline import (
     build_friction_timeline_report,
     get_behavior_pattern_detail,
     get_behavior_patterns_summary,

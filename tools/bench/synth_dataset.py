@@ -15,9 +15,9 @@ if str(THIS_DIR) not in sys.path:
 
 from _common import DEFAULT_RESULTS_DIR, default_root, resolve_paths
 
-from azazel_grimoire.db import generations
-from azazel_grimoire.db.repository import apply_migrations
-from azazel_grimoire.normalize.ioc import normalize
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.repository import apply_migrations
+from azazel_knowledge.normalize.ioc import normalize
 
 DEFAULT_SEED = 20260706
 BASE_IOC_COUNT = 10_000_000

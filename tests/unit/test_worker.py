@@ -4,13 +4,13 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from azazel_grimoire.core.clock import FixedClock
-from azazel_grimoire.core.config import TrackedConfigLoader
-from azazel_grimoire.db.repository import apply_migrations
-from azazel_grimoire.db.writer import PrioritySingleWriterQueue
-from azazel_grimoire.db import generations
-from azazel_grimoire.ingest.spool import SpoolWriter
-from azazel_grimoire import worker
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.core.config import TrackedConfigLoader
+from azazel_knowledge.db.repository import apply_migrations
+from azazel_knowledge.db.writer import PrioritySingleWriterQueue
+from azazel_knowledge.db import generations
+from azazel_knowledge.ingest.spool import SpoolWriter
+from azazel_knowledge import worker
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -93,7 +93,7 @@ def test_run_once_drains_advisory_spool_and_resolves_linkage(tmp_path):
         ).fetchone()
         assert row == (advisory_id, "ev-1")
 
-        from azazel_grimoire.reactions import linkage
+        from azazel_knowledge.reactions import linkage
 
         reaction_id = local_writer._conn.execute(
             "SELECT reaction_id FROM reaction WHERE advisory_id = ?", (advisory_id,)

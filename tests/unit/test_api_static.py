@@ -13,8 +13,8 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-API_DIR = REPO_ROOT / "src" / "azazel_grimoire" / "api"
-TAXII_DIR = REPO_ROOT / "src" / "azazel_grimoire" / "taxii"
+API_DIR = REPO_ROOT / "src" / "azazel_knowledge" / "api"
+TAXII_DIR = REPO_ROOT / "src" / "azazel_knowledge" / "taxii"
 
 _FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|executemany|executescript)\b", re.IGNORECASE

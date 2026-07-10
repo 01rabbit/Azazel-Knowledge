@@ -4,13 +4,13 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from azazel_grimoire.core.clock import FixedClock
-from azazel_grimoire.db.repository import apply_migrations
-from azazel_grimoire.db.writer import PrioritySingleWriterQueue
-from azazel_grimoire.ingest.drain import drain_endpoint
-from azazel_grimoire.ingest.spool import SpoolWriter
-from azazel_grimoire.ingest.validators import validate_reaction_line
-from azazel_grimoire.reactions import classifier
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.db.repository import apply_migrations
+from azazel_knowledge.db.writer import PrioritySingleWriterQueue
+from azazel_knowledge.ingest.drain import drain_endpoint
+from azazel_knowledge.ingest.spool import SpoolWriter
+from azazel_knowledge.ingest.validators import validate_reaction_line
+from azazel_knowledge.reactions import classifier
 
 NOW = datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc)
 

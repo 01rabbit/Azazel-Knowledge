@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from azazel_grimoire.security.redact import SecretRegistry, format_exception, redact_text
+from azazel_knowledge.security.redact import SecretRegistry, format_exception, redact_text
 
 
 def test_redact_matches_token_regex():

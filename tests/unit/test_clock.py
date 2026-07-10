@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from azazel_grimoire.core.clock import FixedClock, SystemClock, parse_rfc3339, to_rfc3339
+from azazel_knowledge.core.clock import FixedClock, SystemClock, parse_rfc3339, to_rfc3339
 
 
 def test_fixed_clock_returns_same_instant_every_call():

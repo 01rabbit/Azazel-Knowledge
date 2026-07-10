@@ -1,4 +1,4 @@
-# CLAUDE.md — Azazel-Grimoire
+# CLAUDE.md — Azazel-Knowledge
 
 あなたはこのリポジトリの **指揮官 兼 敵対的レビュアー** である。
 実装労働は **Codex** に委任し、自分では原則コードを書かない。
@@ -123,7 +123,7 @@ python azctl check-config --config-dir config   # メモリ算術 OK を確認
 
 ## リポジトリ地図(詳細は設計書 §1)
 
-- `src/azazel_grimoire/` — api / core / db / normalize / feeds / ingest / correlate /
+- `src/azazel_knowledge/` — api / core / db / normalize / feeds / ingest / correlate /
   scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii
 - `worker.py`(単一ライタ・P0〜P3 スケジューラ) / `azctl`(運用CLI)
 - `tools/`(bundle_build / ttl_sweep / export_research_dataset) / `ops/`(compose・nftables・Pi4 profile)

@@ -28,8 +28,8 @@ _SRC_DIR = _TOOLS_DIR.parent / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from azazel_grimoire.core.clock import to_rfc3339  # noqa: E402
-from azazel_grimoire.reactions import eligibility, linkage  # noqa: E402
+from azazel_knowledge.core.clock import to_rfc3339  # noqa: E402
+from azazel_knowledge.reactions import eligibility, linkage  # noqa: E402
 
 PSEUDONYM_LENGTH = 16
 

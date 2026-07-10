@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from azazel_grimoire.core.clock import FixedClock
-from azazel_grimoire.feeds import base as feeds_base
-from azazel_grimoire.feeds.base import (
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.feeds import base as feeds_base
+from azazel_knowledge.feeds.base import (
     FeedAdapter,
     PinMismatch,
     extract_subject_public_key_info,
@@ -19,7 +19,7 @@ from azazel_grimoire.feeds.base import (
     spki_sha256_hex,
     verify_spki_pin,
 )
-from azazel_grimoire.feeds import sanity
+from azazel_knowledge.feeds import sanity
 
 from _feeds_support import make_intel_writer, make_local_writer
 
@@ -207,7 +207,7 @@ def test_min_consecutive_polls_gate(tmp_path):
 
 
 def test_stage_crash_leaves_live_tables_untouched(tmp_path):
-    from azazel_grimoire.feeds.base import IocRow, IocSourceRow
+    from azazel_knowledge.feeds.base import IocRow, IocSourceRow
 
     intel = make_intel_writer(tmp_path)
     local = make_local_writer(tmp_path)
@@ -246,7 +246,7 @@ def test_stage_crash_leaves_live_tables_untouched(tmp_path):
 
 
 def test_swap_is_single_transaction_and_clears_stage(tmp_path):
-    from azazel_grimoire.feeds.base import IocRow, IocSourceRow
+    from azazel_knowledge.feeds.base import IocRow, IocSourceRow
 
     intel = make_intel_writer(tmp_path)
 
@@ -326,7 +326,7 @@ def test_fetch_requires_injection_or_override(tmp_path):
 
 
 def test_spamhaus_asndrop_writes_asn_iocs_and_cidr_tier(tmp_path):
-    from azazel_grimoire.feeds.adapters.spamhaus_asndrop import SpamhausAsnDropAdapter
+    from azazel_knowledge.feeds.adapters.spamhaus_asndrop import SpamhausAsnDropAdapter
 
     adapter = SpamhausAsnDropAdapter(
         "spamhaus_asndrop",
@@ -360,7 +360,7 @@ def test_spamhaus_asndrop_writes_asn_iocs_and_cidr_tier(tmp_path):
 
 
 def test_geoip_asn_loads_local_csv_with_org_tags(tmp_path):
-    from azazel_grimoire.feeds.adapters.geoip_asn import GeoipAsnAdapter
+    from azazel_knowledge.feeds.adapters.geoip_asn import GeoipAsnAdapter
 
     adapter = GeoipAsnAdapter(
         "geoip_asn",

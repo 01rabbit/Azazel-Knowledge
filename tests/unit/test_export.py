@@ -18,8 +18,8 @@ from export_research_dataset import (  # noqa: E402
     write_jsonl,
 )
 
-from azazel_grimoire.db.repository import apply_migrations  # noqa: E402
-from azazel_grimoire.reactions import classifier  # noqa: E402
+from azazel_knowledge.db.repository import apply_migrations  # noqa: E402
+from azazel_knowledge.reactions import classifier  # noqa: E402
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
 SITE_KEY = b"site-secret-key-material"

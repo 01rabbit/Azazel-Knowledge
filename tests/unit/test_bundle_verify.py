@@ -11,14 +11,14 @@ from pathlib import Path
 import pytest
 from nacl.signing import SigningKey
 
-from azazel_grimoire.bundle.verify import (
+from azazel_knowledge.bundle.verify import (
     BundleVerifyError,
     MANIFEST_MEMBER,
     SIGNATURE_MEMBER,
     canonical_manifest_bytes,
     verify_bundle,
 )
-from azazel_grimoire.db.repository import apply_migrations
+from azazel_knowledge.db.repository import apply_migrations
 
 _TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 

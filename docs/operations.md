@@ -1,6 +1,6 @@
 # Operations quickstart
 
-This is the operator path from a bare Pi 4 to a running Azazel-Grimoire
+This is the operator path from a bare Pi 4 to a running Azazel-Knowledge
 (formerly Azazel-CTI) node serving
 enriched context to an Edge: provision, load intelligence (bundle or
 online pull), connect an Edge, and read the first enriched event back.
@@ -15,7 +15,7 @@ Quoting [docs/architecture.md](architecture.md) verbatim:
 
 > | Plane | Device | Responsibility | Authority |
 > |---|---|---|---|
-> | Knowledge Plane | Azazel-Grimoire (Pi 4) | IOC management, correlation, campaign analysis, pattern memory, feed ingestion | Advisory only |
+> | Knowledge Plane | Azazel-Knowledge (Pi 4) | IOC management, correlation, campaign analysis, pattern memory, feed ingestion | Advisory only |
 
 > The Knowledge Plane enriches evidence and explains context. It never
 > selects, schedules, or vetoes an action.
@@ -32,7 +32,7 @@ and `confidence` are mandatory on every answer instead of a single
 ## 1. Provision the node
 
 ```sh
-azctl provision --root /srv/azazel-grimoire --check-thermal
+azctl provision --root /srv/azazel-knowledge --check-thermal
 ```
 
 This creates the working tree (`var/{run,audit,ingest/{events,flows,
@@ -86,7 +86,7 @@ azctl bundle import bundle.tar.gz --fingerprint
 
 # Once the operator has verified the fingerprint out of band
 # (courier manifest, second channel, etc.):
-azctl bundle import --root /srv/azazel-grimoire bundle.tar.gz --confirm
+azctl bundle import --root /srv/azazel-knowledge bundle.tar.gz --confirm
 ```
 
 Import verifies signature threshold, per-file hashes, and the

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from azazel_grimoire.normalize.ioc import (
+from azazel_knowledge.normalize.ioc import (
     NormalizationError,
     normalize,
     pack_ipv4_range,

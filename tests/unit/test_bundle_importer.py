@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from azazel_grimoire.bundle.importer import BundleImportError, apply_differential, import_full
-from azazel_grimoire.bundle.rollback_anchor import read_state
-from azazel_grimoire.bundle.verify import BundleVerifyError
-from azazel_grimoire.db import generations
-from azazel_grimoire.db.repository import apply_migrations
+from azazel_knowledge.bundle.importer import BundleImportError, apply_differential, import_full
+from azazel_knowledge.bundle.rollback_anchor import read_state
+from azazel_knowledge.bundle.verify import BundleVerifyError
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.repository import apply_migrations
 
 _TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 
@@ -198,7 +198,7 @@ def test_crash_mid_import_leaves_current_symlink_untouched(env, monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated crash before swap")
 
-    monkeypatch.setattr("azazel_grimoire.bundle.importer.generations.swap_current", _boom)
+    monkeypatch.setattr("azazel_knowledge.bundle.importer.generations.swap_current", _boom)
 
     with pytest.raises(RuntimeError):
         import_full(bundle2, env["anchors_path"], env["state_path"], env["data_db_dir"])
@@ -292,7 +292,7 @@ def test_differential_import_delete_op_removes_row(env):
     delta_lines = [json.dumps({"op": "delete", "row": {"ioc_id": 1}})]
     delta_bytes = ("\n".join(delta_lines) + "\n").encode()
 
-    from azazel_grimoire.bundle.verify import canonical_manifest_bytes
+    from azazel_knowledge.bundle.verify import canonical_manifest_bytes
     import hashlib
 
     manifest["files"]["deltas/ioc.jsonl"] = hashlib.sha256(delta_bytes).hexdigest()

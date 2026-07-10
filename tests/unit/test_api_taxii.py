@@ -55,7 +55,7 @@ def test_discovery_and_api_root_are_static(tmp_path):
     client, settings, local_db_path, _ = make_client(tmp_path)
     resp = client.get("/taxii2/")
     assert resp.status_code == 200
-    assert resp.json()["title"] == "Azazel-Grimoire TAXII 2.1"
+    assert resp.json()["title"] == "Azazel-Knowledge TAXII 2.1"
     root = client.get("/taxii2/api-root")
     assert root.status_code == 200
     assert "application/taxii+json;version=2.1" in root.json()["versions"]

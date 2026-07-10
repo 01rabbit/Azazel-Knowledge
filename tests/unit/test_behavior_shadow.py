@@ -10,16 +10,16 @@ import pytest
 import yaml
 
 from _api_support import add_api_client, auth_header, make_client
-from azazel_grimoire import worker
-from azazel_grimoire.core.clock import FixedClock
-from azazel_grimoire.core.config import ConfigError, TrackedConfigLoader
-from azazel_grimoire.correlate.pipeline import ContextRequest, Entity, run_context
-from azazel_grimoire.db import generations
-from azazel_grimoire.db.behavior import BehaviorPattern, behavior_pattern_id
-from azazel_grimoire.db.repository import Repository, apply_migrations, entity_key
-from azazel_grimoire.db.writer import PrioritySingleWriterQueue
-from azazel_grimoire.patterns.behavior_generate import GenerationPlan, PersistedPattern
-from azazel_grimoire.scoring.behavior_shadow import (
+from azazel_knowledge import worker
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.core.config import ConfigError, TrackedConfigLoader
+from azazel_knowledge.correlate.pipeline import ContextRequest, Entity, run_context
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.behavior import BehaviorPattern, behavior_pattern_id
+from azazel_knowledge.db.repository import Repository, apply_migrations, entity_key
+from azazel_knowledge.db.writer import PrioritySingleWriterQueue
+from azazel_knowledge.patterns.behavior_generate import GenerationPlan, PersistedPattern
+from azazel_knowledge.scoring.behavior_shadow import (
     build_behavioral_shadow_record,
     evaluate_behavioral_shadow,
 )

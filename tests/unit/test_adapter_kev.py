@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from azazel_grimoire.core.clock import FixedClock
-from azazel_grimoire.feeds.adapters.kev import KevAdapter
-from azazel_grimoire.feeds.base import FeedError
+from azazel_knowledge.core.clock import FixedClock
+from azazel_knowledge.feeds.adapters.kev import KevAdapter
+from azazel_knowledge.feeds.base import FeedError
 
 from _feeds_support import make_intel_writer
 

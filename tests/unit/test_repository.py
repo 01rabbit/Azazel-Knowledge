@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from azazel_grimoire.db import generations
-from azazel_grimoire.db.repository import Repository, apply_migrations, entity_key
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.repository import Repository, apply_migrations, entity_key
 
 
 def _make_local_db(path) -> None:

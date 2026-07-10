@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from azazel_grimoire.db import generations
-from azazel_grimoire.db.repository import apply_migrations
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.repository import apply_migrations
 
 
 def test_current_generation_is_none_when_absent(tmp_path):

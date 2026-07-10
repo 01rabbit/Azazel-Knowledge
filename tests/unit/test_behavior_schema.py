@@ -4,15 +4,15 @@ import sqlite3
 
 import pytest
 
-from azazel_grimoire.db.behavior import (
+from azazel_knowledge.db.behavior import (
     BehaviorPattern,
     BehaviorPatternEvidence,
     behavior_pattern_id,
     canonical_behavior_json,
     require_behavior_evidence,
 )
-from azazel_grimoire.db.generations import build_next_generation, swap_current
-from azazel_grimoire.db.repository import Repository, apply_migrations
+from azazel_knowledge.db.generations import build_next_generation, swap_current
+from azazel_knowledge.db.repository import Repository, apply_migrations
 
 
 def _make_local_db(path) -> None:

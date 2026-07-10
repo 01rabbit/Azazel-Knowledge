@@ -26,7 +26,7 @@ from _common import (
     write_json,
 )
 
-from azazel_grimoire.db import generations
+from azazel_knowledge.db import generations
 
 MICROBENCH_READS = 5
 

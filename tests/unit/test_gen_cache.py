@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from azazel_grimoire.core.gen_cache import GenCache
+from azazel_knowledge.core.gen_cache import GenCache
 
 
 def test_put_get_roundtrip_and_hit_counting():

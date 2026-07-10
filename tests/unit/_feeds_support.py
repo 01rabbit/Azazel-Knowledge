@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from azazel_grimoire.db.repository import apply_migrations
-from azazel_grimoire.db.writer import PrioritySingleWriterQueue
+from azazel_knowledge.db.repository import apply_migrations
+from azazel_knowledge.db.writer import PrioritySingleWriterQueue
 
 
 def make_writer(tmp_path: Path, which: str, name: str) -> PrioritySingleWriterQueue:
