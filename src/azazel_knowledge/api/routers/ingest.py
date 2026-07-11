@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from azazel_knowledge.api import limits
 from azazel_knowledge.api.app import AuthContext, read_raw_body, require_scope_dep
+from azazel_knowledge.api.contracts import IngestBatchInvalid, maybe_fabric_batch_lines
 from azazel_knowledge.api.models import IngestAcceptedResponse, IngestStatusResponse
 from azazel_knowledge.ingest.spool import QuotaExceeded, SpoolWriter
 from azazel_knowledge.security.auth import Scope
@@ -44,7 +45,21 @@ def _accept(
             status_code=413, detail={"error": "ingest_batch_too_large"}
         )
 
-    lines = _split_lines(raw_body.decode("utf-8", errors="replace"))
+    # Fabric boundary contract (ADR-0010): a caller that opts into the
+    # canonical `Cti<Kind>Batch` envelope is type-enforced here and fails
+    # closed (422) on an envelope-contract violation. Legacy per-line JSONL
+    # callers get `None` back and take the unchanged fire-and-forget path,
+    # where a malformed *line* is quarantined at drain, never rejected.
+    try:
+        batch_lines = maybe_fabric_batch_lines(raw_body, endpoint)
+    except IngestBatchInvalid:
+        raise HTTPException(
+            status_code=422, detail={"error": "ingest_batch_invalid"}
+        )
+    if batch_lines is not None:
+        lines = batch_lines
+    else:
+        lines = _split_lines(raw_body.decode("utf-8", errors="replace"))
     spool: SpoolWriter = request.app.state.spool
     try:
         batch_id = spool.write_batch(endpoint, auth.key_id, lines)

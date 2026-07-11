@@ -14,7 +14,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-api = ["fastapi", "pydantic", "uvicorn"]
+api = [
+    "fastapi",
+    "pydantic",
+    "uvicorn",
+    # Boundary contract source-of-truth (ADR-0010). api-extra only: imported
+    # solely under azazel_knowledge.api / .taxii for payload validation; never
+    # a core dependency (Absolute Constraint 7). Tag-pinned per Azazel-Fabric
+    # design-principles §6.
+    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.3.0",
+]
 dev = ["pytest", "httpx"]
 
 [tool.setuptools.packages.find]
