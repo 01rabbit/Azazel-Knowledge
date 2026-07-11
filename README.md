@@ -2,7 +2,7 @@
 
 > **Codename:** `GRIMOIRE`
 
-![Azazel-Knowledge Banner](images/Azazel-Knowledge_Banner.svg)
+![Azazel-Knowledge Banner](images/Azazel-Knowledge_Banner.png)
 
 > **Formerly Azazel-CTI.** The formal series name is **Azazel-Knowledge Advisor**
 > (**AZ-04**), ratified 2026-07-10; the `Advisor` Role suffix is used in
