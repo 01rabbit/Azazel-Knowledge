@@ -2,7 +2,8 @@
 
 The design questions resolved (or explicitly deferred) with rationale. ADR-0001
 through 0008 were left open in the initial concept discussion; ADR-0009 records
-the Phase 2 Behavioral CTI lane:
+the Phase 2 Behavioral CTI lane; ADR-0010 ratifies adopting Azazel-Fabric
+`cti_contracts` at the API boundary:
 
 | ADR | Question | Decision |
 |---|---|---|
@@ -15,3 +16,4 @@ the Phase 2 Behavioral CTI lane:
 | [0007](0007-rule-generation.md) | How far to automate rule generation | Advisory drafts with provenance; never auto-deploy |
 | [0008](0008-research-theme.md) | Black Hat research framing | "CTI-optimized delaying defense" friction loop, not "lightweight CTI node" |
 | [0009](0009-behavioral-cti.md) | Phase 2 Behavioral CTI: envelope, tier, authority, ML | Separate additive lane; own `behavior_config_hash`; local-tier rebuildable; advisory-only + shadow-gated; no ML; no AI attribution |
+| [0010](0010-adopt-fabric-cti-contracts.md) | Adopt `azazel_fabric.cti_contracts` at the API boundary? | **Accepted (2026-07-10)** — adopt `azazel-fabric` (tag-pinned v0.3.0) as an `api`-extra-only dependency for boundary payload validation; scope `api/`+`taxii/` only, never `scoring/`/`correlate/`/`core/`; additive, shapes unchanged |

@@ -3,6 +3,18 @@
 REST + JSON over the management segment (ADR-0005). Bearer token required on
 every endpoint; mTLS optional. All requests and responses are logged as JSONL.
 
+Since [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md) this boundary is also
+**type-enforced by `azazel_fabric.cti_contracts` v0.3.0** (tag-pinned,
+`api`-extra only). The enforcement is additive and the wire **shapes below are
+unchanged**: ingest callers may opt into the canonical `Cti<Kind>Batch`
+envelope and have it validated (see *Ingest*), and every `/v1/context` response
+is checked against Fabric's `BANNED_DIRECTIVE_FIELDS` before it is emitted —
+a directive-shaped field (`directive`/`must_execute`/`override`/
+`required_action`) fails the request closed with `500
+advisory_invariant_violation` and the response is never sent. The check runs on
+a copy and never re-serializes the response, so byte-identical replay is
+preserved.
+
 ## Query discipline — protect the Edge hot path
 
 Azazel-Edge does **not** query per packet. Synchronous queries are limited to
@@ -163,6 +175,17 @@ identified", or "autonomous intrusion proven"; preferred wording is
 Responses are `202 Accepted` with a batch id; validation problems are
 reported in logs and a `GET /v1/ingest/{batch_id}` status, never by
 rejecting the whole batch mid-operation.
+
+**Fabric batch envelope (ADR-0010, additive).** The line-oriented JSONL
+contract above is unchanged: a malformed **line** is still quarantined at
+drain, never rejecting the batch. A caller may instead POST a single canonical
+`Cti<Kind>Batch` envelope (`batch_id`, `source_product` ∈ `{edge, gadget}`,
+`source_device_id`, `generated_at`, `items[]`); it is type-enforced against
+`azazel_fabric.cti_contracts` and its `items` are flattened into the same JSONL
+the drain path consumes. An **envelope-level** contract violation (bad
+`source_product`, missing required field) fails closed with `422
+ingest_batch_invalid` — this is a client contract error, distinct from an
+item-level data problem, which is still quarantined rather than rejected.
 
 ### `POST /v1/reactions` payload (Phase 2 additions)
 

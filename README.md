@@ -127,32 +127,23 @@ Research framing: **"How does CTI optimize delaying defense?"** — not
 
 ## Azazel series context
 
-The Azazel family, as currently assigned:
+Azazel-Knowledge (**AZ-04**, codename `GRIMOIRE`; formerly Azazel-CTI — formal
+series name **Azazel-Knowledge Advisor**, ratified in
+[ADR-0001](docs/adr/0001-repository-naming.md)) is one product of the
+**Azazel** series ("Cyber Scapegoat Gateway"). The series map, AZ
+designations, and naming specification live in the umbrella repository:
+[01rabbit/Azazel](https://github.com/01rabbit/Azazel).
 
-- **[Azazel](https://01rabbit.github.io/Azazel/)** — the umbrella doctrine
-  hub and GitHub Pages site (Apache-2.0).
-- **Azazel-Edge (AZ-01)** — resident edge-class gateway (Pi 5), MIT. Pairs
-  with this repo as described above.
-- **Azazel-Gadget (AZ-02)** — USB-gadget-class portable device, MIT. No CTI
-  integration is planned.
-- **Azazel-Boot (AZ-03)** — reserved; no repository yet.
-- **Azazel-Knowledge (AZ-04)** (this repository, formerly Azazel-CTI) — formal
-  series name `Azazel-Knowledge Advisor`; see
-  [ADR-0001](docs/adr/0001-repository-naming.md) above. AZ-xx now denotes series
-  accession order, no longer appliance-only.
-- **[Azazel-Fabric (AZ-05)](https://github.com/01rabbit/Azazel-Fabric)**
-  (formerly Azazel-Common) — a shared contracts library for the series
-  (distribution name `azazel-fabric`, installed via pinned git tag;
-  `azazel_fabric` package from its v0.3.0, pydantic v2 as its sole
-  dependency). Its `cti_contracts` module type-enforces the same advisory-only
-  invariant this repo's [API contract](docs/api.md) defines — directive-shaped
-  fields such as `directive`/`must_execute`/`override`/`required_action` are
-  rejected by its validators — and Azazel-Gadget already consumes it. **This
-  repository does not depend on Azazel-Fabric today.** Its `cti_contracts`
-  shapes mirror this repo's `/v1/context` boundary but were developed
-  independently; evaluating adoption is future work that would require a
-  `pyproject.toml` change and a new ADR under this repo's
-  dependency-minimality constraint. No commitment either way exists yet.
+Knowledge-local integration note: this repository adopts
+[`azazel_fabric.cti_contracts`](https://github.com/01rabbit/Azazel-Fabric)
+v0.3.0 at its API boundary
+([ADR-0010](docs/adr/0010-adopt-fabric-cti-contracts.md)) — ingest can be
+type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
+`/v1/context` response is checked against Fabric's directive-field validator
+before it is emitted (fail-closed). The adoption is additive, wire shapes are
+unchanged, and **there is still no core dependency**: Fabric is imported only
+under `azazel_knowledge.api`; the core dependency set (stdlib + PyYAML + idna
++ PyNaCl) is untouched, per this repo's dependency-minimality constraint.
 
 ## Documentation
 

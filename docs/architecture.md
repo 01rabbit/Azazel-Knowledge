@@ -19,11 +19,16 @@ Azazel-Common) is the Azazel series' shared contracts library (`azazel_fabric`
 from its v0.3.0, pydantic v2 as its sole dependency). Its `cti_contracts` module
 independently defines request and response shapes for a boundary matching this
 repo's `/v1/context` above, and encodes the same advisory-only invariant at the
-type level. Azazel-Fabric is
-maintained independently of this repository and is not a dependency here;
-the two contract shapes are conceptually aligned but not contractually
-linked today, and any alignment or adoption remains aspirational until
-ratified by an ADR (see [`docs/adr/`](adr/)).
+type level. As of [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md) (ratified
+2026-07-10) this repository **adopts** `azazel_fabric.cti_contracts` v0.3.0 at
+the API boundary, tag-pinned as an `api`-extra-only dependency. The adoption is
+additive and the documented wire shapes are unchanged: ingest can now be
+type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
+`/v1/context` response is checked against Fabric's `BANNED_DIRECTIVE_FIELDS`
+before it is emitted. `azazel_fabric` is imported only under
+`azazel_knowledge.api`/`taxii` — never in `scoring/`, `correlate/`, or
+`core/`, whose dependency set is unchanged (Absolute Constraint 7). What was
+"aspirational until ratified by an ADR" is now ratified.
 
 ## Aegis-like framing (Phase 2, doctrine unchanged)
 

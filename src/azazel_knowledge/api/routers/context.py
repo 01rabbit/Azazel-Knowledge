@@ -21,6 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from azazel_knowledge.api import limits
 from azazel_knowledge.api.app import AuthContext, ensure_warm_cache, read_raw_body, require_scope_dep
+from azazel_knowledge.api.contracts import (
+    AdvisoryInvariantViolation,
+    assert_response_advisory_only,
+)
 from azazel_knowledge.api.models import ContextApiRequest, ContextResponse
 from azazel_knowledge.audit.logger import AuditUnavailable
 from azazel_knowledge.core.clock import to_rfc3339
@@ -127,6 +131,27 @@ def post_context(
         state.spool.write_batch("advisory", auth.key_id, [line])
     except QuotaExceeded:
         pass
+
+    # Fabric advisory-only invariant (ADR-0010): assert the assembled advisory
+    # carries no directive-shaped field, on a COPY built from pipeline output.
+    # Fail closed (500) rather than ever emit a directive-shaped response; the
+    # original bytes below are untouched, so byte-identical replay is preserved
+    # (this check never re-serializes the response).
+    advisory_view = {
+        "threat_context": result.threat_context,
+        "recommendation": result.recommendation,
+        "multi_ioc_scope": result.multi_ioc_scope,
+        "reason": list(result.reason),
+        "confidence_reason": list(result.confidence_reason),
+        "source_freshness": result.source_freshness,
+        "advisory_notice": result.advisory_notice,
+    }
+    try:
+        assert_response_advisory_only(advisory_view)
+    except AdvisoryInvariantViolation:
+        raise HTTPException(
+            status_code=500, detail={"error": "advisory_invariant_violation"}
+        )
 
     return ContextResponse(
         threat_context=result.threat_context,
