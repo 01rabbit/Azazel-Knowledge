@@ -14,17 +14,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Major-version ceilings on api/dev extras keep clean installs and CI
+# reproducible against surprise breaking majors. Constraints only — no new
+# dependency added (Absolute Constraint 7 unaffected; no ADR needed). Core
+# deps (PyYAML/idna/PyNaCl) are left unbounded on purpose. Rationale and the
+# audited resolved versions: docs/reports/dependency-audit-2026-08.md (P3).
 api = [
-    "fastapi",
-    "pydantic",
-    "uvicorn",
+    "fastapi>=0.115,<1",
+    "pydantic>=2,<3",
+    "uvicorn>=0.30,<1",
     # Boundary contract source-of-truth (ADR-0010). api-extra only: imported
     # solely under azazel_knowledge.api / .taxii for payload validation; never
     # a core dependency (Absolute Constraint 7). Tag-pinned per Azazel-Fabric
     # design-principles §6.
     "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.3.0",
 ]
-dev = ["pytest", "httpx"]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
