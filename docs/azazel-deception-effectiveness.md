@@ -1,0 +1,62 @@
+# AZ-06 Azazel-Deception Effectiveness Analysis
+
+Repository: https://github.com/01rabbit/Azazel-Deception
+Tracker: https://github.com/01rabbit/Azazel-Knowledge/issues/58
+Parent effectiveness work: https://github.com/01rabbit/Azazel-Knowledge/issues/52
+
+## Role
+
+Azazel-Knowledge consumes measured outcomes from AZ-06 and converts them into deterministic, evidence-backed advisory context. Knowledge never activates a deception package, selects a host or tier, approves a transition, schedules a persona, or commands Edge/AZ-06.
+
+## Evidence loop
+
+```text
+Edge approves bounded activation/transition
+  -> AZ-06 materializes environment
+  -> interactions + runtime context + outcomes are recorded
+  -> Knowledge correlates behavior and prior outcomes
+  -> advisory-only context is returned
+  -> Edge independently decides
+```
+
+## Required AZ-06 context
+
+Where available through canonical Fabric contracts, retain:
+
+- package / narrative / environment / state IDs
+- package/image digest, signer, provenance, SBOM refs
+- Edge selected/rejected decision refs
+- active surfaces and transition history
+- artifact and decoy-credential interaction
+- behavior/reaction observations
+- selected deployment tier
+- architecture and runtime-adapter class/version
+- anonymized node/capability class
+- active and explicitly omitted optional components
+- resource saturation, capability drift, runtime failure
+- termination, evidence-finalization, reset, and credential-invalidation outcomes
+
+## Analysis rule
+
+Narrative effectiveness must be separated from runtime and capacity effects.
+
+Do not compare `lite`, `standard`, and `heavy` outcomes as equivalent unless exposed components and budgets are controlled. Early disengagement or missing interaction may be caused by omitted optional surfaces, saturation, runtime degradation, or capability mismatch rather than narrative quality.
+
+Package identity remains portable across ARM64 and AMD64, while architecture/runtime context remains evidence for reproducibility.
+
+## Claim boundary
+
+Use these terms:
+
+- observed interaction
+- observed reaction
+- measured outcome
+- runtime/context confounder
+- suggested posture
+- unknown / insufficient evidence
+
+Interaction with a lure does not by itself prove that the attacker believed the deception. LLM availability is preparation metadata only and does not imply that an LLM participated in live execution.
+
+## Advisory boundary
+
+Knowledge may suggest bounded posture/profile classes with reasons, confidence, prior outcomes, and counter-evidence. It must not emit executable container commands, firewall rules, host/tier placement instructions, transition approvals, or hidden directive fields.
