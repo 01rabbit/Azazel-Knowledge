@@ -72,7 +72,12 @@ from azazel_knowledge.reactions import linkage
 from azazel_knowledge.scoring.confidence import noisy_or
 
 ADVISORY_ENDPOINT = "advisory"
-INGEST_ENDPOINTS: tuple[str, ...] = ("events", "flows", "reactions")
+INGEST_ENDPOINTS: tuple[str, ...] = (
+    "events",
+    "flows",
+    "reactions",
+    "deception-observations",
+)
 
 ADVISORY_LOG_FIELDS: tuple[str, ...] = (
     "advisory_id",

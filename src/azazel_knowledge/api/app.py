@@ -260,7 +260,14 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
 
     app.add_middleware(AuditMiddleware)
 
-    from azazel_knowledge.api.routers import admin, context, ingest, lookup, reads
+    from azazel_knowledge.api.routers import (
+        admin,
+        context,
+        deception,
+        ingest,
+        lookup,
+        reads,
+    )
     from azazel_knowledge.taxii import inbox as taxii_inbox
 
     app.include_router(ingest.router)
@@ -268,6 +275,7 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
     app.include_router(context.router)
     app.include_router(reads.router)
     app.include_router(admin.router)
+    app.include_router(deception.router)
     app.include_router(taxii_inbox.router)
 
     if eager_runtime and settings.config_dir.is_dir():

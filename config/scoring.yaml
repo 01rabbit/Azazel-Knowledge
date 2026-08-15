@@ -104,3 +104,32 @@ research:
       mode: shadow
       max_delta: 30
       max_total_delta: 20
+
+# AZ-06 deception-effectiveness advisory (ADR-0011, docs/azazel-deception-
+# effectiveness.md). Deterministic inputs only: the advisory is a pure function
+# of the stored deception_observation rows + these numbers + query_as_of, so the
+# same 7-tuple replays byte-identically. Not weight-sum-validated (that check is
+# only for top-level `weights`/`confidence_weights`); the whole file still folds
+# into config_hash, so any edit here is visible in the determinism tuple.
+deception_effectiveness:
+  version: 1
+  confidence:
+    base: 0.0
+    per_observation: 0.05          # linear bonus per stored observation ...
+    max_observation_bonus: 0.4     # ... saturating here
+    ladder_layer_bonus: 0.2        # per honesty-ladder layer present (interaction/reaction/outcome)
+    confounder_penalty: 0.15       # per DISTINCT confounder tag observed
+    floor: 0.0
+    ceil: 1.0
+    round_ndigits: 6
+  # Below this observation count the advisory reports insufficient evidence.
+  insufficient_evidence_min_observations: 3
+  # Runtime/context confounders that MUST be surfaced as counter-evidence and
+  # subtracted before any effectiveness is claimed (narrative vs capacity).
+  counter_evidence_confounders:
+    - scanner_noise
+    - internal_health_check
+    - host_capacity
+  # resource saturation at/above this fraction is a capacity confounder, not a
+  # narrative signal (early disengagement may be saturation-driven).
+  saturation_confounder_threshold: 0.85

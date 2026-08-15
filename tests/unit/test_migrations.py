@@ -39,6 +39,7 @@ LOCAL_TABLES = {
     "behavior_pattern_evidence",
     "behavior_pattern_similarity",
     "behavior_meta",
+    "deception_observation",
 }
 
 
@@ -65,7 +66,12 @@ def test_intel_migrations_idempotent(tmp_path):
 def test_local_migrations_apply_cleanly(tmp_path):
     conn = sqlite3.connect(tmp_path / "local.db")
     applied = apply_migrations(conn, "local")
-    assert applied == ["0001_init", "0002_behavior", "0003_reaction_ext"]
+    assert applied == [
+        "0001_init",
+        "0002_behavior",
+        "0003_reaction_ext",
+        "0004_deception_observation",
+    ]
     tables = _table_names(conn)
     assert LOCAL_TABLES <= tables
 
