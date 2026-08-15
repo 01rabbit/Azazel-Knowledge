@@ -235,5 +235,6 @@ def test_local_migration_0003_is_idempotent(tmp_path):
         "0001_init",
         "0002_behavior",
         "0003_reaction_ext",
+        "0004_deception_observation",
     ]
     assert apply_migrations(conn, "local") == []

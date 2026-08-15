@@ -22,6 +22,84 @@ from azazel_knowledge.normalize.ioc import NormalizationError, normalize
 MAX_LINE_BYTES = 64 * 1024
 MAX_SKEW = timedelta(hours=48)
 
+# Untrusted-string bound for AZ-06 deception observations. Every string field
+# on an InteractionObservation is attacker-influenceable (lure ids, evidence
+# refs, metadata values are authored inside a live decoy). They are treated as
+# opaque data -- never evaluated/executed -- and length-bounded so a single
+# oversized field cannot bloat a row (the whole line is also capped at
+# MAX_LINE_BYTES). See docs/azazel-deception-effectiveness.md (claim boundary).
+MAX_OBS_STR_BYTES = 4096
+MAX_OBS_LIST_LEN = 256
+
+# Mirror of azazel_fabric.deception_contracts honesty-ladder enums. Fabric is
+# import-confined to api/contracts.py (ADR-0010/0011); this framework-free drain
+# validator therefore mirrors the closed sets structurally, exactly as
+# validate_event_line/validate_reaction_line mirror the Cti* shapes without
+# importing Fabric.
+OBSERVATION_CLASS_ENUM = frozenset({"interaction", "reaction", "outcome"})
+INTERACTION_SURFACE_ENUM = frozenset(
+    {
+        "service",
+        "port",
+        "file",
+        "document",
+        "credential_lure",
+        "config_breadcrumb",
+        "service_history",
+        "persona_artifact",
+        "unknown",
+    }
+)
+REACTION_KIND_ENUM = frozenset(
+    {
+        "read",
+        "enumerate",
+        "authenticate",
+        "lateral_move",
+        "exfiltrate",
+        "modify",
+        "execute",
+        "escalate",
+        "unknown",
+    }
+)
+CONFOUNDER_TAG_ENUM = frozenset(
+    {
+        "scanner_noise",
+        "internal_health_check",
+        "heartbeat_traffic",
+        "host_capacity",
+        "architecture_context",
+        "replayed_traffic",
+        "unknown",
+    }
+)
+OBS_ARCHITECTURE_ENUM = frozenset({"arm64", "amd64"})
+OBS_RUNTIME_ADAPTER_ENUM = frozenset(
+    {"docker_compose", "podman", "kvm_libvirt", "k3s"}
+)
+
+# Mirror of azazel_fabric.deception_contracts.validation.BANNED_EFFECTIVENESS_
+# VERDICT_FIELDS. A fact-only observation must never carry a belief/verdict/
+# effectiveness field -- that is a layer-4 inference (Knowledge's advisory
+# output), not an observed fact (interaction does not prove attacker belief).
+BANNED_OBS_VERDICT_FIELDS = frozenset(
+    {
+        "attacker_believed",
+        "believed",
+        "belief",
+        "belief_score",
+        "deceived",
+        "fooled",
+        "convinced",
+        "is_effective",
+        "effective",
+        "effectiveness_score",
+        "success_score",
+        "confidence",
+    }
+)
+
 ALLOWED_EVENT_KINDS = frozenset(
     {"eve_alert", "dns", "http", "ja3", "ja4", "canary_hit"}
 )
@@ -392,3 +470,253 @@ def validate_reaction_line(line: str, *, now: datetime) -> Result:
         "timeout_adaptation": timeout_adaptation,
         "payload_ext": payload_ext,
     }
+
+
+def _bounded_str(
+    obj: Mapping[str, Any], name: str, *, required: bool
+) -> tuple[str | None, str | None]:
+    value = obj.get(name)
+    if value is None:
+        if required:
+            return None, f"missing field: {name}"
+        return None, None
+    if not isinstance(value, str) or (required and not value.strip()):
+        return None, f"invalid field: {name}"
+    if len(value.encode("utf-8")) > MAX_OBS_STR_BYTES:
+        return None, f"{name} exceeds {MAX_OBS_STR_BYTES} bytes"
+    return value, None
+
+
+def _bounded_str_list(
+    obj: Mapping[str, Any], name: str
+) -> tuple[list[str], str | None]:
+    value = obj.get(name)
+    if value is None:
+        return [], None
+    if not isinstance(value, list):
+        return [], f"{name} must be a list when present"
+    if len(value) > MAX_OBS_LIST_LEN:
+        return [], f"{name} exceeds {MAX_OBS_LIST_LEN} entries"
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return [], f"{name} entries must be strings"
+        if len(item.encode("utf-8")) > MAX_OBS_STR_BYTES:
+            return [], f"{name} entry exceeds {MAX_OBS_STR_BYTES} bytes"
+        out.append(item)
+    return out, None
+
+
+def _enum_list(
+    obj: Mapping[str, Any], name: str, allowed: frozenset[str]
+) -> tuple[list[str], str | None]:
+    values, error = _bounded_str_list(obj, name)
+    if error:
+        return [], error
+    for item in values:
+        if item not in allowed:
+            return [], f"unknown {name} value: {item!r}"
+    return values, None
+
+
+def _validate_runtime_context(
+    value: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Structural mirror of Fabric RuntimeContext (descriptive, no directives)."""
+    if value is None:
+        return None, None
+    if not isinstance(value, Mapping):
+        return None, "runtime_context must be an object when present"
+    tier = value.get("selected_tier")
+    if not isinstance(tier, str) or not tier.strip():
+        return None, "runtime_context.selected_tier is required"
+    if len(tier.encode("utf-8")) > MAX_OBS_STR_BYTES:
+        return None, "runtime_context.selected_tier too long"
+    arch = value.get("architecture")
+    if arch not in OBS_ARCHITECTURE_ENUM:
+        return None, f"runtime_context.architecture invalid: {arch!r}"
+    adapter = value.get("runtime_adapter")
+    if adapter not in OBS_RUNTIME_ADAPTER_ENUM:
+        return None, f"runtime_context.runtime_adapter invalid: {adapter!r}"
+
+    out: dict[str, Any] = {
+        "selected_tier": tier,
+        "architecture": arch,
+        "runtime_adapter": adapter,
+    }
+    for list_field in ("active_components", "omitted_components", "capability_drift"):
+        items, error = _enum_list_free(value, list_field)
+        if error:
+            return None, f"runtime_context.{error}"
+        out[list_field] = items
+
+    saturation = value.get("resource_saturation")
+    if saturation is not None:
+        if not isinstance(saturation, Mapping):
+            return None, "runtime_context.resource_saturation must be an object"
+        parsed_sat: dict[str, float] = {}
+        for key, frac in saturation.items():
+            if not isinstance(key, str) or isinstance(frac, bool) or not isinstance(frac, (int, float)):
+                return None, "runtime_context.resource_saturation must map str->number"
+            parsed_sat[key] = float(frac)
+        out["resource_saturation"] = parsed_sat
+    else:
+        out["resource_saturation"] = None
+    return out, None
+
+
+def _enum_list_free(obj: Mapping[str, Any], name: str) -> tuple[list[str], str | None]:
+    values, error = _bounded_str_list(obj, name)
+    if error:
+        return [], f"{name}: {error}"
+    return values, None
+
+
+def _extract_linkage(obj: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Pull edge_id/actor_key linkage from metadata (Edge-stamped, optional).
+
+    Returns (edge_id, actor_key, error). Never synthesised: absent -> None.
+    """
+    metadata = obj.get("metadata")
+    if metadata is None:
+        return None, None, None
+    if not isinstance(metadata, Mapping):
+        return None, None, "metadata must be an object when present"
+    edge_id = metadata.get("edge_id")
+    actor_key = metadata.get("actor_key")
+    for label, candidate in (("edge_id", edge_id), ("actor_key", actor_key)):
+        if candidate is not None and (
+            not isinstance(candidate, str)
+            or len(candidate.encode("utf-8")) > MAX_OBS_STR_BYTES
+        ):
+            return None, None, f"metadata.{label} must be a bounded string"
+    return (
+        edge_id if isinstance(edge_id, str) and edge_id.strip() else None,
+        actor_key if isinstance(actor_key, str) and actor_key.strip() else None,
+        None,
+    )
+
+
+def validate_deception_observation_line(line: str, *, now: datetime) -> Result:
+    """Validate one AZ-06 InteractionObservation JSONL line (design F-1, ADR-0011).
+
+    Framework-free structural mirror of Fabric InteractionObservation. Every
+    string field is untrusted attacker-authored content: it is length-bounded
+    and stored as opaque data, never evaluated or executed. Fact-only honesty
+    is enforced -- a belief/verdict/effectiveness field anywhere in the line is
+    rejected (interaction does not prove attacker belief; that is layer-4).
+    A bad line is quarantined at drain, never failing the batch (design S4).
+    """
+    size_error = _check_size(line)
+    if size_error:
+        return False, size_error
+    try:
+        obj = _parse_object(line)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return False, f"invalid json: {exc}"
+
+    # Honesty invariant: no belief/verdict/effectiveness field, anywhere.
+    if _contains_banned_verdict(obj):
+        return False, (
+            "belief/verdict/effectiveness field not permitted on a fact-only "
+            "observation (interaction does not prove attacker belief)"
+        )
+
+    authority = obj.get("authority")
+    if authority is not None and authority != "descriptive_only":
+        return False, "authority must be 'descriptive_only' when present"
+
+    observation_uid, error = _bounded_str(obj, "observation_id", required=True)
+    if error:
+        return False, error
+    environment_id, error = _bounded_str(obj, "environment_id", required=True)
+    if error:
+        return False, error
+    package_id, error = _bounded_str(obj, "package_id", required=True)
+    if error:
+        return False, error
+    node_id, error = _bounded_str(obj, "node_id", required=True)
+    if error:
+        return False, error
+
+    observed_at, error = _parse_and_check_skew(obj.get("observed_at"), now=now)
+    if error:
+        return False, error
+
+    observation_class = obj.get("observation_class")
+    if observation_class not in OBSERVATION_CLASS_ENUM:
+        return False, f"unknown observation_class: {observation_class!r}"
+    surface = obj.get("surface")
+    if surface not in INTERACTION_SURFACE_ENUM:
+        return False, f"unknown surface: {surface!r}"
+
+    reaction_kind = obj.get("reaction_kind")
+    if reaction_kind is not None:
+        if reaction_kind not in REACTION_KIND_ENUM:
+            return False, f"unknown reaction_kind: {reaction_kind!r}"
+        # Fabric model invariant: pure interaction is contact-only.
+        if observation_class == "interaction":
+            return False, (
+                "observation_class 'interaction' cannot carry a reaction_kind"
+            )
+
+    lure_id, error = _bounded_str(obj, "lure_id", required=False)
+    if error:
+        return False, error
+
+    latencies: dict[str, int | None] = {}
+    for name in ("first_contact_latency_ms", "dwell_ms", "attempt_count"):
+        value, error = _optional_nonnegative_int(obj, name)
+        if error:
+            return False, error
+        latencies[name] = value
+
+    confounder_tags, error = _enum_list(obj, "confounder_tags", CONFOUNDER_TAG_ENUM)
+    if error:
+        return False, error
+
+    runtime_context, error = _validate_runtime_context(obj.get("runtime_context"))
+    if error:
+        return False, error
+
+    evidence_refs, error = _bounded_str_list(obj, "evidence_refs")
+    if error:
+        return False, error
+
+    edge_id, actor_key, error = _extract_linkage(obj)
+    if error:
+        return False, error
+
+    return True, {
+        "observation_uid": observation_uid,
+        "environment_id": environment_id,
+        "package_id": package_id,
+        "node_id": node_id,
+        "edge_id": edge_id,
+        "actor_key": actor_key,
+        "observed_at": to_rfc3339(observed_at),
+        "observation_class": observation_class,
+        "surface": surface,
+        "reaction_kind": reaction_kind,
+        "lure_id": lure_id,
+        "first_contact_latency_ms": latencies["first_contact_latency_ms"],
+        "dwell_ms": latencies["dwell_ms"],
+        "attempt_count": latencies["attempt_count"],
+        "confounder_tags": confounder_tags,
+        "runtime_context": runtime_context,
+        "evidence_refs": evidence_refs,
+        "raw": dict(obj),
+    }
+
+
+def _contains_banned_verdict(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if str(key) in BANNED_OBS_VERDICT_FIELDS:
+                return True
+            if _contains_banned_verdict(nested):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_contains_banned_verdict(item) for item in value)
+    return False

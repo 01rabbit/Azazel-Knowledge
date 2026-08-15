@@ -170,6 +170,7 @@ identified", or "autonomous intrusion proven"; preferred wording is
 | `POST /v1/events` | JSONL batch: EVE alerts, DNS, HTTP metadata, JA3/JA4, canary hits |
 | `POST /v1/flows` | JSONL batch: flow records |
 | `POST /v1/reactions` | delay history: action applied + observed attacker reaction |
+| `POST /v1/deception-observations` | AZ-06 fact-only deception observations (Fabric `InteractionObservation`; ADR-0011) |
 | TAXII 2.1 inbox | STIX bundles from the existing Azazel-Edge push client (#248) |
 
 Responses are `202 Accepted` with a batch id; validation problems are
@@ -239,6 +240,78 @@ excluded from behavioral-pattern generation until resolvable — they are never
 a reason to reject the record. A malformed line is **quarantined** into the
 batch's `invalid[]` status (`GET /v1/ingest/{batch_id}`), never causing the
 whole batch to be rejected. All timestamps are normalized to UTC on ingest.
+
+### `POST /v1/deception-observations` (AZ-06, ADR-0011)
+
+Fire-and-forget ingest of AZ-06 **fact-only** deception observations (Fabric
+`InteractionObservation`: honesty ladder layers 1–3 — interaction / reaction /
+outcome — plus `RuntimeContext` and `confounder_tags`). Same INGEST
+scope/auth, same fire-and-forget contract as the endpoints above: `202` with a
+batch id, `413` on the batch byte cap, `503` on spool quota, and a malformed
+**line** quarantined at drain (`GET /v1/ingest/{batch_id}` `invalid[]`), never
+failing the batch. Legacy per-line JSONL is untouched.
+
+A caller may instead POST the batch **envelope** `{ "environment_id": ...,
+"items": [ ...InteractionObservation... ] }`; each item is type-enforced against
+Fabric `InteractionObservation` **and** the fact-only honesty invariant
+(`assert_no_effectiveness_verdict`) at the boundary, failing closed `422
+ingest_batch_invalid` on any violation. Its `items` are flattened into the JSONL
+the drain path consumes. Every string field is untrusted attacker-authored
+content: length-bounded, stored as opaque data, never evaluated. A
+belief/verdict/effectiveness field anywhere in an observation is rejected —
+interaction does not prove attacker belief (that is a layer-4 inference, the
+advisory's job). Observations are stored INSERT-only in the immutable
+`deception_observation` table (F-1); `edge_id`/`actor_key` linkage is taken from
+the observation `metadata` when Edge stamps it, else `NULL`.
+
+Example item:
+
+```json
+{
+  "observation_id": "obs-9a1",
+  "environment_id": "env-1",
+  "package_id": "pkg-1",
+  "node_id": "node-1",
+  "observed_at": "2026-08-15T00:00:00Z",
+  "observation_class": "reaction",
+  "surface": "credential_lure",
+  "reaction_kind": "authenticate",
+  "lure_id": "cred-7",
+  "dwell_ms": 1200,
+  "attempt_count": 3,
+  "confounder_tags": ["scanner_noise"],
+  "runtime_context": {
+    "selected_tier": "lite",
+    "architecture": "arm64",
+    "runtime_adapter": "docker_compose",
+    "omitted_components": ["db-decoy"],
+    "resource_saturation": {"cpu": 0.9}
+  },
+  "evidence_refs": ["ev-1"],
+  "metadata": {"edge_id": "edge-pi4-07", "actor_key": "ip:203.0.113.9"}
+}
+```
+
+### `GET /v1/deception-effectiveness` (AZ-06 advisory, ADR-0011)
+
+Read-only (`Scope.READ`) deterministic effectiveness advisory for one
+environment. Query params: `environment_id` (required), `package_id` (optional
+filter). Returns a Fabric `EffectivenessAdvisory` — `advisory_only`,
+`executable: false`, carrying `assessment`, `confidence` ∈ [0,1],
+`counter_evidence[]`, `observation_refs[]`, and `unknowns[]`. It is a pure
+function of the stored `deception_observation` rows, the
+`deception_effectiveness` scoring block, `config_hash`, and `query_as_of`
+(pinned once at handler entry): the same 7-tuple replays byte-identically.
+
+The advisory enforces the effectiveness boundary
+(`docs/azazel-deception-effectiveness.md`): narrative effectiveness is separated
+from runtime/capacity effects (omitted components and saturation are
+`counter_evidence`, never narrative failure), attacker belief is never claimed
+from interaction (always an `unknown`), and only claim-boundary vocabulary is
+used. Fails closed: `503 context_timeout` on the monotonic deadline (F-12),
+`503 audit_unavailable` on an audit-chain append failure (F-17). The response
+passes `assert_response_advisory_only` — no executable/directive/verdict field.
+
 `reaction` rows stay INSERT-only/immutable — Phase 2 adds nullable columns
 via migration, it does not add triggers that would allow UPDATE/DELETE.
 

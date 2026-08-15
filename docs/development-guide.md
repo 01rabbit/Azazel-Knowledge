@@ -76,6 +76,55 @@ PYTHONPATH=~/path/to/Azazel-Knowledge/src python ~/path/to/Azazel-Knowledge/azct
 cd -
 ```
 
+### Dev run — E2E harness(app + worker、AZ-06 deception-effectiveness / ADR-0011)
+
+virtual E2E で Deception→Edge→Knowledge を localhost で噛み合わせる際の最小起動手順。
+`api` extra(fastapi/uvicorn/pydantic/azazel-fabric)を入れた venv 前提。Fabric の
+`v0.6.0` タグは未公開なので、開発中は editable の Fabric を使う:
+
+```bash
+pip install -e /home/user/Azazel-Fabric        # 0.6.0(タグ未公開のため editable)
+pip install -e '.[dev]' fastapi pydantic uvicorn httpx
+
+# 1) ノードを provision(local.db + intel gen-1 + 署名鍵 + admin client)
+ROOT=/tmp/az-dev-root
+python azctl provision --root "$ROOT"
+export AZAZEL_ROOT="$ROOT" AZAZEL_CONFIG_DIR="$PWD/config"
+
+# 2) ingest+read スコープの client トークンを発行(1回だけ表示される)
+python azctl client add --root "$ROOT" --key-id edge1 --scopes ingest,read
+TOK=azcti_edge1_...        # 上で表示された token を控える
+
+# 3) API を起動(別ターミナル)。ハンドラは sync def → uvicorn の threadpool へ
+python -m uvicorn azazel_knowledge.api.app:app --host 127.0.0.1 --port 8099
+
+# 4) worker を起動(別ターミナル)。単一ライタ。--once で1サイクル、無指定で常駐
+python -m azazel_knowledge.worker --root "$ROOT" --config-dir "$AZAZEL_CONFIG_DIR"
+#   （バッチ投入のたびに drain したいだけなら `--once` を都度実行でもよい）
+```
+
+サンプル: InteractionObservation バッチを POST → worker が drain → advisory を GET。
+
+```bash
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+curl -s -X POST http://127.0.0.1:8099/v1/deception-observations \
+  -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"environment_id":"env-1","items":[
+        {"observation_id":"o1","environment_id":"env-1","package_id":"pkg-1","node_id":"node-1","observed_at":"'"$TS"'","observation_class":"interaction","surface":"service"},
+        {"observation_id":"o2","environment_id":"env-1","package_id":"pkg-1","node_id":"node-1","observed_at":"'"$TS"'","observation_class":"reaction","surface":"credential_lure","reaction_kind":"authenticate","confounder_tags":["scanner_noise"]},
+        {"observation_id":"o3","environment_id":"env-1","package_id":"pkg-1","node_id":"node-1","observed_at":"'"$TS"'","observation_class":"outcome","surface":"file","reaction_kind":"exfiltrate"}
+      ]}'
+# → 202 {"batch_id": "..."}   （fire-and-forget: 受理時に中身は検証しない）
+
+# worker が P1 で drain した後（常駐なら数秒、--once なら実行後):
+curl -s "http://127.0.0.1:8099/v1/deception-effectiveness?environment_id=env-1" \
+  -H "Authorization: Bearer $TOK" | python -m json.tool
+# → EffectivenessAdvisory(advisory_only / executable:false / confidence / counter_evidence / unknowns)
+```
+
+同一入力なら advisory はバイト同一(F-2 リプレイ規律)。timeout は `503 context_timeout`、
+監査チェーン書込失敗は `503 audit_unavailable` でフェイルクローズド(F-12/F-17)。
+
 ### VS Code セットアップ
 
 ```bash

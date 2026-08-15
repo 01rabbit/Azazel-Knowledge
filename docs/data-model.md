@@ -251,6 +251,44 @@ future unknown optional fields. This keeps `reaction` queryable where needed
 without sacrificing auditability or forward compatibility. `reaction`
 remains INSERT-only and immutable after these additions.
 
+## Deception effectiveness (AZ-06, ADR-0011)
+
+### deception_observation — `local.db`, F-1 immutable
+
+First-class store of AZ-06 **fact-only** deception observations (Fabric
+`InteractionObservation`: honesty ladder layers 1–3). Created by migration
+`db/migrations/local/0004_deception_observation.sql`, INSERT-only with
+`BEFORE UPDATE`/`BEFORE DELETE` triggers rejecting mutation exactly like
+`reaction`/`observation` (F-1). Idempotent replay via `observation_uid UNIQUE`
++ `INSERT OR IGNORE`; **rows never decrease across imports**. It stores the
+honesty-ladder **facts only** — there is deliberately **no** belief / verdict /
+effectiveness column, because interaction does not prove attacker belief
+(Azazel-Deception#6, Azazel-Knowledge#58); that layer-4 inference lives only in
+the advisory **output** (`EffectivenessAdvisory`), never in this table.
+
+| Column | Notes |
+|---|---|
+| observation_uid | Fabric `observation_id`; UNIQUE idempotency/dedupe key |
+| environment_id, package_id, node_id | AZ-06 environment / package / node identity |
+| edge_id, actor_key | linkage into the reaction/observation model; Edge-stamped in observation `metadata` when available, else `NULL` (never synthesised) |
+| observed_at | UTC |
+| observation_class | `interaction`, `reaction`, `outcome` (layers 1–3) |
+| surface | closed `InteractionSurface` enum (service/port/file/document/credential_lure/…) |
+| reaction_kind | closed `ReactionKind` enum; must be absent for a pure `interaction` |
+| lure_id | optional decoy-lure id (untrusted string, length-bounded) |
+| first_contact_latency_ms, dwell_ms, attempt_count | measured quantities (non-negative) |
+| confounder_tags | JSON array of closed `ConfounderTag` enum (scanner_noise, host_capacity, …) |
+| runtime_context | JSON: tier / architecture / runtime_adapter / active+omitted components / resource_saturation / capability_drift |
+| evidence_refs | JSON array of opaque refs |
+| raw | full canonical observation JSON (audit); attacker-authored strings are opaque data |
+
+Every string field is untrusted attacker-authored content — length-bounded,
+stored as opaque data, never evaluated or executed. The advisory read path
+(`GET /v1/deception-effectiveness`, `correlate/deception_effectiveness.py`)
+summarizes these rows deterministically into a Fabric `EffectivenessAdvisory`;
+it separates narrative effectiveness from runtime/capacity confounders and never
+claims attacker belief.
+
 ## Normalization rules
 
 - All timestamps UTC ISO 8601.

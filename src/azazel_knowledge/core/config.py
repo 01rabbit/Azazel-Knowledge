@@ -118,6 +118,17 @@ class TrackedConfigLoader:
             research.get("shadow_scoring", {}), "scoring.yaml:research.shadow_scoring"
         )
 
+    def deception_effectiveness(self) -> Mapping[str, Any]:
+        """AZ-06 effectiveness-advisory config block (ADR-0011).
+
+        Optional; returns an empty mapping when absent so the advisory falls
+        back to conservative built-in defaults. Not weight-sum-validated -- it
+        is not a scoring weight vector -- but it still folds into `config_hash`
+        because the whole `scoring.yaml` document does.
+        """
+        block = self.scoring().get("deception_effectiveness", {}) or {}
+        return _require_mapping(block, "scoring.yaml:deception_effectiveness")
+
     def feeds(self) -> Mapping[str, Any]:
         return self.raw("feeds.yaml")
 

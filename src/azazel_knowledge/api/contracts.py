@@ -55,12 +55,20 @@ from azazel_fabric.cti_contracts import (
     CtiReactionBatch,
     assert_advisory_only,
 )
+from azazel_fabric.deception_contracts import (
+    EffectivenessAdvisory,
+    InteractionObservation,
+    assert_no_effectiveness_verdict,
+    assert_no_runtime_directives,
+)
 
 __all__ = [
     "BANNED_DIRECTIVE_FIELDS",
     "IngestBatchInvalid",
     "AdvisoryInvariantViolation",
     "maybe_fabric_batch_lines",
+    "maybe_fabric_observation_lines",
+    "build_effectiveness_advisory",
     "assert_response_advisory_only",
 ]
 
@@ -128,6 +136,85 @@ def maybe_fabric_batch_lines(raw_body: bytes, endpoint: str) -> list[str] | None
     # Flatten to the same canonical JSONL the drain path already validates
     # item-by-item. sort_keys mirrors every other spool writer in the repo.
     return [json.dumps(item, sort_keys=True) for item in batch.items]
+
+
+# The keys that mark a body as an *intent* to use the deception-observation
+# batch envelope rather than legacy per-line JSONL. A single
+# `InteractionObservation` carries `environment_id` but never `items`, so the
+# joint presence is an unambiguous opt-in that legacy single-item callers cannot
+# produce (mirrors `_ENVELOPE_MARKERS` for the Cti* batches). Azazel-Fabric
+# v0.6.0 ships no canonical `InteractionObservationBatch` envelope, so the
+# envelope is a thin `{environment_id, items:[...]}` wrapper whose `items` are
+# each type-enforced against `InteractionObservation` (ADR-0011).
+_OBSERVATION_ENVELOPE_MARKERS = ("items", "environment_id")
+
+
+def _looks_like_observation_envelope(obj: object) -> bool:
+    return isinstance(obj, dict) and all(
+        k in obj for k in _OBSERVATION_ENVELOPE_MARKERS
+    )
+
+
+def maybe_fabric_observation_lines(
+    raw_body: bytes, endpoint: str
+) -> list[str] | None:
+    """Return JSONL lines for a deception-observation batch envelope, else None.
+
+    Mirrors `maybe_fabric_batch_lines`: a caller that opts into the batch
+    envelope has every item type-enforced against Fabric
+    `InteractionObservation` (and the fact-only honesty invariant,
+    `assert_no_effectiveness_verdict`) at the boundary, failing closed
+    (`IngestBatchInvalid` -> `422`) on any violation. Legacy per-line JSONL
+    callers get `None` and keep the unchanged fire-and-forget path, where a
+    malformed *line* is quarantined at drain, never rejecting the batch.
+    """
+    if endpoint != "deception-observations":
+        return None
+
+    text = raw_body.decode("utf-8", errors="replace").strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not _looks_like_observation_envelope(obj):
+        return None
+
+    items = obj["items"]
+    if not isinstance(items, list):
+        raise IngestBatchInvalid("envelope 'items' must be a list")
+
+    for item in items:
+        if not isinstance(item, dict):
+            raise IngestBatchInvalid("envelope item must be an object")
+        try:
+            # Honesty invariant first: a belief/verdict/effectiveness field is a
+            # layer-4 claim that must never ride on a fact-only observation.
+            assert_no_effectiveness_verdict(item)
+            InteractionObservation.model_validate(item)
+        except (ValidationError, ValueError) as exc:
+            raise IngestBatchInvalid(str(exc)) from exc
+
+    return [json.dumps(item, sort_keys=True) for item in items]
+
+
+def build_effectiveness_advisory(advisory_fields: Mapping[str, Any]) -> dict[str, Any]:
+    """Type-enforce Knowledge's effectiveness output as a Fabric EffectivenessAdvisory.
+
+    The advisory is advisory-only and non-executable by construction:
+    `EffectivenessAdvisory` pins `executable=False`, forbids extra fields, and
+    is structurally incapable of carrying a belief/verdict field. This also runs
+    the runtime-directive invariant over the assembled advisory. Any failure is
+    an internal invariant violation -> `AdvisoryInvariantViolation` (the caller
+    fails closed `500` and never emits the advisory). Returns a JSON-ready dict.
+    """
+    try:
+        assert_no_runtime_directives(advisory_fields)
+        model = EffectivenessAdvisory.model_validate(advisory_fields)
+    except (ValidationError, ValueError) as exc:
+        raise AdvisoryInvariantViolation(str(exc)) from exc
+    return model.model_dump(mode="json")
 
 
 def assert_response_advisory_only(payload: Any) -> None:

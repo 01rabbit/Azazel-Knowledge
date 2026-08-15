@@ -33,6 +33,7 @@ from azazel_knowledge.ingest.burst_guard import BurstGuard
 from azazel_knowledge.ingest.spool import BatchStatus, SpoolWriter
 from azazel_knowledge.ingest.validators import (
     Result,
+    validate_deception_observation_line,
     validate_event_line,
     validate_flow_line,
     validate_reaction_line,
@@ -43,6 +44,7 @@ _VALIDATORS: dict[str, Callable[..., Result]] = {
     "events": validate_event_line,
     "flows": validate_flow_line,
     "reactions": validate_reaction_line,
+    "deception-observations": validate_deception_observation_line,
 }
 
 _STATS_WINDOW_S = 3600
@@ -194,6 +196,67 @@ def _drain_reaction_rows(
     return duplicates["count"]
 
 
+def _insert_deception_observations(
+    conn: sqlite3.Connection, rows: list[dict[str, Any]], now: datetime
+) -> int:
+    """INSERT-only store of AZ-06 deception observations (F-1, ADR-0011).
+
+    Idempotent via `observation_uid UNIQUE` + INSERT OR IGNORE, so a
+    crash-and-replay of the same batch never duplicates a row and never
+    decreases the row count. Returns the number of dedupe no-ops.
+    """
+    duplicates = 0
+    for r in rows:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO deception_observation "
+            "(observation_uid, environment_id, package_id, node_id, edge_id, actor_key, "
+            "observed_at, observation_class, surface, reaction_kind, lure_id, "
+            "first_contact_latency_ms, dwell_ms, attempt_count, confounder_tags, "
+            "runtime_context, evidence_refs, raw, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                r["observation_uid"],
+                r["environment_id"],
+                r["package_id"],
+                r["node_id"],
+                r["edge_id"],
+                r["actor_key"],
+                r["observed_at"],
+                r["observation_class"],
+                r["surface"],
+                r["reaction_kind"],
+                r["lure_id"],
+                r["first_contact_latency_ms"],
+                r["dwell_ms"],
+                r["attempt_count"],
+                json.dumps(r["confounder_tags"], sort_keys=True),
+                json.dumps(r["runtime_context"], sort_keys=True) if r["runtime_context"] is not None else None,
+                json.dumps(r["evidence_refs"], sort_keys=True),
+                json.dumps(r["raw"], sort_keys=True),
+                to_rfc3339(now),
+            ),
+        )
+        if cursor.rowcount == 0:
+            duplicates += 1
+    return duplicates
+
+
+def _drain_deception_observation_rows(
+    writer_queue: PrioritySingleWriterQueue,
+    rows: list[dict[str, Any]],
+    now: datetime,
+) -> int:
+    duplicates = {"count": 0}
+
+    def _txn(conn: sqlite3.Connection) -> None:
+        duplicates["count"] = _insert_deception_observations(conn, rows, now)
+
+    if rows:
+        writer_queue.submit(P1, _txn)
+        writer_queue.process_pending()
+    return duplicates["count"]
+
+
 def drain_endpoint(
     endpoint: str,
     spool: SpoolWriter,
@@ -226,6 +289,8 @@ def drain_endpoint(
 
         if endpoint == "reactions":
             duplicates = _drain_reaction_rows(writer_queue, valid_rows, now)
+        elif endpoint == "deception-observations":
+            duplicates = _drain_deception_observation_rows(writer_queue, valid_rows, now)
         else:
             duplicates = 0
             if valid_rows:
