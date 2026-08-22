@@ -29,6 +29,7 @@ from azazel_knowledge.api.models import ContextApiRequest, ContextResponse
 from azazel_knowledge.audit.logger import AuditUnavailable
 from azazel_knowledge.core.clock import to_rfc3339
 from azazel_knowledge.ingest.spool import QuotaExceeded
+from azazel_knowledge.correlate.engage_rule_refs import lookup_engage_refs, lookup_rule_refs
 from azazel_knowledge.correlate.pipeline import (
     ContextRequest,
     ContextRequestTooLarge as PipelineRequestTooLarge,
@@ -105,6 +106,33 @@ def post_context(
 
     state.metrics["context_total"] += 1
 
+    # Additive, advisory-only enrichment (ADR-0012/ADR-0013 usage seam,
+    # #60/#61): match-gated Engage/rule-corpus annotations keyed off the
+    # ATT&CK technique(s) the pipeline already attributed to this event
+    # (`threat_context.attack_mapping`, already deterministically sorted --
+    # see `correlate.pipeline._evaluate_attack`). Reuses the SAME intel read
+    # path the pipeline just used (`repo.connection()`); the pipeline's own
+    # connection is already released back to the pool by the time
+    # `run_context` returns, so a fresh acquire through the same Repository
+    # is "the same path", not an ad hoc handle. Best-effort (Constraint 6):
+    # any failure here degrades silently to empty lists and never turns this
+    # 200 into a 500 -- it can never touch `result.content_hash` or any
+    # scored field, since it runs entirely after scoring has completed.
+    techniques = [
+        m["technique"]
+        for m in result.threat_context.get("attack_mapping", [])
+        if isinstance(m, dict) and m.get("technique")
+    ]
+    engage_refs: list[dict] = []
+    rule_refs: list[dict] = []
+    try:
+        with repo.connection() as conn:
+            engage_refs = lookup_engage_refs(conn, techniques)
+            rule_refs = lookup_rule_refs(conn, techniques)
+    except Exception:  # noqa: BLE001 -- best-effort enrichment, fail-open to []
+        engage_refs = []
+        rule_refs = []
+
     advisory_id = new_advisory_ulid()
     created_at = to_rfc3339(clock.query_as_of())
     advisory_event = {
@@ -145,6 +173,8 @@ def post_context(
         "confidence_reason": list(result.confidence_reason),
         "source_freshness": result.source_freshness,
         "advisory_notice": result.advisory_notice,
+        "engage_refs": engage_refs,
+        "rule_refs": rule_refs,
     }
     try:
         assert_response_advisory_only(advisory_view)
@@ -164,4 +194,6 @@ def post_context(
         advisory_notice=result.advisory_notice,
         advisory_id=advisory_id,
         multi_ioc_scope=result.multi_ioc_scope,
+        engage_refs=engage_refs,
+        rule_refs=rule_refs,
     )

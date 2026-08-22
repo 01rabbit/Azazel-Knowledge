@@ -481,6 +481,61 @@ object. The top-level `threat_score`, `confidence`, `reason[]`,
 Recommendation is advisory. Final authority: Azazel-Edge Deterministic
 Arbiter.
 
+### `engage_refs` / `rule_refs` (additive, optional; usage seam for #60/#61)
+
+`POST /v1/context` gains two **additive, top-level, optional** fields,
+default `[]`: `engage_refs` (MITRE Engage catalog activities, ADR-0012) and
+`rule_refs` (community Sigma/YARA rule identity, ADR-0013). Both are
+advisory-only, best-effort, **match-gated** on the ATT&CK technique(s) already
+present in this response's own `threat_context.attack_mapping` -- they add no
+new technique-matching input, only cite what the advisory already attributed:
+
+```json
+{
+  "engage_refs": [
+    { "technique": "T1595.002", "activity_id": "EAC0007", "name": "Network Analysis", "approach": "Understand" }
+  ],
+  "rule_refs": [
+    { "technique": "T1595.002", "rule_type": "sigma", "rule_id": "5f2eb852-...", "title": "Suspicious Port Scan", "source_url": "https://github.com/SigmaHQ/sigma/..." },
+    { "technique": "T1595.002", "rule_type": "yara", "rule_id": "APT_Scanner_Tool", "title": null, "source_url": "https://github.com/..." }
+  ]
+}
+```
+
+- **Derived only from intel-tier reference feeds** -- `engage_activity`/
+  `engage_attack_map` (ADR-0012) and `sigma_rule_corpus`/`yara_rule_corpus`
+  (ADR-0013) -- never from `local.db`, never from a new network call on the
+  query path.
+- **Outside the deterministic 7-tuple and `content_hash`.** Neither field
+  ever enters `config/scoring.yaml`, the 7-element replay tuple
+  (`intel_generation, local_generation, stats_generation, attack_version,
+  config_hash, event, query_as_of`), or the score's `content_hash`; they are
+  computed after scoring completes and can never change
+  `threat_score`/`confidence`/`reason[]`/the audit event.
+- **Match-gated on the advisory's own techniques.** A rule/activity appears
+  only when its ATT&CK technique reference, canonicalized to bare uppercase
+  `T####[.###]` (uppercase, dropping one leading `ATTACK.` prefix -- Sigma
+  ships `attack.t1059.001`, YARA ships raw-cased `T1105`/`t1105`/
+  `attack.t1105`), equals one of the advisory's own `threat_context.
+  attack_mapping[].technique` values exactly. No mapping, no rule -- both
+  lists stay `[]`, they are never `null` and the keys are never omitted
+  (unlike `behavioral_cti` above, these are always-present arrays, just
+  possibly empty).
+- **`rule_refs` carries rule IDENTITY + metadata only** -- `technique`,
+  `rule_type` (`"sigma"`/`"yara"`), `rule_id` (the Sigma `rule_uid` or the
+  YARA `rule_name`), `title`, `source_url`. It NEVER includes `raw_yaml`/
+  `raw_text`/condition logic; nothing executable ever leaves the process
+  through this field.
+- **Best-effort, never a failure mode.** Empty/absent feeds (the `engage`,
+  `sigma_corpus`, or `yara_corpus` adapters have never run), a lookup error,
+  or a truncation past the deterministic cap all degrade silently to an
+  empty (or shorter) list -- this can never turn a `200` into a `500`, the
+  same fail-open posture as `behavioral_cti`.
+- **Deterministically sorted.** `engage_refs` sorts by
+  `(technique, activity_id)`; `rule_refs` sorts by
+  `(technique, rule_type, rule_id)`. Both are capped at a fixed count; a call
+  replayed against the same intel generation returns byte-identical lists.
+
 ### Other read endpoints
 
 | Endpoint | Purpose |
