@@ -1,0 +1,16 @@
+{
+  "engage_version": "v2.0",
+  "license": "MITRE Engage (CC-BY-4.0)",
+  "activities": [
+    {
+      "id": "EAC0021",
+      "name": "API Monitoring",
+      "approach": "Understand",
+      "goal": "Detect",
+      "description": "Monitor API calls for adversary tooling signatures."
+    }
+  ],
+  "mappings": [
+    {"technique_id": "T1071.001", "activity_id": "EAC0021"}
+  ]
+}

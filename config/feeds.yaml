@@ -71,3 +71,36 @@ feeds:
     source_confidence: 35
     ttl:
       default: 3d
+
+  # Catalog/corpus reference feeds (ADR-0012 / ADR-0013). Advisory-only
+  # knowledge, never scored, never in the query path. Fed from a pinned
+  # release tarball via a signed bundle / `azctl feed`, not the online
+  # scheduled-pull endpoint table; `corpus_version` is pinned at bundle-build
+  # time (empty here = feed inert until pinned, fail-closed).
+  engage:
+    kind: engage
+    group: mitre
+    pin_spki_sha256: []
+
+  sigma_corpus:
+    kind: sigma_corpus
+    group: sigmahq
+    pin_spki_sha256: []
+    corpus_version: ""
+    license: "DRL 1.1"
+    allowed_licenses:
+      - "DRL 1.1"
+    source_url: "https://github.com/SigmaHQ/sigma"
+
+  yara_corpus:
+    kind: yara_corpus
+    group: yarahub
+    pin_spki_sha256: []
+    corpus_version: ""
+    allowed_licenses:
+      - "CC-BY-4.0"
+      - "Apache-2.0"
+      - "MIT"
+      - "Unlicense"
+      - "DRL 1.1"
+    source_url: "https://github.com/Neo23x0/signature-base"

@@ -14,6 +14,10 @@ INTEL_TABLES = {
     "attack_technique",
     "attack_mitigation",
     "attack_relation",
+    "engage_activity",
+    "engage_attack_map",
+    "sigma_rule_corpus",
+    "yara_rule_corpus",
     "feed_state",
     "_stage_ioc",
     "_stage_ioc_source",
@@ -51,7 +55,7 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
 def test_intel_migrations_apply_cleanly(tmp_path):
     conn = sqlite3.connect(tmp_path / "intel.db")
     applied = apply_migrations(conn, "intel")
-    assert applied == ["0001_init"]
+    assert applied == ["0001_init", "0002_engage", "0003_rule_corpus"]
     tables = _table_names(conn)
     assert INTEL_TABLES <= tables
     assert "schema_migrations" in tables

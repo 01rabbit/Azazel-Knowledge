@@ -1,0 +1,24 @@
+{
+  "engage_version": "v1.0",
+  "license": "MITRE Engage (CC-BY-4.0)",
+  "activities": [
+    {
+      "activity_id": "EAC0010",
+      "name": "Decoy Content",
+      "approach": "Expose",
+      "goal": "Elicit",
+      "description": "Seed decoy content to attract and observe adversary interaction."
+    },
+    {
+      "activity_id": "EAC0015",
+      "name": "Network Diversity",
+      "approach": "Affect",
+      "goal": "Disrupt",
+      "description": "Introduce artificial diversity into network configurations."
+    }
+  ],
+  "mappings": [
+    {"technique_id": "T1595.002", "activity_id": "EAC0010"},
+    {"technique_id": "T1046", "activity_id": "EAC0015"}
+  ]
+}
