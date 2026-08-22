@@ -106,33 +106,6 @@ def post_context(
 
     state.metrics["context_total"] += 1
 
-    # Additive, advisory-only enrichment (ADR-0012/ADR-0013 usage seam,
-    # #60/#61): match-gated Engage/rule-corpus annotations keyed off the
-    # ATT&CK technique(s) the pipeline already attributed to this event
-    # (`threat_context.attack_mapping`, already deterministically sorted --
-    # see `correlate.pipeline._evaluate_attack`). Reuses the SAME intel read
-    # path the pipeline just used (`repo.connection()`); the pipeline's own
-    # connection is already released back to the pool by the time
-    # `run_context` returns, so a fresh acquire through the same Repository
-    # is "the same path", not an ad hoc handle. Best-effort (Constraint 6):
-    # any failure here degrades silently to empty lists and never turns this
-    # 200 into a 500 -- it can never touch `result.content_hash` or any
-    # scored field, since it runs entirely after scoring has completed.
-    techniques = [
-        m["technique"]
-        for m in result.threat_context.get("attack_mapping", [])
-        if isinstance(m, dict) and m.get("technique")
-    ]
-    engage_refs: list[dict] = []
-    rule_refs: list[dict] = []
-    try:
-        with repo.connection() as conn:
-            engage_refs = lookup_engage_refs(conn, techniques)
-            rule_refs = lookup_rule_refs(conn, techniques)
-    except Exception:  # noqa: BLE001 -- best-effort enrichment, fail-open to []
-        engage_refs = []
-        rule_refs = []
-
     advisory_id = new_advisory_ulid()
     created_at = to_rfc3339(clock.query_as_of())
     advisory_event = {
@@ -159,6 +132,33 @@ def post_context(
         state.spool.write_batch("advisory", auth.key_id, [line])
     except QuotaExceeded:
         pass
+
+    # Additive, advisory-only enrichment (ADR-0012/ADR-0013 usage seam,
+    # #60/#61): match-gated Engage/rule-corpus annotations keyed off the
+    # ATT&CK technique(s) the pipeline already attributed to this event
+    # (`threat_context.attack_mapping`, already deterministically sorted).
+    # Deliberately placed AFTER the audit-chain append so it can NEVER block or
+    # delay the audit/fail-closed path (F-12/F-17, per both ADRs), and skipped
+    # when the request deadline is already spent so it cannot blow the context
+    # SLA. Best-effort (Constraint 6): it degrades silently to empty lists,
+    # never turns this 200 into a 500, and never touches any scored field or
+    # `content_hash` (scoring completed inside `run_context`). Reuses the same
+    # intel read path (`repo.connection()`) the pipeline used.
+    engage_refs: list[dict] = []
+    rule_refs: list[dict] = []
+    if time.monotonic() < deadline:
+        techniques = [
+            m["technique"]
+            for m in result.threat_context.get("attack_mapping", [])
+            if isinstance(m, dict) and m.get("technique")
+        ]
+        try:
+            with repo.connection() as conn:
+                engage_refs = lookup_engage_refs(conn, techniques)
+                rule_refs = lookup_rule_refs(conn, techniques)
+        except Exception:  # noqa: BLE001 -- best-effort enrichment, fail-open to []
+            engage_refs = []
+            rule_refs = []
 
     # Fabric advisory-only invariant (ADR-0010): assert the assembled advisory
     # carries no directive-shaped field, on a COPY built from pipeline output.

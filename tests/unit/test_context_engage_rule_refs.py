@@ -467,3 +467,39 @@ def test_context_api_advisory_only_invariant_holds_with_refs_present(tmp_path):
     # Must not raise: no directive-shaped field anywhere, including inside
     # the newly-added engage_refs/rule_refs lists.
     assert_response_advisory_only(body)
+
+
+def test_enrichment_runs_after_audit_chain_append(tmp_path, monkeypatch):
+    # Adversarial-review fix: the enrichment must run AFTER the audit-chain
+    # append so a slow lookup can never block/delay the audit/fail-closed path
+    # (F-12/F-17). Prove the ordering deterministically via call tracing.
+    client, settings, local_db_path, data_db_dir = make_client(tmp_path)
+    intel_path = generations.intel_db_path(data_db_dir, 1)
+    _seed_engage(intel_path, [("EAC0009", "Network Analysis", "Understand", "T1595.002")])
+    token = add_api_client(local_db_path, "edge1", ["query"])
+
+    order: list[str] = []
+
+    real_append = client.app.state.audit.append
+    monkeypatch.setattr(
+        client.app.state.audit, "append",
+        lambda ev: (order.append("audit"), real_append(ev))[1],
+    )
+
+    import azazel_knowledge.api.routers.context as ctx
+    real_lookup = ctx.lookup_engage_refs
+    monkeypatch.setattr(
+        ctx, "lookup_engage_refs",
+        lambda conn, techniques: (order.append("enrich"), real_lookup(conn, techniques))[1],
+    )
+
+    resp = client.post("/v1/context", json=_context_body(), headers=auth_header(token))
+    assert resp.status_code == 200
+    # the advisory audit-chain append happens BEFORE the enrichment lookup runs,
+    # so a slow lookup can never delay the audit path
+    assert "enrich" in order and "audit" in order
+    assert order.index("audit") < order.index("enrich")
+    # and the enrichment still produced its ref (happy path unbroken by the move)
+    assert resp.json()["engage_refs"] == [
+        {"technique": "T1595.002", "activity_id": "EAC0009", "name": "Network Analysis", "approach": "Understand"}
+    ]
