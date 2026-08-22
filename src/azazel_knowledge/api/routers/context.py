@@ -29,6 +29,7 @@ from azazel_knowledge.api.models import ContextApiRequest, ContextResponse
 from azazel_knowledge.audit.logger import AuditUnavailable
 from azazel_knowledge.core.clock import to_rfc3339
 from azazel_knowledge.ingest.spool import QuotaExceeded
+from azazel_knowledge.correlate.engage_rule_refs import lookup_engage_refs, lookup_rule_refs
 from azazel_knowledge.correlate.pipeline import (
     ContextRequest,
     ContextRequestTooLarge as PipelineRequestTooLarge,
@@ -132,6 +133,33 @@ def post_context(
     except QuotaExceeded:
         pass
 
+    # Additive, advisory-only enrichment (ADR-0012/ADR-0013 usage seam,
+    # #60/#61): match-gated Engage/rule-corpus annotations keyed off the
+    # ATT&CK technique(s) the pipeline already attributed to this event
+    # (`threat_context.attack_mapping`, already deterministically sorted).
+    # Deliberately placed AFTER the audit-chain append so it can NEVER block or
+    # delay the audit/fail-closed path (F-12/F-17, per both ADRs), and skipped
+    # when the request deadline is already spent so it cannot blow the context
+    # SLA. Best-effort (Constraint 6): it degrades silently to empty lists,
+    # never turns this 200 into a 500, and never touches any scored field or
+    # `content_hash` (scoring completed inside `run_context`). Reuses the same
+    # intel read path (`repo.connection()`) the pipeline used.
+    engage_refs: list[dict] = []
+    rule_refs: list[dict] = []
+    if time.monotonic() < deadline:
+        techniques = [
+            m["technique"]
+            for m in result.threat_context.get("attack_mapping", [])
+            if isinstance(m, dict) and m.get("technique")
+        ]
+        try:
+            with repo.connection() as conn:
+                engage_refs = lookup_engage_refs(conn, techniques)
+                rule_refs = lookup_rule_refs(conn, techniques)
+        except Exception:  # noqa: BLE001 -- best-effort enrichment, fail-open to []
+            engage_refs = []
+            rule_refs = []
+
     # Fabric advisory-only invariant (ADR-0010): assert the assembled advisory
     # carries no directive-shaped field, on a COPY built from pipeline output.
     # Fail closed (500) rather than ever emit a directive-shaped response; the
@@ -145,6 +173,8 @@ def post_context(
         "confidence_reason": list(result.confidence_reason),
         "source_freshness": result.source_freshness,
         "advisory_notice": result.advisory_notice,
+        "engage_refs": engage_refs,
+        "rule_refs": rule_refs,
     }
     try:
         assert_response_advisory_only(advisory_view)
@@ -164,4 +194,6 @@ def post_context(
         advisory_notice=result.advisory_notice,
         advisory_id=advisory_id,
         multi_ioc_scope=result.multi_ioc_scope,
+        engage_refs=engage_refs,
+        rule_refs=rule_refs,
     )

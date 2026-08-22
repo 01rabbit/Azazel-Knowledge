@@ -62,6 +62,36 @@ class ContextApiRequest(BaseModel):
     event_id: str | None = None
 
 
+class EngageRef(BaseModel):
+    """One MITRE Engage catalog activity matched to an advisory technique.
+
+    Additive, advisory-only context (ADR-0012 usage seam, #60): a
+    cataloged counter-activity *reference*, never an instruction to
+    activate anything. Final authority for any deception/response action
+    remains the Azazel-Edge Deterministic Arbiter / AZ-06.
+    """
+
+    technique: str
+    activity_id: str
+    name: str
+    approach: str
+
+
+class RuleRef(BaseModel):
+    """One community Sigma/YARA rule matched to an advisory technique.
+
+    Additive, advisory-only context (ADR-0013 usage seam, #61): identity
+    and metadata only. NEVER carries `raw_yaml`/`raw_text`/condition logic
+    -- nothing executable leaves the process via this field.
+    """
+
+    technique: str
+    rule_type: str
+    rule_id: str
+    title: str | None = None
+    source_url: str | None = None
+
+
 class ContextResponse(BaseModel):
     threat_context: dict[str, Any]
     threat_score: float
@@ -73,6 +103,8 @@ class ContextResponse(BaseModel):
     advisory_notice: str = ADVISORY_NOTICE
     advisory_id: str
     multi_ioc_scope: dict[str, Any]
+    engage_refs: list[EngageRef] = Field(default_factory=list)
+    rule_refs: list[RuleRef] = Field(default_factory=list)
 
 
 class IngestAcceptedResponse(BaseModel):

@@ -50,12 +50,15 @@ from azazel_knowledge.db import generations
 from azazel_knowledge.db.repository import apply_migrations
 from azazel_knowledge.db.writer import P0, P1, P2, P3, PrioritySingleWriterQueue, WRITER_PRAGMAS
 from azazel_knowledge.feeds.adapters.attack import AttackAdapter
+from azazel_knowledge.feeds.adapters.engage import EngageAdapter
 from azazel_knowledge.feeds.adapters.geoip_asn import GeoipAsnAdapter
 from azazel_knowledge.feeds.adapters.kev import KevAdapter
 from azazel_knowledge.feeds.adapters.malwarebazaar import MalwarebazaarAdapter
+from azazel_knowledge.feeds.adapters.sigma_corpus import SigmaCorpusAdapter
 from azazel_knowledge.feeds.adapters.spamhaus_asndrop import SpamhausAsnDropAdapter
 from azazel_knowledge.feeds.adapters.threatfox import ThreatfoxAdapter
 from azazel_knowledge.feeds.adapters.urlhaus import UrlhausAdapter
+from azazel_knowledge.feeds.adapters.yara_corpus import YaraCorpusAdapter
 from azazel_knowledge.feeds.base import FeedAdapter, FeedRunOutcome, fetch_https_with_pins, merge_feed_config
 from azazel_knowledge.ingest.burst_guard import BurstGuard
 from azazel_knowledge.ingest.drain import DrainStats, drain_endpoint
@@ -103,6 +106,13 @@ FEED_ADAPTER_REGISTRY: dict[str, type[FeedAdapter]] = {
     "threatfox": ThreatfoxAdapter,
     "spamhaus_asndrop": SpamhausAsnDropAdapter,
     "geoip_asn": GeoipAsnAdapter,
+    # Catalog/corpus reference feeds (ADR-0012/ADR-0013). No FEED_ENDPOINTS
+    # entry: these are fed from a pinned release tarball via a signed bundle /
+    # `azctl feed`, not the online scheduled-pull table, and stay advisory-only
+    # (never enter scoring or the query path).
+    "engage": EngageAdapter,
+    "sigma_corpus": SigmaCorpusAdapter,
+    "yara_corpus": YaraCorpusAdapter,
 }
 _NEEDS_EXCLUSION_POLICY = frozenset({"urlhaus", "threatfox"})
 
