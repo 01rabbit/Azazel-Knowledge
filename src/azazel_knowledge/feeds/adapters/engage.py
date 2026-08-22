@@ -129,7 +129,14 @@ class EngageAdapter(FeedAdapter):
     def validate(self, items: FlattenedEngage) -> FlattenedEngage:
         valid_activities: list[FlatEngageActivity] = []
         for a in items.activities:
-            if not a.activity_id or not a.name or not a.approach:
+            # Require string ids/name/approach: a non-string id from a malformed
+            # catalog would raise TypeError on len() and abort the whole import,
+            # so skip the row instead (mirrors KevAdapter's isinstance-gated checks).
+            if not isinstance(a.activity_id, str) or not a.activity_id:
+                continue
+            if not isinstance(a.name, str) or not a.name:
+                continue
+            if not isinstance(a.approach, str) or not a.approach:
                 continue
             if len(a.activity_id) > _ID_MAX_LEN:
                 continue
@@ -142,7 +149,9 @@ class EngageAdapter(FeedAdapter):
 
         valid_mappings: list[FlatEngageMapping] = []
         for m in items.mappings:
-            if not m.technique_id or not m.activity_id:
+            if not isinstance(m.technique_id, str) or not m.technique_id:
+                continue
+            if not isinstance(m.activity_id, str) or not m.activity_id:
                 continue
             if len(m.technique_id) > _ID_MAX_LEN or len(m.activity_id) > _ID_MAX_LEN:
                 continue
@@ -180,7 +189,10 @@ class EngageAdapter(FeedAdapter):
         return self._exec_intel(txn)
 
     def after_run(self, outcome: Any) -> None:
-        if outcome.status == "applied" and self._license and self.intel_writer is not None:
+        # Sync feed_state.license to *this* generation's license on every
+        # successful apply, including to NULL when a later document omits it,
+        # so a stale license string is never left attributed to a new version.
+        if outcome.status == "applied" and self.intel_writer is not None:
             def txn(conn: Any) -> None:
                 conn.execute(
                     "UPDATE feed_state SET license = ? WHERE feed_id = ?",

@@ -90,6 +90,11 @@ feeds:
     license: "DRL 1.1"
     allowed_licenses:
       - "DRL 1.1"
+    # First-ingest size cap (ADR-0013 Constraint 6 / Pi-4 budget): the relative
+    # volume-halt guard needs run history, so this absolute cap protects the
+    # very first ingest of an oversized/wrong tarball. Excess rules are
+    # quarantined (size_cap_exceeded), not inserted.
+    max_rules: 20000
     source_url: "https://github.com/SigmaHQ/sigma"
 
   yara_corpus:
@@ -103,4 +108,5 @@ feeds:
       - "MIT"
       - "Unlicense"
       - "DRL 1.1"
+    max_rules: 10000
     source_url: "https://github.com/Neo23x0/signature-base"

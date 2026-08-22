@@ -30,21 +30,46 @@ _SIGMA_SUFFIXES = (".yml", ".yaml")
 _DEFAULT_LICENSE = "DRL 1.1"
 
 
-def _iter_tar_members(raw: bytes, suffixes: tuple[str, ...]) -> list[tuple[str, bytes]]:
+def _iter_tar_members(raw: bytes, suffixes: tuple[str, ...], feed_id: str) -> list[tuple[str, bytes]]:
     """Read matching regular-file members out of a (possibly gzip'd) tar
-    archive, sorted by member name for deterministic processing order."""
-    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tar:
-        members = sorted(
-            (m for m in tar.getmembers() if m.isfile() and m.name.lower().endswith(suffixes)),
-            key=lambda m: m.name,
-        )
-        out: list[tuple[str, bytes]] = []
-        for member in members:
-            fileobj = tar.extractfile(member)
-            if fileobj is None:
-                continue
-            out.append((member.name, fileobj.read()))
-        return out
+    archive, sorted by member name for deterministic processing order.
+
+    A corrupt/non-tar/truncated archive surfaces as a ``FeedError`` (the
+    uniform error type every other adapter raises), not a raw stdlib
+    ``tarfile.ReadError``/``EOFError``.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tar:
+            members = sorted(
+                (m for m in tar.getmembers() if m.isfile() and m.name.lower().endswith(suffixes)),
+                key=lambda m: m.name,
+            )
+            out: list[tuple[str, bytes]] = []
+            for member in members:
+                fileobj = tar.extractfile(member)
+                if fileobj is None:
+                    continue
+                out.append((member.name, fileobj.read()))
+            return out
+    except (tarfile.TarError, EOFError, OSError) as exc:
+        raise FeedError(f"{feed_id}: could not open corpus archive: {exc}") from exc
+
+
+def _text_or_none(value: Any) -> str | None:
+    """Coerce a Sigma metadata field to a scalar text value (or None).
+
+    Sigma allows ``author:`` (and occasionally ``level:``) to be a YAML list;
+    binding a ``list``/``dict`` straight into a STRICT ``TEXT`` column raises
+    ``sqlite3.ProgrammingError`` and would abort the whole full-replace swap,
+    so a sequence is joined and any other non-string is ``str()``-coerced.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    return str(value)
 
 
 class SigmaCorpusAdapter(FeedAdapter):
@@ -57,6 +82,7 @@ class SigmaCorpusAdapter(FeedAdapter):
         source_url = self.config.get("source_url", "")
         default_license = self.config.get("license") or _DEFAULT_LICENSE
         allowed_licenses = self.config.get("allowed_licenses")
+        max_rules = self.config.get("max_rules")
         base_now = self.clock.query_as_of()
         seq = [0]
 
@@ -71,7 +97,8 @@ class SigmaCorpusAdapter(FeedAdapter):
             self.insert_quarantine(ts, reason, detail)
 
         rows: list[dict[str, Any]] = []
-        for name, data in _iter_tar_members(raw, _SIGMA_SUFFIXES):
+        seen: set[str] = set()
+        for name, data in _iter_tar_members(raw, _SIGMA_SUFFIXES, self.feed_id):
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError as exc:
@@ -83,11 +110,18 @@ class SigmaCorpusAdapter(FeedAdapter):
                 continue
 
             loaded = yaml.safe_load(text)
+            if not isinstance(loaded, dict):
+                quarantine("malformed_yaml", f"{name}: top-level document is not a mapping")
+                continue
             rule_uid = loaded.get("id")
             title = loaded.get("title")
             if not rule_uid or not title:
                 quarantine("missing_required_field", f"{name}: missing id/title")
                 continue
+
+            if max_rules is not None and len(rows) >= int(max_rules):
+                quarantine("size_cap_exceeded", f"{name}: max_rules={max_rules} reached")
+                break
 
             tags = [str(t) for t in (loaded.get("tags") or [])]
             attack_refs = sorted({t for t in tags if t.startswith("attack.")})
@@ -96,16 +130,25 @@ class SigmaCorpusAdapter(FeedAdapter):
                 quarantine("disallowed_license", f"{name}: license={license_!r}")
                 continue
 
+            # One duplicate `id:` within a single corpus would abort the whole
+            # full-replace swap on the (rule_uid, corpus_version) PRIMARY KEY;
+            # keep the first and quarantine the rest instead.
+            rule_uid = str(rule_uid)
+            if rule_uid in seen:
+                quarantine("duplicate_rule_uid", f"{name}: {rule_uid}: duplicate within corpus")
+                continue
+            seen.add(rule_uid)
+
             rows.append(
                 {
-                    "rule_uid": str(rule_uid),
+                    "rule_uid": rule_uid,
                     "title": str(title),
                     "raw_yaml": text,
                     "tags": tags,
                     "attack_refs": attack_refs,
-                    "log_source": loaded.get("logsource") or {},
-                    "level": loaded.get("level"),
-                    "author": loaded.get("author"),
+                    "log_source": loaded.get("logsource") if isinstance(loaded.get("logsource"), dict) else {},
+                    "level": _text_or_none(loaded.get("level")),
+                    "author": _text_or_none(loaded.get("author")),
                     "license": license_,
                     "source_url": source_url,
                     "corpus_version": str(corpus_version),

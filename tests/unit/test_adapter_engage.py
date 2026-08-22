@@ -172,3 +172,42 @@ def test_engage_import_is_deterministic(tmp_path):
 
     assert _read_activities(adapter1) == _read_activities(adapter2)
     assert _read_mappings(adapter1) == _read_mappings(adapter2)
+
+
+def test_engage_non_string_ids_are_skipped_not_crash(tmp_path):
+    # MED-4: a non-string activity_id/technique_id must be dropped in validate(),
+    # not raise TypeError on len() and abort the whole import.
+    import json as _json
+
+    from _feeds_support import make_intel_writer
+    from azazel_knowledge.core.clock import FixedClock
+    from azazel_knowledge.feeds.adapters.engage import EngageAdapter
+
+    doc = {
+        "engage_version": "v9",
+        "license": "X",
+        "activities": [
+            {"activity_id": 42, "name": "Bad", "approach": "Expose"},           # non-string id
+            {"activity_id": "EAC0001", "name": "Good", "approach": "Expose"},
+        ],
+        "mappings": [
+            {"technique_id": ["T1"], "activity_id": "EAC0001"},                  # non-string technique
+            {"technique_id": "T1595", "activity_id": "EAC0001"},
+        ],
+    }
+    adapter = EngageAdapter(
+        "engage", {"kind": "engage"}, make_intel_writer(tmp_path),
+        clock=FixedClock(NOW), fetch_bytes=lambda: _json.dumps(doc).encode(),
+    )
+    outcome = adapter.run()  # must not raise
+    assert outcome.status == "applied"
+
+    def q(conn):
+        return (
+            conn.execute("SELECT activity_id FROM engage_activity ORDER BY activity_id").fetchall(),
+            conn.execute("SELECT technique_id FROM engage_attack_map").fetchall(),
+        )
+
+    acts, maps = adapter._exec_intel(q)
+    assert [r[0] for r in acts] == ["EAC0001"]     # bad id dropped, good kept
+    assert [r[0] for r in maps] == ["T1595"]       # bad mapping dropped, good kept

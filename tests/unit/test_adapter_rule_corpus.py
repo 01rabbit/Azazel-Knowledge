@@ -440,3 +440,145 @@ def test_yara_corpus_missing_corpus_version_is_an_error(tmp_path):
     adapter = _make_yara_adapter(tmp_path, config={**YARA_CONFIG, "corpus_version": None})
     with pytest.raises(FeedError):
         adapter.run()
+
+
+# -- adversarial-review regressions -----------------------------------------
+
+LIST_AUTHOR_SIGMA_RULE = """\
+title: Multi Author Rule
+id: 5f2eb852-9c39-4c9b-9a0a-444444444444
+author:
+  - Alice
+  - Bob
+level: high
+logsource:
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\\\\wscript.exe'
+  condition: selection
+tags:
+  - attack.t1059.005
+license: DRL 1.1
+"""
+
+COMMENTED_YARA_RULE = """\
+rule Commented_Rule : malware
+{
+    // PE header marker { 4D 5A } -- don't use "TODO markers here
+    meta:
+        author = "Test Author"
+        license = "CC0-1.0"
+        ref = "attack.t1055"
+    strings:
+        $a = "needle"
+    condition:
+        $a
+}
+"""
+
+
+def test_sigma_list_valued_author_does_not_abort_the_swap(tmp_path):
+    # HIGH-2: a YAML-list author must be coerced, not crash the whole batch.
+    tar = _build_tar(
+        {
+            "s/a.yml": VALID_SIGMA_RULE,
+            "s/b.yml": LIST_AUTHOR_SIGMA_RULE,
+        }
+    )
+    adapter = _make_sigma_adapter(tmp_path, tar_bytes=tar)
+    outcome = adapter.run()
+    assert outcome.status == "applied"
+    rows = _read_sigma_rows(adapter)
+    uids = [r[0] for r in rows]
+    assert "5f2eb852-9c39-4c9b-9a0a-444444444444" in uids  # multi-author rule stored
+    assert len(rows) == 2  # neither rule lost
+
+    def q(conn):
+        return conn.execute(
+            "SELECT author FROM sigma_rule_corpus WHERE rule_uid = ?",
+            ("5f2eb852-9c39-4c9b-9a0a-444444444444",),
+        ).fetchone()[0]
+
+    assert adapter._exec_intel(q) == "Alice, Bob"
+
+
+def test_sigma_duplicate_id_keeps_first_and_quarantines_rest(tmp_path):
+    # HIGH-3: one duplicate id must not abort the whole corpus swap.
+    tar = _build_tar(
+        {
+            "s/a.yml": VALID_SIGMA_RULE,   # id ...111111111111
+            "s/b.yml": VALID_SIGMA_RULE_2,  # id ...222222222222
+            "s/dup.yml": VALID_SIGMA_RULE,  # duplicate of a.yml's id
+        }
+    )
+    adapter = _make_sigma_adapter(tmp_path, tar_bytes=tar)
+    outcome = adapter.run()
+    assert outcome.status == "applied"
+    rows = _read_sigma_rows(adapter)
+    assert len(rows) == 2  # first + the distinct one; duplicate dropped
+    reasons = [r[1] for r in _read_quarantine(adapter)]
+    assert "duplicate_rule_uid" in reasons
+
+
+def test_yara_duplicate_name_keeps_first_and_quarantines_rest(tmp_path):
+    tar = _build_tar(
+        {
+            "y/a.yar": VALID_YARA_RULE,       # rule Example_Malware_Dropper
+            "y/dup.yar": VALID_YARA_RULE,     # same rule name
+        }
+    )
+    adapter = _make_yara_adapter(tmp_path, tar_bytes=tar)
+    outcome = adapter.run()
+    assert outcome.status == "applied"
+    rows = _read_yara_rows(adapter)
+    assert len(rows) == 1
+    reasons = [r[1] for r in _read_quarantine(adapter)]
+    assert "duplicate_rule_name" in reasons
+
+
+def test_yara_comments_with_braces_and_quotes_do_not_false_quarantine(tmp_path):
+    # MED-5: a `//` comment carrying a stray `{` and an odd `"` must not desync
+    # the brace balancer and wrongly quarantine a legitimate rule.
+    tar = _build_tar({"y/commented.yar": COMMENTED_YARA_RULE})
+    adapter = _make_yara_adapter(tmp_path, tar_bytes=tar)
+    outcome = adapter.run()
+    assert outcome.status == "applied"
+    rows = _read_yara_rows(adapter)
+    assert [r[0] for r in rows] == ["Commented_Rule"]
+    # meta from a commented-out line must not leak in as real metadata
+    meta = json.loads(rows[0][3])
+    assert meta.get("ref") == "attack.t1055"
+    assert not _read_quarantine(adapter)  # nothing quarantined
+
+
+def test_sigma_size_cap_quarantines_remainder(tmp_path):
+    tar = _build_tar({"s/a.yml": VALID_SIGMA_RULE, "s/b.yml": VALID_SIGMA_RULE_2})
+    adapter = _make_sigma_adapter(tmp_path, tar_bytes=tar, config={**SIGMA_CONFIG, "max_rules": 1})
+    outcome = adapter.run()
+    assert outcome.status == "applied"
+    assert len(_read_sigma_rows(adapter)) == 1
+    assert "size_cap_exceeded" in [r[1] for r in _read_quarantine(adapter)]
+
+
+def test_yara_size_cap_quarantines_remainder(tmp_path):
+    tar = _build_tar({"y/a.yar": VALID_YARA_RULE, "y/b.yar": COMMENTED_YARA_RULE})
+    cfg = {**YARA_CONFIG, "allowed_licenses": ["CC0-1.0"], "max_rules": 1}
+    adapter = _make_yara_adapter(tmp_path, tar_bytes=tar, config=cfg)
+    outcome = adapter.run()
+    assert outcome.status == "applied"
+    assert len(_read_yara_rows(adapter)) == 1
+    assert "size_cap_exceeded" in [r[1] for r in _read_quarantine(adapter)]
+
+
+def test_sigma_garbage_bytes_raise_feederror(tmp_path):
+    # LOW-7: a non-tar/corrupt archive surfaces as FeedError, not a raw TarError.
+    adapter = _make_sigma_adapter(tmp_path, tar_bytes=b"this is not a tar archive at all")
+    with pytest.raises(FeedError):
+        adapter.run()
+
+
+def test_yara_garbage_bytes_raise_feederror(tmp_path):
+    adapter = _make_yara_adapter(tmp_path, tar_bytes=b"\x1f\x8b not really gzip")
+    with pytest.raises(FeedError):
+        adapter.run()

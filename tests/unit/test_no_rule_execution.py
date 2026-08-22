@@ -21,7 +21,11 @@ SIGMA_ADAPTER = ADAPTERS_DIR / "sigma_corpus.py"
 YARA_ADAPTER = ADAPTERS_DIR / "yara_corpus.py"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
-_FORBIDDEN_TOKENS = ("yara-python", "import yara", "pysigma", "sigma_correlation")
+_FORBIDDEN_TOKENS = ("yara-python", "yara_python", "pysigma", "sigma_correlation")
+# Any import of a rule-execution package, in any of Python's import spellings:
+# `import yara`, `import yara as y`, `from yara import compile`,
+# `from pysigma.backends... import ...` — not just the fixed phrase "import yara".
+_FORBIDDEN_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(?:yara|pysigma|sigma)\b")
 _EXECUTION_CALL_RE = re.compile(r"\.compile\(|\.match\(")
 
 
@@ -40,6 +44,10 @@ def _scan(path: Path) -> list[str]:
         for token in _FORBIDDEN_TOKENS:
             if token in line:
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_no}: forbidden token {token!r}: {line.strip()}")
+        if _FORBIDDEN_IMPORT_RE.search(line):
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}:{line_no}: forbidden rule-engine import: {line.strip()}"
+            )
         if _EXECUTION_CALL_RE.search(line):
             offenders.append(
                 f"{path.relative_to(REPO_ROOT)}:{line_no}: forbidden .compile(/.match( call: {line.strip()}"
@@ -74,3 +82,22 @@ def test_yara_adapter_has_no_rule_execution_path():
 def test_pyproject_has_no_rule_execution_dependency():
     offenders = _scan(PYPROJECT)
     assert not offenders, "forbidden rule-execution pattern(s) found:\n" + "\n".join(offenders)
+
+
+def test_guard_catches_aliased_and_reordered_rule_engine_imports():
+    # HIGH-1: the guard must catch import spellings the old fixed-phrase check
+    # missed, e.g. `from yara import compile as _yc`.
+    for bad in (
+        "from yara import compile as _yc",
+        "import yara as y",
+        "from pysigma.backends.x import Backend",
+        "import sigma",
+    ):
+        assert _FORBIDDEN_IMPORT_RE.search(bad), f"guard missed: {bad!r}"
+    # legitimate adapter imports must not trip it
+    for ok in (
+        "import yaml",
+        "from azazel_knowledge.rules.lint import lint_sigma",
+        "from azazel_knowledge.feeds.base import FeedAdapter, FeedError",
+    ):
+        assert not _FORBIDDEN_IMPORT_RE.search(ok), f"false positive: {ok!r}"
