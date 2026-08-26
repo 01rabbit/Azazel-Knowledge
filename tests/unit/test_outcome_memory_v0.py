@@ -142,9 +142,8 @@ def test_identical_replay_is_idempotent_but_identity_redefinition_is_rejected():
     payload = execution()
     assert ingest_outcome_fact(conn, payload, received_at="r1") is True
     assert ingest_outcome_fact(conn, payload, received_at="later") is False
-    changed = execution(status="failed")
     with pytest.raises(OutcomeMemoryError, match="identity collision"):
-        ingest_outcome_fact(conn, changed, received_at="r2")
+        ingest_outcome_fact(conn, execution(status="failed"), received_at="r2")
     assert conn.execute("SELECT COUNT(*) FROM outcome_execution_v0").fetchone()[0] == 1
 
 
@@ -177,20 +176,57 @@ def test_assessment_requires_real_outcomes_from_same_chain():
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "field,value",
     [
-        lambda: {**outcome(), "success": True},
-        lambda: {**outcome(), "attacker_belief": "fooled"},
-        lambda: {**outcome(), "execute": "isolate"},
-        lambda: {**outcome(), "model_recommendation": "delay"},
+        ("success", True),
+        ("attacker_belief", "fooled"),
+        ("execute", "isolate"),
+        ("model_recommendation", "delay"),
+        ("provider-command", "tc qdisc replace"),
+        ("success-rate", 1.0),
+        ("attacker belief", "fooled"),
+        ("command-string", "nft add rule"),
     ],
 )
-def test_overclaim_or_directive_fields_are_rejected(payload):
+def test_nested_overclaim_or_directive_variants_are_rejected(field, value):
     conn = db()
     ingest_outcome_fact(conn, execution(), received_at="r")
     ingest_outcome_fact(conn, mechanism(), received_at="r")
+    payload = outcome(observation_values={"nested": {field: value}})
     with pytest.raises(OutcomeMemoryError):
-        ingest_outcome_fact(conn, payload(), received_at="r")
+        ingest_outcome_fact(conn, payload, received_at="r")
+
+
+def test_unknown_top_level_field_is_rejected():
+    conn = db()
+    payload = outcome()
+    payload["effect_class"] = "DELAY"
+    with pytest.raises(OutcomeMemoryError, match="unknown fields"):
+        ingest_outcome_fact(conn, payload, received_at="r")
+
+
+def test_invalid_mechanism_and_tactical_enums_are_rejected():
+    conn = db()
+    ingest_outcome_fact(conn, execution(), received_at="r")
+    with pytest.raises(OutcomeMemoryError, match="mechanism kind"):
+        ingest_outcome_fact(conn, mechanism(mechanism_kind="delay"), received_at="r")
+    ingest_outcome_fact(conn, mechanism(), received_at="r")
+    ingest_outcome_fact(conn, outcome(), received_at="r")
+    with pytest.raises(OutcomeMemoryError, match="tactical effect"):
+        ingest_outcome_fact(conn, assessment(tactical_effect="traffic_shaping"), received_at="r")
+
+
+def test_wrong_container_types_and_empty_identities_fail_closed():
+    conn = db()
+    with pytest.raises(OutcomeMemoryError, match="non-empty string"):
+        ingest_outcome_fact(conn, execution(trace_id=""), received_at="r")
+    with pytest.raises(OutcomeMemoryError, match="list"):
+        ingest_outcome_fact(conn, execution(evidence_refs="not-a-list"), received_at="r")
+    ingest_outcome_fact(conn, execution(), received_at="r")
+    with pytest.raises(OutcomeMemoryError, match="map"):
+        ingest_outcome_fact(conn, mechanism(observed_parameters="not-a-map"), received_at="r")
+    with pytest.raises(OutcomeMemoryError, match="non-empty"):
+        ingest_outcome_fact(conn, mechanism(observation_id=""), received_at="r")
 
 
 def test_tactical_assessment_is_separate_non_executable_fact():
@@ -217,9 +253,7 @@ def test_telemetry_loss_is_preserved_as_confounder_not_success():
         observation_values={},
     )
     ingest_outcome_fact(conn, payload, received_at="r")
-    stored = json.loads(
-        conn.execute("SELECT raw FROM outcome_observation_v0").fetchone()[0]
-    )
+    stored = json.loads(conn.execute("SELECT raw FROM outcome_observation_v0").fetchone()[0])
     assert stored["confounders"] == ["missing_post_telemetry"]
     assert "success" not in stored
 
