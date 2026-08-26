@@ -242,7 +242,7 @@ def test_corrupt_stored_raw_fails_closed_instead_of_guessing():
         ),
         received_at="r3",
     )
-    conn.execute("DROP TRIGGER outcome_observation_v0_no_update")
+    conn.execute("DROP TRIGGER trg_outcome_observation_no_update")
     conn.execute("UPDATE outcome_observation_v0 SET raw = '{broken' WHERE observation_id = 'outcome-1'")
     with pytest.raises(TempoDerivationError, match="invalid"):
         derive_tempo_features(conn, "trace-1")
