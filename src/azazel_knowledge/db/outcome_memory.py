@@ -23,6 +23,7 @@ _BANNED_KEYS = {
     "select_action", "selected_action", "model_recommendation", "attacker_belief",
     "success", "successful",
 }
+_TACTICAL_CLAIM_KEYS = {"effect_class", "tactical_effect"}
 _ALLOWED_MECHANISMS = {
     "traffic_shaping", "redirection", "isolation", "notification",
     "observation_only", "unknown",
@@ -157,6 +158,24 @@ def _walk(value: Any, depth: int = 0) -> None:
     raise OutcomeMemoryError(f"unsupported fact type: {type(value).__name__}")
 
 
+def _assert_no_tactical_claim_fields(value: Any) -> None:
+    """Reject tactical conclusions inside mechanism/outcome free-form fact maps.
+
+    Tactical effect is legal only in the dedicated assessment contract.  A
+    producer must not smuggle ``effect_class`` / ``tactical_effect`` (including
+    punctuation/case variants) into descriptive mechanism or outcome payloads.
+    """
+
+    if isinstance(value, Mapping):
+        for raw_key, child in value.items():
+            if isinstance(raw_key, str) and _normalized_key(raw_key) in _TACTICAL_CLAIM_KEYS:
+                raise OutcomeMemoryError(f"tactical claim field is forbidden in fact map: {raw_key}")
+            _assert_no_tactical_claim_fields(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _assert_no_tactical_claim_fields(child)
+
+
 def _non_empty_str(payload: Mapping[str, Any], field: str) -> str:
     value = payload.get(field)
     if not isinstance(value, str) or not value.strip():
@@ -245,7 +264,8 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
         if payload["authority_class"] != "producer_execution_fact":
             raise OutcomeMemoryError("invalid execution authority class")
     elif schema == "outcome-mechanism/v0.1":
-        _mapping(payload, "observed_parameters")
+        observed_parameters = _mapping(payload, "observed_parameters")
+        _assert_no_tactical_claim_fields(observed_parameters)
         _list_of_strings(payload, "limitations")
         if payload["mechanism_kind"] not in _ALLOWED_MECHANISMS:
             raise OutcomeMemoryError("invalid mechanism kind")
@@ -259,9 +279,9 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
         _non_empty_str(payload, "observation_class")
         _optional_str(payload, "mechanism_observation_ref")
         _optional_str(payload, "subject_ref")
-        _mapping(payload, "observation_values")
-        _mapping(payload, "telemetry_coverage")
-        _mapping(payload, "resource_impact")
+        for field in ("observation_values", "telemetry_coverage", "resource_impact"):
+            fact_map = _mapping(payload, field)
+            _assert_no_tactical_claim_fields(fact_map)
         _list_of_strings(payload, "confounders")
         if payload["phase"] not in {"before", "during", "after"}:
             raise OutcomeMemoryError("invalid outcome phase")
