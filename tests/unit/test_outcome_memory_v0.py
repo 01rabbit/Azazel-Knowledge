@@ -197,6 +197,23 @@ def test_nested_overclaim_or_directive_variants_are_rejected(field, value):
         ingest_outcome_fact(conn, payload, received_at="r")
 
 
+@pytest.mark.parametrize("field", ["effect_class", "effect-class", "tactical_effect", "tactical-effect"])
+def test_nested_tactical_claims_are_rejected_in_fact_maps(field):
+    conn = db()
+    ingest_outcome_fact(conn, execution(), received_at="r")
+    with pytest.raises(OutcomeMemoryError, match="tactical claim"):
+        ingest_outcome_fact(
+            conn,
+            mechanism(observed_parameters={"nested": {field: "delay"}}),
+            received_at="r",
+        )
+    ingest_outcome_fact(conn, mechanism(), received_at="r")
+    for target_field in ("observation_values", "telemetry_coverage", "resource_impact"):
+        payload = outcome(**{target_field: {"nested": {field: "delay"}}})
+        with pytest.raises(OutcomeMemoryError, match="tactical claim"):
+            ingest_outcome_fact(conn, payload, received_at="r")
+
+
 def test_unknown_top_level_field_is_rejected():
     conn = db()
     payload = outcome()
