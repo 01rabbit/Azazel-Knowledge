@@ -1,0 +1,14 @@
+{
+  "schema_version": "outcome-execution/v0.1",
+  "producer_product": "azazel-gadget",
+  "producer_node": "gadget-1",
+  "trace_id": "trace-golden-1",
+  "decision_ref": "local-decision-golden-1",
+  "execution_ref": "gadget-execution-91f976eb55c60d75a17d8272",
+  "action": "isolate",
+  "status": "applied",
+  "observed_at": "2026-08-26T00:00:00Z",
+  "evidence_refs": ["gadget:decision:golden-1"],
+  "release_ref": null,
+  "authority_class": "producer_execution_fact"
+}
