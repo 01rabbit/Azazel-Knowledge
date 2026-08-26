@@ -103,13 +103,14 @@ def test_deception_observation_immutable_on_delete(tmp_path):
         conn.execute("DELETE FROM deception_observation WHERE observation_uid = 'o1'")
 
 
-def test_migration_0004_idempotent(tmp_path):
+def test_local_migration_chain_includes_0005_and_is_idempotent(tmp_path):
     conn = sqlite3.connect(tmp_path / "local.db")
     assert apply_migrations(conn, "local") == [
         "0001_init",
         "0002_behavior",
         "0003_reaction_ext",
         "0004_deception_observation",
+        "0005_outcome_evidence_v0",
     ]
     assert apply_migrations(conn, "local") == []
 
