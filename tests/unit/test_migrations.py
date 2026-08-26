@@ -44,6 +44,10 @@ LOCAL_TABLES = {
     "behavior_pattern_similarity",
     "behavior_meta",
     "deception_observation",
+    "outcome_execution_v0",
+    "outcome_mechanism_v0",
+    "outcome_observation_v0",
+    "outcome_effect_assessment_v0",
 }
 
 
@@ -75,6 +79,7 @@ def test_local_migrations_apply_cleanly(tmp_path):
         "0002_behavior",
         "0003_reaction_ext",
         "0004_deception_observation",
+        "0005_outcome_evidence_v0",
     ]
     tables = _table_names(conn)
     assert LOCAL_TABLES <= tables
