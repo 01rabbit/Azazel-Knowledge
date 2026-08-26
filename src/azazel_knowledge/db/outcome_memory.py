@@ -2,7 +2,7 @@
 
 This module intentionally does not depend on a live Fabric package version.
 It validates the ratification candidate wire shapes byte-for-byte, stores facts,
-and can export a deterministic trajectory bundle.  It never creates authority or
+and can export a deterministic trajectory bundle. It never creates authority or
 turns observations into success/causal claims.
 """
 
@@ -23,7 +23,13 @@ _BANNED_KEYS = {
     "select_action", "selected_action", "model_recommendation", "attacker_belief",
     "success", "successful",
 }
-
+_ALLOWED_MECHANISMS = {
+    "traffic_shaping", "redirection", "isolation", "notification",
+    "observation_only", "unknown",
+}
+_ALLOWED_TACTICAL_EFFECTS = {
+    "delay", "divert", "containment", "isolation", "observe", "restore",
+}
 _MAX_DEPTH = 6
 _MAX_MAP = 64
 _MAX_LIST = 128
@@ -100,6 +106,27 @@ _SPECS: dict[str, dict[str, Any]] = {
 }
 
 
+def _normalized_key(raw: str) -> str:
+    normalized = "".join(ch.lower() if ch.isalnum() else "_" for ch in raw.strip())
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    return normalized.strip("_")
+
+
+def _is_forbidden_key(raw: str) -> bool:
+    key = _normalized_key(raw)
+    return (
+        key in _BANNED_KEYS
+        or "provider_command" in key
+        or key.endswith("_command")
+        or key.startswith("command_")
+        or key.startswith("success_")
+        or key.endswith("_success")
+        or "attacker_belief" in key
+        or "model_recommendation" in key
+    )
+
+
 def _walk(value: Any, depth: int = 0) -> None:
     if depth > _MAX_DEPTH:
         raise OutcomeMemoryError("fact exceeds maximum nesting depth")
@@ -115,7 +142,7 @@ def _walk(value: Any, depth: int = 0) -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise OutcomeMemoryError("fact map key must be string")
-            if key.strip().lower() in _BANNED_KEYS:
+            if _is_forbidden_key(key):
                 raise OutcomeMemoryError(f"forbidden authority/overclaim field: {key}")
             if len(key) > 128:
                 raise OutcomeMemoryError("fact contains oversized key")
@@ -130,6 +157,50 @@ def _walk(value: Any, depth: int = 0) -> None:
     raise OutcomeMemoryError(f"unsupported fact type: {type(value).__name__}")
 
 
+def _non_empty_str(payload: Mapping[str, Any], field: str) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise OutcomeMemoryError(f"{field} must be a non-empty string")
+    if len(value) > _MAX_STRING:
+        raise OutcomeMemoryError(f"{field} is oversized")
+    return value
+
+
+def _optional_str(payload: Mapping[str, Any], field: str) -> str | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise OutcomeMemoryError(f"{field} must be null or a non-empty string")
+    if len(value) > _MAX_STRING:
+        raise OutcomeMemoryError(f"{field} is oversized")
+    return value
+
+
+def _list_of_strings(payload: Mapping[str, Any], field: str, *, non_empty: bool = False) -> list[str]:
+    value = payload.get(field)
+    if not isinstance(value, list):
+        raise OutcomeMemoryError(f"{field} must be a list")
+    if non_empty and not value:
+        raise OutcomeMemoryError(f"{field} must be non-empty")
+    if len(value) > _MAX_LIST:
+        raise OutcomeMemoryError(f"{field} exceeds maximum item count")
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise OutcomeMemoryError(f"{field} entries must be non-empty strings")
+        if len(item) > _MAX_STRING:
+            raise OutcomeMemoryError(f"{field} contains oversized entry")
+    return value
+
+
+def _mapping(payload: Mapping[str, Any], field: str) -> Mapping[str, Any]:
+    value = payload.get(field)
+    if not isinstance(value, Mapping):
+        raise OutcomeMemoryError(f"{field} must be a map")
+    _walk(value)
+    return value
+
+
 def canonical_fact_json(payload: Mapping[str, Any]) -> str:
     _walk(payload)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -138,10 +209,18 @@ def canonical_fact_json(payload: Mapping[str, Any]) -> str:
     return raw
 
 
+def _validate_common_identity(payload: Mapping[str, Any], *, id_field: str) -> None:
+    for field in ("producer_product", "producer_node", "trace_id", "decision_ref", id_field, "observed_at"):
+        _non_empty_str(payload, field)
+    _list_of_strings(payload, "evidence_refs")
+
+
 def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise OutcomeMemoryError("fact must be a mapping")
-    schema = str(payload.get("schema_version", ""))
+    schema = payload.get("schema_version")
+    if not isinstance(schema, str):
+        raise OutcomeMemoryError("schema_version must be a string")
     spec = _SPECS.get(schema)
     if spec is None:
         raise OutcomeMemoryError("unsupported outcome evidence schema")
@@ -153,31 +232,55 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
     if missing:
         raise OutcomeMemoryError(f"missing fields: {sorted(missing)}")
     _walk(payload)
+    _validate_common_identity(payload, id_field=spec["id_field"])
+
+    if schema != "outcome-execution/v0.1":
+        _non_empty_str(payload, "execution_ref")
 
     if schema == "outcome-execution/v0.1":
+        _non_empty_str(payload, "action")
+        _optional_str(payload, "release_ref")
         if payload["status"] not in {"applied", "partial", "failed", "rejected", "unverified", "released"}:
             raise OutcomeMemoryError("invalid execution status")
         if payload["authority_class"] != "producer_execution_fact":
             raise OutcomeMemoryError("invalid execution authority class")
     elif schema == "outcome-mechanism/v0.1":
+        _mapping(payload, "observed_parameters")
+        _list_of_strings(payload, "limitations")
+        if payload["mechanism_kind"] not in _ALLOWED_MECHANISMS:
+            raise OutcomeMemoryError("invalid mechanism kind")
         if payload["status"] not in {"observed", "not_observed", "unverified", "released", "stale", "disputed"}:
             raise OutcomeMemoryError("invalid mechanism status")
         if payload["authority_class"] != "producer_mechanism_fact":
             raise OutcomeMemoryError("invalid mechanism authority class")
     elif schema == "outcome-observation/v0.1":
+        _non_empty_str(payload, "window_start")
+        _non_empty_str(payload, "window_end")
+        _non_empty_str(payload, "observation_class")
+        _optional_str(payload, "mechanism_observation_ref")
+        _optional_str(payload, "subject_ref")
+        _mapping(payload, "observation_values")
+        _mapping(payload, "telemetry_coverage")
+        _mapping(payload, "resource_impact")
+        _list_of_strings(payload, "confounders")
         if payload["phase"] not in {"before", "during", "after"}:
             raise OutcomeMemoryError("invalid outcome phase")
         if payload["authority_class"] != "producer_outcome_fact":
             raise OutcomeMemoryError("invalid outcome authority class")
     else:
+        _non_empty_str(payload, "mechanism_observation_ref")
+        _non_empty_str(payload, "evaluator")
+        _non_empty_str(payload, "policy_ref")
+        _list_of_strings(payload, "outcome_observation_refs", non_empty=True)
+        _list_of_strings(payload, "limitations")
+        if payload["tactical_effect"] not in _ALLOWED_TACTICAL_EFFECTS:
+            raise OutcomeMemoryError("invalid tactical effect")
         if payload["assessment"] not in {"supported", "unsupported", "inconclusive"}:
             raise OutcomeMemoryError("invalid tactical assessment")
         if payload["executable"] is not False:
             raise OutcomeMemoryError("tactical assessment must be non-executable")
         if payload["authority_class"] != "producer_assessment_fact":
             raise OutcomeMemoryError("invalid assessment authority class")
-        if not payload["outcome_observation_refs"]:
-            raise OutcomeMemoryError("assessment requires outcome references")
     return spec
 
 
@@ -231,16 +334,16 @@ def ingest_outcome_fact(
 ) -> bool:
     """Insert one canonical fact.
 
-    Returns True for a new row and False for an identical replay.  Reusing an
+    Returns True for a new row and False for an identical replay. Reusing an
     identity with different canonical bytes is rejected rather than hidden by
     INSERT OR IGNORE.
     """
 
+    if not isinstance(received_at, str) or not received_at.strip():
+        raise OutcomeMemoryError("received_at must be a non-empty string")
     spec = _validate_shape(payload)
     raw = canonical_fact_json(payload)
     identity = str(payload[spec["id_field"]])
-    if not identity:
-        raise OutcomeMemoryError("fact identity must be non-empty")
     existing = _raw_by_id(conn, spec["table"], spec["id_field"], identity)
     if existing is not None:
         if existing == raw:
@@ -283,6 +386,8 @@ def ingest_outcome_fact(
 def export_trajectory_bundle(conn: sqlite3.Connection, trace_id: str) -> str:
     """Export one deterministic research/replay bundle without executable authority."""
 
+    if not isinstance(trace_id, str) or not trace_id.strip():
+        raise OutcomeMemoryError("trace_id must be non-empty")
     facts: list[dict[str, Any]] = []
     for table, id_field in (
         ("outcome_execution_v0", "execution_ref"),
@@ -295,7 +400,14 @@ def export_trajectory_bundle(conn: sqlite3.Connection, trace_id: str) -> str:
             (trace_id,),
         ).fetchall()
         facts.extend(json.loads(str(row[0])) for row in rows)
-    facts.sort(key=lambda item: (str(item.get("observed_at", "")), str(item.get("schema_version", "")), str(item.get("execution_ref", "")), str(item.get("observation_id", item.get("assessment_id", "")))))
+    facts.sort(
+        key=lambda item: (
+            str(item.get("observed_at", "")),
+            str(item.get("schema_version", "")),
+            str(item.get("execution_ref", "")),
+            str(item.get("observation_id", item.get("assessment_id", ""))),
+        )
+    )
     bundle = {
         "schema_version": "outcome-trajectory-bundle/v0.1",
         "trace_id": trace_id,
