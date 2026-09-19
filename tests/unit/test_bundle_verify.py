@@ -14,7 +14,11 @@ import pytest
 from nacl.signing import SigningKey
 
 from azazel_knowledge.bundle import verify as verify_module
+from pathlib import PurePosixPath
+
 from azazel_knowledge.bundle.verify import (
+    DEFAULT_MAX_MEMBER_DEPTH,
+    DEFAULT_MAX_MEMBER_NAME_BYTES,
     BUNDLE_FORMAT_VERSION,
     DEFAULT_MAX_MEMBERS,
     DEFAULT_MAX_RATIO,
@@ -1639,3 +1643,120 @@ def test_sparse_member_within_the_caps_is_ordinary_content(bundle_env, tmp_path)
     verified = verify_bundle(bundle, bundle_env["anchors_path"], bundle_env["state_path"], staging)
     assert "tables/sparse.jsonl" in verified.file_paths
     assert (staging / "tables" / "sparse.jsonl").read_bytes() == _sparse_expansion(stored, real_size)
+
+
+# --- the inode bomb the member cap does not close --------------------------
+
+
+def _resigned_with_extra_member(bundle_env, tmp_path, member_name: str, payload: bytes) -> Path:
+    """A validly signed bundle declaring one extra member under `member_name`.
+
+    Signed properly on purpose: the point of each test below is that a bundle
+    which clears every trust gate is still refused, so a signature failure
+    would prove nothing.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    manifest["files"][member_name] = hashlib.sha256(payload).hexdigest()
+    out = _resign(bundle_env, tmp_path, members, manifest)
+
+    body = _read_all_members(out)
+    with tarfile.open(out, "w:gz") as tar:
+        for info, data in body:
+            ni = tarfile.TarInfo(name=info.name)
+            ni.size = len(data) if data is not None else 0
+            tar.addfile(ni, io.BytesIO(data) if data is not None else None)
+        ni = tarfile.TarInfo(name=member_name)
+        ni.size = len(payload)
+        tar.addfile(ni, io.BytesIO(payload))
+    return out
+
+
+def test_a_deep_member_path_is_refused_before_a_directory_is_created(bundle_env, tmp_path):
+    """One member, thousands of directories: the member cap cannot see this.
+
+    `DEFAULT_MAX_MEMBERS` bounds declared files. Extraction creates a directory
+    per path component, so a *single* member whose name is `a/b/c/...` makes as
+    many directories as it has components -- an inode bomb that is one member
+    and therefore passes the member cap untouched.
+
+    The assertion that matters is not the error code but that **none of the
+    bomb's own directories exist**: a cap that refused after
+    `mkdir(parents=True)` had run would have created the very directories it
+    exists to prevent. Staging as a whole is not empty and must not be asserted
+    to be -- the forged member sits at the end of the tar, so the bundle's
+    legitimate members are already extracted when the cap fires, which is the
+    normal fail-closed behaviour the importer relies on (it discards staging).
+    """
+    deep = "/".join(f"d{i}" for i in range(DEFAULT_MAX_MEMBER_DEPTH + 1)) + "/x.jsonl"
+    forged = _resigned_with_extra_member(bundle_env, tmp_path, deep, b"{}\n")
+
+    staging = tmp_path / "staging-deep"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(forged, bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_MEMBER_PATH_TOO_DEEP"
+    assert not (staging / "d0").exists(), "the bomb's first directory was created"
+    assert not (staging / deep).exists()
+
+
+def test_the_depth_cap_admits_the_deepest_shape_a_builder_emits(bundle_env, tmp_path):
+    """A real bundle must not be refused by the bound that guards against bombs.
+
+    Both builders write two-component names (`tables/<t>.jsonl`,
+    `deltas/<t>.jsonl`) and the metadata members are one, so the shipped cap has
+    to sit above 2. Asserted against the real bundle rather than a copied
+    number, so a builder that started nesting deeper fails here rather than in
+    the field on a signed artifact.
+    """
+    deepest = max(
+        len(PurePosixPath(info.name).parts)
+        for info, _ in _read_all_members(bundle_env["bundle_path"])
+    )
+    assert deepest <= DEFAULT_MAX_MEMBER_DEPTH
+    assert deepest * 4 <= DEFAULT_MAX_MEMBER_DEPTH, (
+        f"the deepest real member is {deepest} components against a cap of "
+        f"{DEFAULT_MAX_MEMBER_DEPTH}; the headroom this cap was sized for is gone"
+    )
+
+
+def test_an_overlong_member_name_is_refused_with_a_bundle_code(bundle_env, tmp_path):
+    """Without this the filesystem refuses it, with an OSError and no BUNDLE_ code.
+
+    A caller that dispatches on `BundleVerifyError` would see an unhandled
+    exception instead of a refusal. Depth alone does not cover it: this name is
+    two components deep and still far past any `NAME_MAX`.
+    """
+    overlong = "tables/" + ("a" * (DEFAULT_MAX_MEMBER_NAME_BYTES + 1)) + ".jsonl"
+    forged = _resigned_with_extra_member(bundle_env, tmp_path, overlong, b"{}\n")
+
+    staging = tmp_path / "staging-long"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(forged, bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_MEMBER_NAME_TOO_LONG"
+    # Probing the path itself would raise ENAMETOOLONG from the test rather
+    # than the code under test, so walk what exists and assert nothing that
+    # long was written.
+    assert all(
+        len(entry.name.encode("utf-8")) <= DEFAULT_MAX_MEMBER_NAME_BYTES
+        for entry in staging.rglob("*")
+    )
+
+
+def test_the_two_member_shape_caps_are_independent(bundle_env, tmp_path):
+    """Each cap fires on its own shape, so neither test can pass on the other.
+
+    A deep name that is short, and a long name that is shallow.
+    """
+    deep_short = "/".join("d" for _ in range(DEFAULT_MAX_MEMBER_DEPTH + 1)) + "/x"
+    assert len(deep_short.encode()) < DEFAULT_MAX_MEMBER_NAME_BYTES
+    forged = _resigned_with_extra_member(bundle_env, tmp_path, deep_short, b"{}\n")
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(forged, bundle_env["anchors_path"], bundle_env["state_path"], tmp_path / "s1")
+    assert exc.value.code == "BUNDLE_MEMBER_PATH_TOO_DEEP"
+
+    long_shallow = "a" * (DEFAULT_MAX_MEMBER_NAME_BYTES + 1)
+    assert len(PurePosixPath(long_shallow).parts) <= DEFAULT_MAX_MEMBER_DEPTH
+    forged = _resigned_with_extra_member(bundle_env, tmp_path, long_shallow, b"{}\n")
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(forged, bundle_env["anchors_path"], bundle_env["state_path"], tmp_path / "s2")
+    assert exc.value.code == "BUNDLE_MEMBER_NAME_TOO_LONG"
