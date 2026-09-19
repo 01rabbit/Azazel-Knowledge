@@ -107,9 +107,17 @@ From `config/scoring.yaml:deception_effectiveness` (folded into `config_hash`):
 **No new runtime dependency.** The only `pyproject.toml` change is bumping the
 existing **api-extra** pin `azazel-fabric` from `@v0.3.0` to `@v0.6.0`; core
 deps (stdlib + PyYAML + idna + PyNaCl) are unchanged. Fabric remains imported
-only in `api/contracts.py`. NOTE: the `v0.6.0` git tag is not published yet, so
-CI installing `@v0.6.0` is red until the owner cuts the tag — expected; develop
-against the editable Fabric (already 0.6.0).
+only in `api/contracts.py`.
+
+> **Note resolved (2026-09-19, Azazel-Knowledge#73).** This ADR originally
+> warned that the `v0.6.0` git tag was unpublished and that CI installing
+> `@v0.6.0` would be red until the owner cut it. That tag is now published
+> (`refs/tags/v0.6.0`), and a clean `pip install -e ".[api,dev]"` resolves
+> `azazel-fabric 0.6.0` from it. Developing against an editable Fabric checkout
+> is no longer required. `v0.6.0` is the pin in force; the series R0 baseline
+> names `v0.8.0` as its reference candidate, and moving this repository to it
+> is a separate cross-repository decision with its own test evidence — see
+> [ADR-0015](0015-knowledge-lite-bundle.md) § *Open questions*.
 
 ## Constraint tension resolved here
 
