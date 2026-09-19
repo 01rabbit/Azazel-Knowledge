@@ -12,6 +12,7 @@ import dataclasses
 import pytest
 
 from azazel_knowledge.bundle.lite_policy import parse_export_policy
+from azazel_knowledge.bundle.verify import DEFAULT_MAX_FILE_BYTES
 from azazel_knowledge.bundle.lite_select import (
     PROFILES,
     LiteSelectionError,
@@ -222,6 +223,50 @@ def test_byte_ceiling_fails_closed(policy, inputs, monkeypatch):
     assert exc.value.code == "LITE_CEILING_EXCEEDED"
 
 
+def test_per_dataset_byte_ceiling_fails_closed(policy, inputs, monkeypatch):
+    """The total byte ceiling does not stand in for a per-dataset one.
+
+    The tight profile here leaves ``max_uncompressed_bytes`` alone, so a
+    selection that trips this must be tripping the per-dataset bound and not
+    the total -- otherwise the test would pass with no per-dataset check at all.
+    """
+    base = PROFILES["knowledge-lite-16g"]
+    tight = dataclasses.replace(base, max_bytes_per_dataset=10)
+    assert tight.max_uncompressed_bytes > tight.max_bytes_per_dataset
+    monkeypatch.setitem(PROFILES, "knowledge-lite-16g", tight)
+    with pytest.raises(LiteSelectionError) as exc:
+        _select(_rows(3), inputs, policy)
+    assert exc.value.code == "LITE_CEILING_EXCEEDED"
+    assert "dataset 'ioc'" in exc.value.message
+
+
+def test_no_profile_can_emit_a_member_the_reader_would_refuse():
+    """The builder's per-dataset ceiling is bounded by the reader's per-file cap.
+
+    One dataset is one tar member, and `verify_bundle` refuses any member over
+    `DEFAULT_MAX_FILE_BYTES` with BUNDLE_DECOMPRESSION_BOMB. If a profile were
+    allowed to exceed that, the builder could sign an artifact that no
+    conforming reader accepts -- which is exactly what a 900_000-row selection
+    did under the pre-measurement `knowledge-lite-32g` ceilings (1 GiB total,
+    no per-dataset bound): it built, signed, and then failed verification at
+    534.7 MiB in a single member.
+
+    This is a contract between two modules, so it is asserted against the
+    reader's real constant rather than a number copied into this file.
+    """
+    for profile_id, ceilings in PROFILES.items():
+        assert ceilings.max_bytes_per_dataset <= DEFAULT_MAX_FILE_BYTES, (
+            f"profile {profile_id!r} allows a {ceilings.max_bytes_per_dataset}-byte dataset, "
+            f"but the reader refuses any member over {DEFAULT_MAX_FILE_BYTES} bytes"
+        )
+        # The total may not be met by one dataset either: with max_datasets
+        # datasets the total is reachable, but no single member may exceed the
+        # cap, so the per-dataset bound must be the binding one for a member.
+        assert ceilings.max_bytes_per_dataset <= ceilings.max_uncompressed_bytes, (
+            f"profile {profile_id!r} has a per-dataset ceiling above its total"
+        )
+
+
 def test_dataset_count_ceiling_fails_closed(policy, inputs, monkeypatch):
     tight = dataclasses.replace(PROFILES["knowledge-lite-16g"], max_datasets=1)
     monkeypatch.setitem(PROFILES, "knowledge-lite-16g", tight)
@@ -289,6 +334,7 @@ def test_profile_block_records_the_tuple_the_ceilings_and_the_counts(policy, inp
     assert block["selection_inputs"]["export_policy_digest"] == policy.digest
     assert block["selection_inputs"]["as_of"] == AS_OF
     assert block["ceilings"]["freshness_window_days"] == 30
+    assert block["ceilings"]["max_bytes_per_dataset"] == PROFILES["knowledge-lite-16g"].max_bytes_per_dataset
     assert block["counts"] == {"datasets": 1, "rows": 4, "uncompressed_bytes": block["counts"]["uncompressed_bytes"]}
     assert block["counts"]["uncompressed_bytes"] > 0
 

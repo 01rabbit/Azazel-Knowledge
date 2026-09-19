@@ -41,11 +41,12 @@ instruction, so the problem tombstones would solve is already solved by
 something the artifact is required to carry anyway.
 
 **Deltas buy little against a bounded artifact.** Differentials exist to avoid
-retransmitting a large corpus. Lite is small by construction — the
-`knowledge-lite-16g` ceiling is 64 MiB compressed — and that bound is the
-product's purpose, not an accident. Introducing a base-version chain, which can
-break, to save a fraction of an already-bounded offline transfer is a poor
-trade.
+retransmitting a large corpus. Lite is small by construction: the
+`knowledge-lite-16g` ceiling is 192 MiB uncompressed, and a build at that
+profile's row ceiling was measured at 11.1 MiB compressed (ADR-0015 D3,
+measured characteristics). That bound is the product's purpose, not an
+accident. Introducing a base-version chain, which can break, to save a
+fraction of an already-bounded offline transfer is a poor trade.
 
 **Deltas would complicate the byte-identity claim.** D2 states that the same
 selection tuple reproduces the same unsigned artifact. A delta's content

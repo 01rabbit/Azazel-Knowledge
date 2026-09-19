@@ -38,7 +38,6 @@ from typing import Any, Iterable, Mapping, Sequence
 from .lite_policy import ExportPolicy, apply_export_policy
 
 _MIB = 1024 * 1024
-_GIB = 1024 * _MIB
 
 
 class LiteSelectionError(Exception):
@@ -54,12 +53,23 @@ class LiteSelectionError(Exception):
 class LiteCeilings:
     """Hard limits for one capacity profile.
 
-    Proposed in ADR-0015 D3 from the consuming products' declared resource
-    envelopes, **not** measured against a real corpus. The implementation is
-    expected to re-derive them and report back if the evidence disagrees.
+    Re-derived from measurement (ADR-0015 D3). The original values were
+    proposed from the consuming products' resource envelopes and assumed
+    357.9 bytes per row; measured density for D4-exportable intel-tier data is
+    143.7-250.4 B/row, so the row ceiling binds first in every case measured.
+
+    ``max_bytes_per_dataset`` exists because ``max_uncompressed_bytes`` bounds
+    only the *total*. Without a per-dataset bound, a selection that respects
+    every other ceiling can still put one oversized member in the tar, and the
+    reader refuses any single member over ``verify.DEFAULT_MAX_FILE_BYTES``
+    (512 MiB) -- so the builder would sign an artifact no conforming reader
+    accepts. Keeping this at half the reader's per-file cap leaves the margin
+    on the reader's side of the contract, where a future reader can tighten
+    without invalidating bundles already signed.
     """
 
     max_uncompressed_bytes: int
+    max_bytes_per_dataset: int
     max_rows_total: int
     max_rows_per_dataset: int
     max_datasets: int
@@ -71,14 +81,16 @@ class LiteCeilings:
 #: nothing by itself.
 PROFILES: Mapping[str, LiteCeilings] = {
     "knowledge-lite-16g": LiteCeilings(
-        max_uncompressed_bytes=256 * _MIB,
+        max_uncompressed_bytes=192 * _MIB,
+        max_bytes_per_dataset=128 * _MIB,
         max_rows_total=750_000,
         max_rows_per_dataset=250_000,
         max_datasets=8,
         freshness_window_days=30,
     ),
     "knowledge-lite-32g": LiteCeilings(
-        max_uncompressed_bytes=1 * _GIB,
+        max_uncompressed_bytes=512 * _MIB,
+        max_bytes_per_dataset=256 * _MIB,
         max_rows_total=3_000_000,
         max_rows_per_dataset=1_000_000,
         max_datasets=12,
@@ -244,9 +256,20 @@ def select_lite_content(
                 f"{dataset!r}, selection has {len(ordered)}",
             )
 
+        dataset_bytes = sum(len(_canonical_json_bytes(row)) + 1 for row in ordered)
+        # Checked per dataset, not only in the total: one dataset is one tar
+        # member, and the reader's cap is per member. A selection well inside
+        # the total byte ceiling can still carry a member the reader refuses.
+        if dataset_bytes > ceilings.max_bytes_per_dataset:
+            raise LiteSelectionError(
+                "LITE_CEILING_EXCEEDED",
+                f"profile {inputs.profile_id!r} allows {ceilings.max_bytes_per_dataset} uncompressed bytes "
+                f"in dataset {dataset!r}, selection has {dataset_bytes}",
+            )
+
         selected[dataset] = ordered
         total_rows += len(ordered)
-        total_bytes += sum(len(_canonical_json_bytes(row)) + 1 for row in ordered)
+        total_bytes += dataset_bytes
 
     if total_rows > ceilings.max_rows_total:
         raise LiteSelectionError(
@@ -265,6 +288,7 @@ def select_lite_content(
         "selection_inputs": inputs.as_manifest_block(),
         "ceilings": {
             "max_uncompressed_bytes": ceilings.max_uncompressed_bytes,
+            "max_bytes_per_dataset": ceilings.max_bytes_per_dataset,
             "max_rows_total": ceilings.max_rows_total,
             "max_rows_per_dataset": ceilings.max_rows_per_dataset,
             "max_datasets": ceilings.max_datasets,
