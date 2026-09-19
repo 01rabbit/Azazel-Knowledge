@@ -1,13 +1,23 @@
 """Durable fire-and-forget ingest spool (design S2/S4, F-4).
 
-Layout: ``<root>/<endpoint>/`` holds, per accepted batch, a
+Layout: ``<root>/<endpoint>/`` holds the **pending** batches -- a
 ``<batch_id>.jsonl`` payload plus a ``<batch_id>.client`` sidecar recording
 which API client wrote it (needed for per-client quota accounting before
-the drainer has produced a status file) and, once the worker has drained
-the batch, a ``<batch_id>.status.json`` file. Writes are staged to a
-``.tmp`` file, fsynced, atomically renamed, and the containing directory is
-then fsynced so a crash never leaves a half-written batch visible to the
-drainer.
+the drainer has produced a status file). Once the worker drains a batch,
+all three files move to ``<root>/<endpoint>/drained/``, where the
+``<batch_id>.status.json`` joins them and where retention (worker P3) later
+collects them. Writes are staged to a ``.tmp`` file, fsynced, atomically
+renamed, and the containing directory is then fsynced so a crash never
+leaves a half-written batch visible to the drainer.
+
+**Drained batches move out of the pending directory on purpose.** Every
+accept charges a per-client quota scan of that directory, and retention
+keeps drained batches for a week, so leaving them in place made an accept
+O(batches accepted in the last 7 days): measured at 2.07 ms against an empty
+directory and 232.92 ms against 5 000 drained batches, growing linearly
+(ADR-0003, "Measurement (2026-09-19)"). With drained batches elsewhere the
+scan is bounded by what the quota already bounds -- the bytes a client has
+pending -- instead of by ingest history.
 
 ``batch_id`` is a sortable, ULID-like 30-hex-character token: 40 bits of
 millisecond time followed by 80 bits of randomness, so batches list in
@@ -30,6 +40,11 @@ _RANDOM_BITS = 80
 _TIME_MASK = (1 << _TIME_BITS) - 1
 
 DEFAULT_QUOTA_BYTES = 64 * 1024 * 1024
+
+#: Subdirectory of an endpoint that holds batches the worker has drained.
+#: A batch is pending exactly while its payload sits in the endpoint
+#: directory itself, so moving it here is what ends its pending life.
+DRAINED_DIRNAME = "drained"
 
 
 class QuotaExceeded(Exception):
@@ -118,6 +133,20 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
+def _atomic_move(src: Path, dst: Path) -> None:
+    """Move a spool file between directories, durably.
+
+    ``os.replace`` is atomic within a filesystem, and both directories are
+    fsynced so the rename survives a crash. A missing source is not an error:
+    the caller may be finishing a move a previous crash left half-done.
+    """
+    if not src.exists():
+        return
+    os.replace(src, dst)
+    _fsync_dir(dst.parent)
+    _fsync_dir(src.parent)
+
+
 def _atomic_write(final_path: Path, payload: bytes) -> None:
     tmp_path = final_path.with_suffix(final_path.suffix + ".tmp")
     _fsync_file(tmp_path, payload)
@@ -132,6 +161,9 @@ class SpoolWriter:
 
     def _endpoint_dir(self, endpoint: str) -> Path:
         return self.root / endpoint
+
+    def _drained_dir(self, endpoint: str) -> Path:
+        return self._endpoint_dir(endpoint) / DRAINED_DIRNAME
 
     def _client_path(self, endpoint: str, client_key_id: str) -> Path:
         return self._endpoint_dir(endpoint) / f"{client_key_id}.client"
@@ -208,14 +240,47 @@ class SpoolWriter:
         return sorted(out, key=lambda b: b.batch_id)
 
     def write_status(self, endpoint: str, batch_id: str, status: BatchStatus) -> None:
+        """Record a batch's outcome; a drained batch also leaves the pending set.
+
+        The move happens **before** the status is written, because the payload's
+        absence from the endpoint directory is what makes a batch non-pending.
+        A crash between the two leaves a drained batch whose status reads as
+        unknown -- an observability gap, not a correctness one, and strictly
+        smaller than the window that already exists between the database commit
+        and this call, in which the batch is still pending and would be
+        replayed.
+        """
         endpoint_dir = self._endpoint_dir(endpoint)
         endpoint_dir.mkdir(parents=True, exist_ok=True)
         payload = (json.dumps(status.to_dict(), sort_keys=True) + "\n").encode("utf-8")
-        _atomic_write(self._status_path(endpoint, batch_id), payload)
+
+        if not status.drained:
+            _atomic_write(self._status_path(endpoint, batch_id), payload)
+            return
+
+        drained_dir = self._drained_dir(endpoint)
+        drained_dir.mkdir(parents=True, exist_ok=True)
+        for suffix in (".jsonl", ".client"):
+            _atomic_move(
+                endpoint_dir / f"{batch_id}{suffix}", drained_dir / f"{batch_id}{suffix}"
+            )
+        _atomic_write(drained_dir / f"{batch_id}.status.json", payload)
 
     def read_status(self, batch_id: str) -> BatchStatus | None:
+        """Find a batch's status wherever it lives.
+
+        A drained batch's status sits under ``<endpoint>/drained/``; a spool
+        written before that layout, or a batch whose status was recorded
+        without being drained, has it directly under ``<endpoint>/``. Both are
+        searched so an upgrade does not make already-drained batches report
+        as unknown.
+        """
         if not self.root.is_dir():
             return None
-        for status_path in self.root.glob(f"*/{batch_id}.status.json"):
-            return self._read_status_at(status_path)
+        for pattern in (
+            f"*/{DRAINED_DIRNAME}/{batch_id}.status.json",
+            f"*/{batch_id}.status.json",
+        ):
+            for status_path in self.root.glob(pattern):
+                return self._read_status_at(status_path)
         return None

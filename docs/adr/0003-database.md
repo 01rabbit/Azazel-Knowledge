@@ -93,10 +93,30 @@ unchanged.** The 1 s breach is scheduling and filesystem bookkeeping in front
 of the database; the 10 M store is handled with a flat, modest cost.
 
 Two findings are worth separate attention and are **not** database problems:
-the O(N) spool accept scan against a 7-day retention window is a live ingest
-ceiling today, and the 5 s worker interval contradicts any expectation of
-sub-second ingest visibility. Both are cheap to change and neither is decided
-here.
+the O(N) spool accept scan against a 7-day retention window, and the 5 s worker
+interval contradicting any expectation of sub-second ingest visibility.
+
+### Follow-up: the spool accept scan is fixed
+
+The first of those is closed. Drained batches now move to
+`<endpoint>/drained/`, so an accept's per-client quota scan walks only what the
+quota already bounds — the bytes a client has pending — instead of a week of
+ingest history. Re-measured with the same harness on the same host:
+
+| drained batches on disk | accept p50 before | accept p50 after |
+|---|---|---|
+| 0 | 2.07 ms | 1.68 ms |
+| 500 | 24.72 ms | 2.29 ms |
+| 1 000 | 48.88 ms | 2.01 ms |
+| 2 000 | 92.71 ms | 1.94 ms |
+| 5 000 | 232.92 ms | 1.83 ms |
+
+The point is not the 127× at 5 000 but that the curve is **flat**: the cost no
+longer depends on the population at all. The `write_queue` figures above were
+measured *before* this change and are left as recorded — they are what produced
+the finding, and re-running them is part of the Pi 4 work, not a paper edit.
+
+The 5 s worker interval is unchanged and still undecided.
 
 ### Not measured
 

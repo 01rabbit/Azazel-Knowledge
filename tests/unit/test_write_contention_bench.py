@@ -289,11 +289,14 @@ def test_a_sweep_config_measures_the_real_spool_to_worker_round_trip(tmp_path: P
 
 def test_accept_cost_population_is_settled_backlog_not_a_pending_queue(tmp_path: Path):
     """`write_batch`'s quota scan reads every batch file in the endpoint
-    directory, and P3 leaves drained batches there for a week. The cost that
-    matters is therefore the one a *healthy* node pays, so the population the
-    harness builds must be fully drained -- a pending backlog would be a node
-    already in trouble and a different measurement."""
-    from azazel_knowledge.ingest.spool import SpoolWriter
+    directory. The cost that matters is the one a *healthy* node pays, so the
+    population the harness builds must be fully drained -- a pending backlog
+    would be a node already in trouble and a different measurement.
+
+    Since the drained-directory change, a settled backlog no longer sits in the
+    endpoint directory at all, which is the whole point: the harness must still
+    build a real one, and the accept scan must no longer see it."""
+    from azazel_knowledge.ingest.spool import DRAINED_DIRNAME, SpoolWriter
 
     spool = SpoolWriter(tmp_path / "ingest")
     wc.populate_drained_spool(
@@ -301,11 +304,16 @@ def test_accept_cost_population_is_settled_backlog_not_a_pending_queue(tmp_path:
     )
 
     endpoint_dir = tmp_path / "ingest" / "events"
+    drained_dir = endpoint_dir / DRAINED_DIRNAME
     assert spool.pending_batches("events") == []
-    assert len(list(endpoint_dir.glob("*.jsonl"))) == 5
-    # The scan attributes a batch to a client through its `.client` sidecar;
-    # without one every batch is skipped and the accept looks free.
-    assert sorted(p.read_text() for p in endpoint_dir.glob("*.client")) == [
+    # The backlog is real: five drained batches exist...
+    assert len(list(drained_dir.glob("*.jsonl"))) == 5
+    # ...and none of them is in the directory an accept scans.
+    assert list(endpoint_dir.glob("*.jsonl")) == []
+    # The scan attributes a batch to a client through its `.client` sidecar,
+    # which travels with the batch; without one a pending batch would be
+    # skipped and the accept would look free.
+    assert sorted(p.read_text() for p in drained_dir.glob("*.client")) == [
         "bench-edge-0000"
     ] * 5
 

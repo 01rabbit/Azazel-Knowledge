@@ -42,7 +42,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from azazel_knowledge.core.clock import Clock, SystemClock, parse_rfc3339, to_rfc3339
 from azazel_knowledge.core.config import TrackedConfigLoader
@@ -62,7 +62,7 @@ from azazel_knowledge.feeds.adapters.yara_corpus import YaraCorpusAdapter
 from azazel_knowledge.feeds.base import FeedAdapter, FeedRunOutcome, fetch_https_with_pins, merge_feed_config
 from azazel_knowledge.ingest.burst_guard import BurstGuard
 from azazel_knowledge.ingest.drain import DrainStats, drain_endpoint
-from azazel_knowledge.ingest.spool import BatchStatus, SpoolWriter
+from azazel_knowledge.ingest.spool import DRAINED_DIRNAME, BatchStatus, SpoolWriter
 from azazel_knowledge.normalize.exclusions import ExclusionPolicy
 from azazel_knowledge.patterns.behavior_generate import apply_generation_plan
 from azazel_knowledge.scoring.behavior_shadow import (
@@ -568,13 +568,29 @@ def prune_advisory_log(conn: sqlite3.Connection, cutoff_rfc3339: str) -> int:
     return cursor.rowcount
 
 
+def _spool_status_dirs(root: Path) -> Iterator[Path]:
+    """Every directory a drained batch's files can sit in.
+
+    Drained batches live under ``<endpoint>/drained/`` so that an accept's
+    per-client quota scan does not walk a week of them. Endpoint directories
+    are still swept because a spool written before that layout keeps drained
+    batches directly under ``<endpoint>/``, and retention must still collect
+    them.
+    """
+    for endpoint_dir in root.iterdir():
+        if not endpoint_dir.is_dir():
+            continue
+        yield endpoint_dir
+        drained_dir = endpoint_dir / DRAINED_DIRNAME
+        if drained_dir.is_dir():
+            yield drained_dir
+
+
 def gc_ingest_spool(root: Path, cutoff: datetime) -> int:
     removed = 0
     if not root.is_dir():
         return removed
-    for endpoint_dir in root.iterdir():
-        if not endpoint_dir.is_dir():
-            continue
+    for endpoint_dir in _spool_status_dirs(root):
         for status_path in endpoint_dir.glob("*.status.json"):
             batch_id = status_path.name[: -len(".status.json")]
             try:

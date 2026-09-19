@@ -1315,8 +1315,11 @@ def _choices(args: argparse.Namespace) -> dict[str, Any]:
             "All observations therefore land in one observation_stats window"
         ),
         "accept_cost_population_meaning": (
-            "drained batches left on disk in the endpoint directory, which is what worker.py's P3 "
-            f"leaves there for {DEFAULT_SPOOL_RETENTION_DAYS} days; the accept scan reads them all"
+            "drained batches retained on disk, which worker.py's P3 keeps for "
+            f"{DEFAULT_SPOOL_RETENTION_DAYS} days. They used to sit in the endpoint directory and "
+            "the accept scan read every one; since the drained-directory change they sit in "
+            "<endpoint>/drained/ and the accept scan does not see them, so this curve should now "
+            "be flat. A curve that rises with the population again is a regression"
         ),
         "part_b_write_path": (
             "feeds.base.FeedAdapter.stage_and_swap_ioc (_stage_ioc -> INSERT .. ON CONFLICT into "
