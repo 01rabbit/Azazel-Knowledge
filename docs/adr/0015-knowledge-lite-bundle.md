@@ -312,12 +312,9 @@ through 0014 exist.)
 
 ### Open questions, deliberately not decided here
 
-- **Fabric baseline.** This repository pins Fabric `v0.6.0` in its api extra.
-  Azazel-Edge and Azazel-Deception pin `v0.8.0`, and the program's R0 baseline
-  names `v0.8.0` as the reference candidate. Both tags are published. Moving
-  this repository's pin is a cross-repository compatibility decision with its
-  own test evidence, is not required by Azazel-Knowledge#73, and is not taken
-  here.
+- **Fabric baseline — settled.** Moved to `v0.8.0` by
+  [ADR-0016](0016-fabric-pin-v0-8-0.md), with the cross-repository rationale
+  and the test evidence recorded there.
 - **Delta bundles and deletes.** `tools/bundle_build.py` documents that Phase-1
   differential bundles emit only `upsert` and produce no tombstones. Whether a
   Lite delta needs deletes, and what a consumer does with an undeletable stale
