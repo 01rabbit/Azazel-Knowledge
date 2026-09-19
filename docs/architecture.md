@@ -20,8 +20,10 @@ from its v0.3.0, pydantic v2 as its sole dependency). Its `cti_contracts` module
 independently defines request and response shapes for a boundary matching this
 repo's `/v1/context` above, and encodes the same advisory-only invariant at the
 type level. As of [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md) (ratified
-2026-07-10) this repository **adopts** `azazel_fabric.cti_contracts` v0.3.0 at
-the API boundary, tag-pinned as an `api`-extra-only dependency. The adoption is
+2026-07-10) this repository **adopts** `azazel_fabric.cti_contracts` at
+the API boundary, tag-pinned as an `api`-extra-only dependency; the pin in
+force is `v0.8.0` ([ADR-0016](adr/0016-fabric-pin-v0-8-0.md), carried in
+`pyproject.toml`). The adoption is
 additive and the documented wire shapes are unchanged: ingest can now be
 type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
 `/v1/context` response is checked against Fabric's `BANNED_DIRECTIVE_FIELDS`
@@ -155,6 +157,18 @@ Scheduled pulls when a link exists; nothing in the query path depends on it.
 ### 4. Offline bundle (courier → CTI)
 
 Signed snapshot/differential bundles imported from removable media or LAN.
+
+### 5. Knowledge Lite (CTI → Nexus / Boot, offline)
+
+A **Knowledge Lite** artifact is a bounded capacity profile of that same signed
+bundle — always full, never differential — built for Azazel-Nexus and
+Azazel-Boot, which embed a read-only cache of it. Selection is deterministic
+from a pinned tuple, capacity ceilings fail closed rather than truncate, and
+export is deny-by-default. Knowledge produces and signs it; the consumer owns
+trust and caching, and stays fully operational without it. Contract:
+[ADR-0015](adr/0015-knowledge-lite-bundle.md) and
+[ADR-0017](adr/0017-lite-is-full-only.md); operator view:
+[sync-offline.md](sync-offline.md#knowledge-lite--a-bounded-profile-of-the-same-bundle).
 
 ## Failure model — Edge must not care
 

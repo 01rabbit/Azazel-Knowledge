@@ -138,8 +138,10 @@ designations, and naming specification live in the umbrella repository:
 
 Knowledge-local integration note: this repository adopts
 [`azazel_fabric.cti_contracts`](https://github.com/01rabbit/Azazel-Fabric)
-v0.3.0 at its API boundary
-([ADR-0010](docs/adr/0010-adopt-fabric-cti-contracts.md)) — ingest can be
+at its API boundary
+([ADR-0010](docs/adr/0010-adopt-fabric-cti-contracts.md)), tag-pinned; the
+**pin in force is `v0.8.0`** ([ADR-0016](docs/adr/0016-fabric-pin-v0-8-0.md),
+carried in `pyproject.toml`) — ingest can be
 type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
 `/v1/context` response is checked against Fabric's directive-field validator
 before it is emitted (fail-closed). The adoption is additive, wire shapes are
@@ -153,7 +155,10 @@ under `azazel_knowledge.api`; the core dependency set (stdlib + PyYAML + idna
 - [Data model](docs/data-model.md) — IOC, ATT&CK, campaign, observation, pattern, behavioral stores
 - [API](docs/api.md) — Edge-facing REST contract, behavioral advisory, query discipline
 - [Scoring](docs/scoring.md) — deterministic, explainable confidence; shadow reaction-informed scoring
-- [Sync and offline operation](docs/sync-offline.md) — feed adapters, signed offline bundles
+- [Sync and offline operation](docs/sync-offline.md) — feed adapters, signed offline
+  bundles, and **Knowledge Lite**: a bounded, deterministic, full-only profile of that
+  bundle for Azazel-Nexus/Azazel-Boot ([ADR-0015](docs/adr/0015-knowledge-lite-bundle.md),
+  [ADR-0017](docs/adr/0017-lite-is-full-only.md))
 - [Operations](docs/operations.md) — provisioning, feeds, connecting an Edge, behavioral generation
 - [Roadmap](docs/roadmap.md) — scaling phases and the CTI-optimized-delay research loop
 - [Development guide](docs/development-guide.md) — the commander/adversarial-reviewer + Codex delegation loop

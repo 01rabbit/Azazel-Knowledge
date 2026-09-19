@@ -55,6 +55,45 @@ better-connected site. The bundle builder runs on any online Azazel-Knowledge (f
 (or a plain workstation with the toolchain) — this is also the Phase 4
 Regional CTI distribution mechanism.
 
+### Knowledge Lite — a bounded profile of the same bundle
+
+**Knowledge Lite is a capacity profile of the signed bundle above, not a second
+format.** Same container, same manifest, same signature and anti-rollback
+rules; what differs is that its content is selected down to a bounded subset of
+*intel-tier* knowledge so it fits a small node.
+
+- **Who consumes it.** Azazel-Nexus and Azazel-Boot, which embed a read-only
+  Lite cache. Knowledge produces and signs; the consumer owns caching, trust
+  policy, and what it does when the artifact is missing — **a consumer that
+  cannot read a Lite artifact stays fully operational**, like every other
+  advisory path here.
+- **Always `kind: full`.** `build-lite` offers no `--base` and no `--kind`; a
+  Lite artifact is never a differential ([ADR-0017](adr/0017-lite-is-full-only.md)).
+  The general bundle path above keeps its differentials.
+- **Reproducible from a pinned tuple.** Selection is a pure function of
+  `(as_of, intel_generation, stats_generation, attack_version, config_hash,
+  export-policy digest, profile)` — no clock, no randomness, no directory
+  order — so the same tuple rebuilds the same unsigned bytes on any host, later.
+- **Ceilings fail closed.** `knowledge-lite-16g` / `knowledge-lite-32g` declare
+  row, byte, dataset, and freshness limits; a build that would exceed one fails
+  with a named error instead of shipping a truncated artifact that lies about
+  its coverage.
+- **Export denies by default.** Only fields an explicit allowlist names leave
+  this node; a claim that cannot carry its provenance (citation, source,
+  freshness, expiry, confidence ceiling, limitations) is not exported at all.
+- **Never touches `local.db` or the active generation.** The build reads a
+  snapshot out of the query path and writes only its own artifact.
+
+Building one, with the full flag list, is in
+[operations.md](operations.md#knowledge-lite-build-a-bounded-artifact-for-nexus--boot).
+
+**The contract lives in [ADR-0015](adr/0015-knowledge-lite-bundle.md)**
+(profile, deterministic selection D2, measured capacity ceilings D3, provenance
+D4, export policy D5, signer-role/security-epoch gates D5b, ownership boundary
+D7), refined by [ADR-0017](adr/0017-lite-is-full-only.md). Implementation:
+`src/azazel_knowledge/bundle/lite_select.py`, `bundle/lite_policy.py`,
+`tools/bundle_build.py build-lite`, `tools/lite_fixture.py`.
+
 ## Direction of sync
 
 | Path | Content | Mode |

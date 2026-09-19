@@ -1,6 +1,32 @@
-# ADR-0013: YARA/Sigma rule-corpus ingest as knowledge (design spike)
+# ADR-0013: YARA/Sigma rule-corpus ingest as knowledge
 
-Status: proposed (design spike, 2026-08-21 — Azazel-Knowledge#61)
+Status: **accepted — implemented** (spike proposed 2026-08-21; shipped and
+verified against the code 2026-09-19 — Azazel-Knowledge#61)
+
+## Implementation status (verified 2026-09-19)
+
+Both corpora are ingested and the `rule_refs` usage seam this spike deferred
+has shipped. Recorded here so the status is readable from the ADR rather than
+inferred from the code.
+
+| What the spike fixed | Where it lives now |
+|---|---|
+| Adapters (`full_replace`, no rule engine) | `src/azazel_knowledge/feeds/adapters/sigma_corpus.py` (`SigmaCorpusAdapter`), `.../yara_corpus.py` (`YaraCorpusAdapter`) |
+| Schema: `sigma_rule_corpus`, `yara_rule_corpus` (raw text + license + `source_url` + `corpus_version` + `attack_refs`) | `src/azazel_knowledge/db/migrations/intel/0003_rule_corpus.sql` |
+| Feed configuration: pinned `corpus_version` (empty = inert, fail-closed), `allowed_licenses`, `max_rules` | `config/feeds.yaml`, `sigma_corpus:` / `yara_corpus:` blocks |
+| The deferred usage seam — `rule_refs` on `POST /v1/context` | `correlate/engage_rule_refs.py` (`lookup_rule_refs`), `api/routers/context.py`; contract in [`docs/api.md`](../api.md) §`engage_refs` / `rule_refs` |
+| "Never a scanner" enforced statically | `tests/unit/test_no_rule_execution.py` — asserts neither adapter nor `pyproject.toml` reaches a rule engine, and that the guard survives aliased/reordered imports |
+| Tests | `tests/unit/test_adapter_rule_corpus.py`, `tests/unit/test_context_engage_rule_refs.py` |
+
+The central risk this ADR existed to foreclose held in the implementation:
+`rule_refs` carries rule **identity and metadata only** — `technique`,
+`rule_type`, `rule_id`, `title`, `source_url` — never `raw_yaml`/`raw_text` or
+condition logic, pinned by
+`test_lookup_rule_refs_never_includes_rule_body`. Nothing compiles, matches, or
+executes a corpus rule; `pyproject.toml` gained neither `yara-python` nor
+`pysigma` nor any other dependency. Sigma inserts are gated on `lint_sigma`
+round-trip and a failing rule is quarantined via `insert_quarantine`, not
+inserted.
 
 ## Context
 
@@ -274,7 +300,8 @@ mid-swap without perturbing the deterministic core.
   a rule failing round-trip is quarantined via `insert_quarantine`, not
   inserted.
 - With both corpus tables empty (fresh DB), every existing unit test still
-  passes unchanged — the 487-test baseline does not shrink, no existing
+  passes unchanged — the test baseline does not shrink (CLAUDE.md is the
+  single source for that number; no raw count is copied here), no existing
   response shape changes.
 - License allow-list is config-driven (`config/feeds.yaml`); a rule with an
   unresolved/disallowed license is skipped and logged, not inserted.
