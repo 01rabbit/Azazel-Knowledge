@@ -142,6 +142,18 @@ class ContextResponse(BaseModel):
     #: never substitutes a default, because a default would be Knowledge
     #: asserting another product's posture out of its own ignorance.
     reported_defensive_state: ReportedDefensiveStateFact | None = None
+    #: Engagement-effectiveness context (Knowledge#52). A Fabric
+    #: `EngagementAdvisory`, emitted as a plain mapping because the Fabric model
+    #: already validated it at the boundary and re-declaring its shape here
+    #: would be a second definition free to drift. `None` means Knowledge has
+    #: nothing to say about this actor -- distinguishable from an advisory whose
+    #: every field says "unknown".
+    engagement_advisory: dict[str, Any] | None = None
+    #: Knowledge-local repeatability (0-100) for the actor's behavior pattern.
+    #: Carried beside the advisory rather than inside it: the Fabric contract
+    #: does not model it, and widening a shared contract to fit a product-local
+    #: field is how shared contracts stop being shared.
+    engagement_repeatability_score: int | None = None
 
 
 class IngestAcceptedResponse(BaseModel):

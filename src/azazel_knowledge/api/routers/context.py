@@ -30,12 +30,14 @@ from azazel_knowledge.api.app import (
 from azazel_knowledge.api.contracts import (
     AdvisoryInvariantViolation,
     assert_response_advisory_only,
+    build_engagement_advisory,
 )
 from azazel_knowledge.api.models import ContextApiRequest, ContextResponse
 from azazel_knowledge.audit.logger import AuditUnavailable
 from azazel_knowledge.core.clock import to_rfc3339
 from azazel_knowledge.ingest.spool import QuotaExceeded
 from azazel_knowledge.correlate.engage_rule_refs import lookup_engage_refs, lookup_rule_refs
+from azazel_knowledge.correlate.engagement_advisory import summarize_engagement
 from azazel_knowledge.db.defensive_state_memory import lookup_reported_defensive_state
 from azazel_knowledge.correlate.pipeline import (
     ContextRequest,
@@ -164,6 +166,11 @@ def post_context(
     engage_refs: list[dict] = []
     rule_refs: list[dict] = []
     reported_state = None
+    # Engagement-effectiveness context (Knowledge#52). Folded from the
+    # immutable `reaction` and `behavior_pattern` lanes, after scoring, so it
+    # can never move a scored field. `None` when Knowledge has nothing to say.
+    engagement_advisory: dict | None = None
+    engagement_repeatability: int | None = None
     if time.monotonic() < deadline:
         techniques = [
             m["technique"]
@@ -191,6 +198,45 @@ def post_context(
                     local_conn.close()
             except Exception:  # noqa: BLE001 -- unknown, never an error, never a state
                 reported_state = None
+        try:
+            local_conn = open_local_readonly(state.settings.local_db_path)
+            try:
+                # `body.actor_key` ONLY, never the `actor_key` local above.
+                #
+                # Those are two different concepts wearing one name. The local
+                # is `auth.key_id or body.actor_key or body.edge_id` -- the
+                # *client's* identity, used to attribute the advisory audit
+                # event. `reaction.actor_key` is the *source entity* (ip / ja3 /
+                # session cluster) the caller observed. Folding one actor's
+                # history under another actor's key is exactly the cross-actor
+                # leak this advisory must not have, and the fallback chain would
+                # produce it silently whenever the caller omitted the field.
+                folded = summarize_engagement(
+                    local_conn,
+                    body.actor_key,
+                    query_as_of=created_at,
+                    config=loader.engagement_advisory(),
+                )
+            finally:
+                local_conn.close()
+            if folded is not None:
+                engagement_repeatability = folded.get("repeatability_score")
+                engagement_advisory = build_engagement_advisory(
+                    folded, advisory_id=advisory_id, advisor="azazel-knowledge"
+                )
+        except AdvisoryInvariantViolation:
+            # Named for the reader, not load-bearing: the generic handler below
+            # produces the same outcome, and a mutation test confirms removing
+            # this clause changes nothing. It stays because the case is the one
+            # worth understanding -- an advisory that cannot satisfy the
+            # advisory-only contract is dropped rather than weakened, so a
+            # consumer sees "nothing to say" instead of something unvalidated,
+            # and the rest of the response is unaffected.
+            engagement_advisory = None
+            engagement_repeatability = None
+        except Exception:  # noqa: BLE001 -- best-effort, never turns a 200 into a 500
+            engagement_advisory = None
+            engagement_repeatability = None
 
     # Fabric advisory-only invariant (ADR-0010): assert the assembled advisory
     # carries no directive-shaped field, on a COPY built from pipeline output.
@@ -210,6 +256,7 @@ def post_context(
         "reported_defensive_state": (
             reported_state.as_fact() if reported_state is not None else None
         ),
+        "engagement_advisory": engagement_advisory,
     }
     try:
         assert_response_advisory_only(advisory_view)
@@ -234,4 +281,6 @@ def post_context(
         reported_defensive_state=(
             reported_state.as_fact() if reported_state is not None else None
         ),
+        engagement_advisory=engagement_advisory,
+        engagement_repeatability_score=engagement_repeatability,
     )

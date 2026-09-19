@@ -61,11 +61,13 @@ from azazel_fabric.deception_contracts import (
     assert_no_effectiveness_verdict,
     assert_no_runtime_directives,
 )
+from azazel_fabric.engagement_contracts import EngagementAdvisory
 
 __all__ = [
     "BANNED_DIRECTIVE_FIELDS",
     "IngestBatchInvalid",
     "AdvisoryInvariantViolation",
+    "build_engagement_advisory",
     "maybe_fabric_batch_lines",
     "maybe_fabric_observation_lines",
     "build_effectiveness_advisory",
@@ -212,6 +214,49 @@ def build_effectiveness_advisory(advisory_fields: Mapping[str, Any]) -> dict[str
     try:
         assert_no_runtime_directives(advisory_fields)
         model = EffectivenessAdvisory.model_validate(advisory_fields)
+    except (ValidationError, ValueError) as exc:
+        raise AdvisoryInvariantViolation(str(exc)) from exc
+    return model.model_dump(mode="json")
+
+
+def build_engagement_advisory(
+    advisory_fields: Mapping[str, Any], *, advisory_id: str, advisor: str
+) -> dict[str, Any]:
+    """Type-enforce Knowledge's engagement output as a Fabric `EngagementAdvisory`.
+
+    Advisory-only and non-executable **by construction**: the Fabric model pins
+    `authority="advisory_only"` and `executable=False` as `Literal` types and
+    forbids extra fields, so a suggestion cannot acquire a command, a deadline,
+    a handler name, or a firewall rule on the way out -- not because this
+    function strips them, but because the model has nowhere to put them.
+
+    `posture_suggestion` is validated as a Fabric `PostureSuggestion`, which
+    means its objective, approach and activities must be canonical Engage
+    values. Knowledge never widens that vocabulary here.
+
+    Any failure is an internal invariant violation, so the caller fails closed
+    with a `500` and never emits the advisory.
+    """
+
+    fields = dict(advisory_fields)
+    # Knowledge-local context that the Fabric contract does not model. Carried
+    # in the response beside the advisory rather than forced into it: widening
+    # a shared contract to fit a product-local field is how shared contracts
+    # stop being shared.
+    fields.pop("repeatability_score", None)
+    fields["advisory_id"] = advisory_id
+    fields["advisor"] = advisor
+    try:
+        # The recursive walk is NOT redundant with `extra="forbid"`:
+        # `prior_outcomes` is `dict[str, dict[...]]`, so its keys are
+        # free-form and a directive could hide one level down where the
+        # model's own field validation never looks.
+        assert_no_runtime_directives(fields)
+        # `posture_suggestion` needs no separate validation here --
+        # `EngagementAdvisory` types it as `PostureSuggestion | None` and
+        # validates it on the line below. An explicit second call would be
+        # dead code wearing a guard's clothes.
+        model = EngagementAdvisory.model_validate(fields)
     except (ValidationError, ValueError) as exc:
         raise AdvisoryInvariantViolation(str(exc)) from exc
     return model.model_dump(mode="json")
