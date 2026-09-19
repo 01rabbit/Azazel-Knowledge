@@ -84,11 +84,17 @@ def test_field_absent_from_the_allowlist_is_dropped():
 
 
 def test_canary_secret_never_reaches_the_export():
-    """The #73 criterion: a default artifact carries no canary secret.
+    """`apply_export_policy` drops a canary sitting in an unlisted column.
 
     The canary sits in a column the policy does not list, which is how a column
     added by a later migration behaves too -- it is excluded because it was
     never included, not because anything remembered to exclude it.
+
+    This is the *unit* statement, made against a policy dictionary built in
+    this file. It is not ADR-0015 D5, which asks for canaries seeded in a
+    source database and absent from an artifact built with the shipped default
+    policy; that lives in `test_lite_default_policy.py`, along with the four
+    other categories D5 names.
     """
     exported = apply_export_policy(
         _policy(),
@@ -101,6 +107,7 @@ def test_canary_secret_never_reaches_the_export():
 
 
 def test_canary_in_an_aliased_field_is_not_exported_verbatim():
+    """Unit-level; the artifact-level form of this is in `test_lite_default_policy.py`."""
     exported = apply_export_policy(
         _policy(),
         "ioc",

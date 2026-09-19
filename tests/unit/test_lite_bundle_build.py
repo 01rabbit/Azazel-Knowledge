@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from nacl.signing import SigningKey
 
+from azazel_knowledge.bundle.lite_select import PROFILES
 from azazel_knowledge.bundle.verify import LOCAL_TIER_TABLES, peek_manifest, verify_bundle
 from azazel_knowledge.db.repository import apply_migrations
 
@@ -484,3 +485,55 @@ def test_lite_bundle_contains_no_delta_members(lite_env, tmp_path):
         names = [i.name for i in tar.getmembers()]
     assert not any(n.startswith("deltas/") for n in names), names
     assert any(n.startswith("tables/") for n in names), names
+
+
+# --- the 32g profile, built for real ---------------------------------------
+
+
+def test_a_32g_artifact_builds_verifies_and_carries_its_own_ceilings(lite_env, tmp_path):
+    """`knowledge-lite-32g` had never been built by any test.
+
+    Every other Lite build test runs `knowledge-lite-16g`; the 32g profile
+    appeared only in a tautological comparison and a comment, so its path was
+    unexercised end to end. This builds one, verifies it with the ordinary
+    verifier, and asserts the manifest records **32g's own** ceilings rather
+    than 16g's.
+
+    What this does **not** exercise: the 32g row and byte ceilings at volume.
+    ADR-0015 measures builder peak RSS at 3.44 GiB against the 32g row ceiling,
+    which is buildable on a developer machine but not worth minutes of CI per
+    run. The shipped ceiling *values* are pinned in `test_lite_select.py`
+    instead; what is proved here is that the 32g profile selects, builds, signs
+    and verifies, and that its declared limits are the ones written into the
+    artifact.
+    """
+    out = tmp_path / "lite-32g.tar.gz"
+    _build_lite(lite_env, out, **{"--profile": "knowledge-lite-32g"})
+
+    signing_hex = Path(lite_env["sign_key"]).read_text().strip()
+    verify_key = SigningKey(bytes.fromhex(signing_hex)).verify_key.encode().hex()
+    anchors = tmp_path / "anchors-32g.toml"
+    anchors.write_text(
+        f'threshold = 1\n[keys]\n"{verify_key[:8]}" = "{verify_key}"\n', encoding="utf-8"
+    )
+    state = tmp_path / "state-32g.toml"
+    verified = verify_bundle(out, anchors, state, tmp_path / "staging-32g")
+
+    profile = verified.manifest["profile"]
+    assert profile["profile_id"] == "knowledge-lite-32g"
+
+    declared = PROFILES["knowledge-lite-32g"]
+    ceilings = profile["ceilings"]
+    assert ceilings["max_rows_total"] == declared.max_rows_total
+    assert ceilings["max_datasets"] == declared.max_datasets
+    assert ceilings["freshness_window_days"] == declared.freshness_window_days
+
+    sixteen = PROFILES["knowledge-lite-16g"]
+    assert ceilings["max_rows_total"] != sixteen.max_rows_total, (
+        "the 32g and 16g row ceilings are equal, so this test cannot tell which was applied"
+    )
+
+    counts = profile["counts"]
+    assert counts["rows"] > 0, "a 32g artifact with no rows would satisfy every ceiling vacuously"
+    assert counts["rows"] <= declared.max_rows_total
+    assert counts["datasets"] <= declared.max_datasets

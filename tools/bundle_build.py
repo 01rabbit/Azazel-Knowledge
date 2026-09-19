@@ -39,7 +39,9 @@ from azazel_knowledge.bundle.lite_select import (  # noqa: E402
     select_lite_content,
 )
 from azazel_knowledge.bundle.verify import (  # noqa: E402
+    BUNDLE_FORMAT_VERSION,
     LOCAL_TIER_TABLES,
+    MANIFEST_FORMAT_FIELD,
     MANIFEST_MEMBER,
     SIGNATURE_MEMBER,
     canonical_manifest_bytes,
@@ -159,6 +161,11 @@ def cmd_build(args: argparse.Namespace) -> int:
     files = {name: hashlib.sha256(data).hexdigest() for name, data in content_bytes.items()}
 
     manifest = {
+        # The *format* this artifact is written in, so a reader can refuse a
+        # format it cannot read as an incompatibility rather than tripping over
+        # it later under some unrelated code. Emitted from the reader's own
+        # constant so the two cannot drift.
+        MANIFEST_FORMAT_FIELD: BUNDLE_FORMAT_VERSION,
         "bundle_version": args.version,
         "base_version": args.base,
         "kind": kind,
@@ -270,6 +277,10 @@ def cmd_build_lite(args: argparse.Namespace) -> int:
     files = {name: hashlib.sha256(data).hexdigest() for name, data in content_bytes.items()}
 
     manifest = {
+        # Lite is a profile of the same format, not a second one (ADR-0015 D1),
+        # so it declares the same format version as any other bundle. The value
+        # is a constant, which keeps D2's byte-identical rebuild claim intact.
+        MANIFEST_FORMAT_FIELD: BUNDLE_FORMAT_VERSION,
         "bundle_version": args.version,
         "base_version": None,
         "kind": "full",
