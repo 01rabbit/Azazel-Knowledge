@@ -1,0 +1,187 @@
+# Default Knowledge Lite export policy (ADR-0015 D4/D5).
+#
+# This is the profile `tools/bundle_build.py build-lite` is meant to be run
+# with when nobody has said otherwise. It decides what leaves this node in a
+# Lite artifact bound for an Azazel-Nexus or Azazel-Boot field node.
+#
+# Read `src/azazel_knowledge/bundle/lite_policy.py` before editing. Three rules
+# the loader enforces and this file has to satisfy:
+#
+#   * Deny by default. A dataset not named here exports nothing; a field not
+#     listed here is dropped. There is no "everything except" form -- a
+#     denylist-shaped key is rejected outright. A column added by a later
+#     migration is therefore NOT exported until someone adds it below on
+#     purpose, which is the safe direction for a schema change.
+#   * All eight D4 provenance roles, covered exactly once per dataset, either
+#     per row (an allowlisted, non-optional column) or per dataset (a literal
+#     recorded once in the manifest). Missing one is LITE_PROVENANCE_INCOMPLETE
+#     and the build fails.
+#   * `mode: alias` replaces a value with a keyed pseudonym, bound to the alias
+#     key, the alias scope, the dataset and the field. Same inputs, same
+#     pseudonym; a different scope, a different pseudonym.
+#
+# The editing rule is the doctrine: a field is here because someone decided an
+# advisory consumer needs it and classified it, never because nobody thought to
+# exclude it. Adding a field changes `export_policy_digest`, which is a
+# selection input and a recorded manifest field, so every artifact states which
+# privacy rules produced it.
+#
+# ---------------------------------------------------------------------------
+# Datasets deliberately NOT exported by default, and why
+# ---------------------------------------------------------------------------
+#
+#   ioc_source      Per-feed attribution. Useful only joined back to `ioc` by
+#                   `ioc_id`, and exporting that surrogate key hands a consumer
+#                   an internal identifier and a join graph it has no use for.
+#                   `feed_id` also names which feeds this operator subscribes
+#                   to -- close to a site fingerprint, and a licensed-feed list
+#                   is commercially sensitive. The aggregate confidence in
+#                   `ioc` is what an advisory consumer needs; per-feed detail
+#                   is an opt-in policy, not a default.
+#   ioc_cidr        Same problem: keyed by `ioc_id` + `feed_id`, unusable
+#                   without exporting both.
+#   kev             CISA KEV is public and would be genuinely useful, but its
+#                   only timestamp column is `date_added`, which
+#                   `tools/bundle_build.py::_freshness_fields` picks as the
+#                   freshness column -- so a default artifact would carry only
+#                   the last 30 days of the catalogue while looking complete. A
+#                   consumer could not tell "not in KEV" from "aged out of this
+#                   bundle". Exporting it needs a per-dataset freshness
+#                   exemption first; see the PR report.
+#   attack_relation Technique/mitigation graph. A consumer that needs the graph
+#                   needs the whole of ATT&CK, which it is better off carrying
+#                   itself than receiving a 30-day-windowed slice of.
+#   attack_mitigation  Mitigation prose. Advisory value is real but it is not
+#                   needed to *describe* an observation, and it is bulk text.
+#   engage_activity, engage_attack_map
+#                   MITRE Engage deception mapping: a research-side concern of
+#                   this node, not context a field node needs to read an event.
+#   sigma_rule_corpus, yara_rule_corpus
+#                   Absolute Constraint 8 / ADR-0007: generated and ingested
+#                   rules are drafts, and this repository ships no deploy path
+#                   for them. Pushing a corpus of rule text into a field node's
+#                   cache would be the first half of one. Not by default, and
+#                   not quietly.
+#   feed_state      Purely operational: cursors, checksums, last-run times,
+#                   enable flags. It describes this node's behaviour, not the
+#                   threat -- exactly the "operator identifier" D5 names, and a
+#                   cursor for an authenticated feed can carry a credential.
+#
+# Everything in `LOCAL_TIER_TABLES` (reaction, observation, advisory_log, ...)
+# is out of reach by construction: `_eligible_tables` filters it before a
+# policy is consulted, and a policy naming one fails the build. Absolute
+# Constraint 5. Nothing below may name one.
+
+version: lite-export-default-v1
+
+datasets:
+
+  # -------------------------------------------------------------------------
+  # ioc -- the reason a Lite artifact exists.
+  #
+  # A field node with no route to a full node still has to answer "is this
+  # indicator known-bad, how sure are we, and is that answer still good?".
+  # These five fields are the smallest set that answers it and satisfies D4.
+  # -------------------------------------------------------------------------
+  ioc:
+    provenance:
+      row:
+        # Per-row because they genuinely differ per row.
+        freshness: last_seen
+        expiry: agg_next_expiry
+        # Never aliased: a pseudonymised confidence cannot be compared at all,
+        # and D4 forbids Lite reporting a claim more confidently than the full
+        # node would.
+        confidence_ceiling: agg_raw_confidence
+      dataset:
+        # Per dataset because they are one sentence for every row in it, and
+        # copying them onto every row would spend the byte ceiling repeating a
+        # single fact.
+        citation: "azazel-knowledge intel.ioc, keyed by (type, value)"
+        source: "aggregated feed intake across this node's configured feeds; per-feed attribution is not exported by the default policy"
+        generation: "the intel_generation recorded in this bundle's profile.selection_inputs"
+        decay: "confidence decays with age per docs/scoring.md; a consumer may lower it, never raise it"
+        limitations: "advisory only; carries no enforcement authority, no activation, and no command (ADR-0015 D7)"
+    fields:
+      # Aliased, not exported verbatim. A Lite artifact lives on a field node
+      # that can be physically taken, and the raw indicator set is the one
+      # thing in it worth taking: it reveals what this operator knows and,
+      # by omission, what it does not. A key-holding consumer still gets exact
+      # lookup by aliasing the value it observed and comparing -- the cost is
+      # that substring, CIDR and wildcard matching are not possible against a
+      # Lite artifact, which is the intended trade.
+      - name: value
+        mode: alias
+      # Needed to interpret `value` at all: ip, domain, ja3, ja4 are different
+      # namespaces and alias to different pseudonyms.
+      - name: type
+      # D4 freshness. Also what the selection freshness window filters on.
+      - name: last_seen
+      # D4 expiry. Evaluated by the consumer against its own query_as_of, never
+      # against a timestamp baked into the artifact: an expired entry is
+      # unavailable, not merely labelled.
+      - name: agg_next_expiry
+      # D4 confidence ceiling.
+      - name: agg_raw_confidence
+      #
+      # Left out on purpose:
+      #   ioc_id           internal surrogate key; meaningless to a consumer
+      #                    and the join handle into datasets not exported here.
+      #   first_seen       `last_seen` already answers the freshness question;
+      #                    a second timestamp is not needed to act.
+      #   tags             free text of unbounded provenance. Feed-supplied and
+      #                    operator-supplied strings land here, which makes it
+      #                    the most likely carrier in this table of an operator
+      #                    note, a site label, or a fragment of raw evidence.
+      #                    It is also most of the bytes (ADR-0015 measured
+      #                    143.7-150.1 B/row without it against 250.3-250.4
+      #                    B/row with every column). Unclassifiable content is
+      #                    treated as unlisted.
+      #   agg_computed_at  when this node last ran aggregation: operational
+      #                    timing about the node, not about the threat.
+
+  # -------------------------------------------------------------------------
+  # attack_technique -- the vocabulary for saying why an indicator matters.
+  #
+  # Without it a consumer can say "known-bad" and nothing else. With it the
+  # advisory can name a technique and a tactic, which is what makes the context
+  # readable by a human on the far end. Static, public, and carries nothing
+  # local: there is no privacy question here, only a byte-budget one.
+  #
+  # It has no last_seen/date_added/created_at column, so `_freshness_fields`
+  # leaves it exempt from the freshness window -- correct, since reference
+  # material does not go stale on a 30-day clock; it is superseded by a later
+  # attack_version instead.
+  # -------------------------------------------------------------------------
+  attack_technique:
+    provenance:
+      row:
+        # Genuinely per row: two ATT&CK versions can coexist in the table, and
+        # which one a technique row came from is the only generation statement
+        # that means anything for it.
+        generation: attack_version
+      dataset:
+        citation: "MITRE ATT&CK technique, as ingested into azazel-knowledge intel.attack_technique"
+        source: "MITRE ATT&CK Enterprise, pinned to the attack_version carried on each row"
+        freshness: "static reference material: versioned, not dated; the pinned attack_version is the freshness statement"
+        expiry: "does not expire on a clock; a row is superseded when this node ingests a later attack_version"
+        decay: "reference material is not scored and does not decay"
+        confidence_ceiling: "not a scored claim; carries no confidence and must not be treated as evidence of anything"
+        limitations: "a technique label is a description, not an attribution and not a recommendation (ADR-0015 D7)"
+    fields:
+      - name: technique_id
+      - name: name
+      - name: tactics
+      - name: attack_version
+      #
+      # Left out on purpose:
+      #   description        bulk prose, and the one column here an operator
+      #                      could plausibly annotate locally. A consumer that
+      #                      wants descriptions should carry ATT&CK itself.
+      #   data_sources       detection-engineering detail; nothing a field node
+      #                      acts on.
+      #   platforms          same.
+      #   is_subtechnique,
+      #   parent_technique_id  derivable from technique_id (T1059.001 is a
+      #                      sub-technique of T1059); exporting them spends
+      #                      bytes to restate the key.

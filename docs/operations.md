@@ -146,7 +146,7 @@ python tools/bundle_build.py build-lite \
     --out lite.tar.gz \
     --version 7 \
     --profile knowledge-lite-16g \
-    --export-policy lite-export-policy.yaml \
+    --export-policy config/lite-export-policy.yaml \
     --alias-key-file "$ROOT/secrets/lite-alias.hex" \
     --alias-scope mission-alpha \
     --as-of 2026-09-19T00:00:00Z \
@@ -174,6 +174,14 @@ What to expect when running it:
 - **A row without provenance is refused,** including an indicator that has not
   been through aggregation yet (it has no expiry or confidence). Export is
   deny-by-default: fields the policy does not name never leave this node.
+- **`config/lite-export-policy.yaml` is the default profile.** It exports
+  `ioc` (indicator aliased, plus type, freshness, expiry and confidence
+  ceiling) and `attack_technique` (id, name, tactics, ATT&CK version), and
+  nothing else — every other intel table, and every other column of those two,
+  is left out on purpose, with the reasoning written in the file. Point
+  `--export-policy` at a different file only after deciding what else may
+  leave this node; the digest of whichever policy was used is recorded in the
+  artifact's manifest.
 - **It is a full-node operation.** Peak builder memory is roughly 0.9 GB at the
   16g row ceiling and 3.4 GB at 32g, so a 4 GB Pi 4 cannot build a 32g
   artifact. The build reads a snapshot outside the query path and never writes
@@ -183,8 +191,20 @@ To hand consumers something to test their reader against:
 
 ```sh
 python tools/lite_fixture.py emit --out /tmp/lite-fixture
-# lite.tar.gz + anchors.toml + expected.json (rebuilt, not a committed blob)
+# lite.tar.gz + anchors.toml + expected.json  (rebuilt, not a committed blob)
+# negative/ + negative.json                   (what a reader must refuse)
 ```
+
+The negative set is there so Nexus and Boot can prove their fail-open path
+against artifacts this node actually emits rather than against broken files
+they forged themselves: `corrupt-signature` (refused on trust, nothing
+staged), `corrupt-payload` (a raised confidence; every trust gate passes and
+only the per-member digest catches it, with bytes already in staging),
+`corrupt-truncated` (fails in the tar decoder, with **no** `BUNDLE_*` code —
+a reader must treat any exception as a refusal), `expired` (verifies cleanly;
+every indicator in it has passed its `agg_next_expiry`), and `absent` (a path
+the emitter guarantees stays empty). `negative.json` states, per fixture,
+which gate it hits and what a conforming reader should see.
 
 Contract and rationale: [ADR-0015](adr/0015-knowledge-lite-bundle.md)
 (profile, deterministic selection, measured ceilings, provenance, export
