@@ -106,7 +106,7 @@ Codex は別ツール(OpenAI)であり、あなたのネイティブなサブエ
 
 - `main` へ直接コミットしない。1タスク1ブランチ。PR は**ドラフトで作成**。
 - コミットメッセージは日本語可、簡潔に「何を・なぜ」。設計改訂を含む場合は §番号を引く。
-- テスト821本(基準線)を1本でも壊した状態でコミットしない。
+- テスト823本(基準線)を1本でも壊した状態でコミットしない。
 - プッシュ失敗はネットワーク要因のみ指数バックオフで最大4回再試行。
 
 ---
@@ -115,7 +115,7 @@ Codex は別ツール(OpenAI)であり、あなたのネイティブなサブエ
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/unit -q            # 基準線 821 passed。減らさない
+python -m pytest tests/unit -q            # 基準線 823 passed。減らさない
 python azctl check-config --config-dir config   # メモリ算術 OK を確認
 ```
 
@@ -127,12 +127,18 @@ python azctl check-config --config-dir config   # メモリ算術 OK を確認
   scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii
 - `worker.py`(単一ライタ・P0〜P3 スケジューラ) / `azctl`(運用CLI)
 - `tools/`(bundle_build / ttl_sweep / export_research_dataset) / `ops/`(compose・nftables・Pi4 profile)
-- `tests/unit/`(821)/ `docs/`(設計・ADR・operations)
+- `tests/unit/`(823)/ `docs/`(設計・ADR・operations)
 
-### 現在の残タスク(`docs/development-guide.md` §4 の T1〜T6)
+### 現在の残タスク(`docs/development-guide.md` §4 が唯一の正)
 
-CI 整備(T1)/ `docs-sync-check.py` 本実装(T2)/ 文書批准差分(T3)/
-S9 性能ハーネス(T4・実行は Pi 4)/ Issue 整理(T5)/ S13 持ち越し(T6・要マスター確認)。
+Phase 1 整備の T1〜T6 は**すべて完了済み**(CI・`docs-sync-check.py`・文書批准・
+S9 ハーネス・Issue 整理・S13 計測)。残るのは以下:
+
+- Pi 4 実機での S9 性能ゲート実行と LUKS/Adiantum 検証(issue #21)— **実機必須**
+- Edge 側 SLO 確認と Behavioral CTI 用 reaction ペイロード送信
+  ([Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305))— **Edge 側判断**
+- roadmap Phase 2 のスケール項目(cross-edge 相関 / multi-edge ingest /
+  SQLite→Postgres 評価)
 
 ---
 
