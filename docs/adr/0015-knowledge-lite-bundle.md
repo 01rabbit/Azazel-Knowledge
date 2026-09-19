@@ -1,6 +1,10 @@
 # ADR-0015: Knowledge Lite bundle profile for Nexus and Boot (design)
 
-Status: proposed (design, 2026-09-19 — Azazel-Knowledge#73)
+Status: **accepted — implemented** (design proposed 2026-09-19; shipped and
+verified the same day — Azazel-Knowledge#73). The selection, ceilings, export
+policy, provenance and signing decisions below are in force and are covered by
+tests. Items this ADR left to a later PR, and the two statements corrected
+below, are tracked on #73.
 
 ## Context
 
@@ -30,7 +34,8 @@ members. Verified in the tree at the time of writing:
 | Anti-rollback watermark from a caller-supplied `state.toml` | `verify.py` (F-7) |
 | A manifest naming a local-tier table hard-aborts before any content byte is written | `verify.py`, `LOCAL_TIER_TABLES` (F-1) |
 | A manifest carrying a field shaped like a trust or rollback document hard-aborts | `_FORBIDDEN_MANIFEST_FIELDS` |
-| Absolute paths, `..`, empty path parts rejected | `_safe_member` |
+| Absolute paths, `..`, empty path parts rejected, **and the name required to be
+already canonical** (`posixpath.normpath(name) != name` aborts) | `_safe_member` |
 | Symlinks, hardlinks, devices, FIFOs, char/block, any non-regular member rejected | `_safe_member` |
 | Undeclared members rejected (`BUNDLE_UNDECLARED_MEMBER`); declared-but-absent rejected (`BUNDLE_FILE_MISSING`) | `_extract_declared_files` |
 | Per-file, total, manifest, and expansion-ratio caps | `DEFAULT_MAX_*`, `BUNDLE_DECOMPRESSION_BOMB` |
@@ -51,6 +56,19 @@ Two gaps are worth naming precisely rather than vaguely:
   `BUNDLE_DUPLICATE_MEMBER` error and no test pinning the behavior. This is a
   robustness and explicitness gap, **not** a content-substitution
   vulnerability, and it must not be reported as one.
+
+  **Correction (2026-09-19).** That remains true *of duplicates*, but the
+  enumeration above was not exhaustive, and the sentence should not be read as
+  clearing the member-name surface as a whole. The same reader did carry a
+  content-substitution path, through a **path alias**: `_safe_member` returned
+  the raw tar name without normalising it, so `tables/x.jsonl` and
+  `tables/./x.jsonl` were two keys for the duplicate guard and for
+  `manifest.files` but one file on disk, and a manifest declaring an honest
+  digest for one and a substituted digest for the other was accepted with the
+  substituted bytes staged. It required a valid signing key and could not
+  escape the staging directory. It was closed by requiring canonical member
+  names rather than by normalising them, so that the raw name, the manifest key
+  and the staging path are provably the same string.
 - **Sparse members and nested archives** are not separately named. Sparse
   members are covered transitively (`isreg()` is required and expansion is
   capped); a nested archive is inert because nothing in the reader extracts a
@@ -347,7 +365,13 @@ must:
 2. prove byte-identical unsigned content for a repeated tuple, and prove that
    changing any tuple element changes the artifact;
 3. prove full and delta round-trip, and that a wrong base or final tree digest
-   fails;
+   fails; **corrected 2026-09-19** — ADR-0017 makes Lite always `kind: full`, so
+   there is no Lite delta and no base to mismatch; and "final tree digest" names
+   a concept this codebase does not have. The signed `manifest.files` map is a
+   *flat* commitment and serves the same purpose, enforced by
+   `BUNDLE_FILE_HASH_MISMATCH` / `BUNDLE_FILE_MISSING` /
+   `BUNDLE_UNDECLARED_MEMBER`. The general bundle path keeps its differentials
+   and its base check;
 4. keep signature, signer role, security epoch, compatibility, semantic and
    privacy policy, and anti-rollback as **separate** gates — a pass on one
    never implies another;
@@ -365,9 +389,12 @@ must:
 
 The verification baseline recorded in `CLAUDE.md` is stale. A clean
 `pip install -e ".[api,dev]"` followed by `python -m pytest tests/unit -q` on
-this branch reports **714 passed**, not 487. 714 is the number a later PR must
-not decrease. (`CLAUDE.md` also describes the ADR range as 0001–0008; ADRs
-through 0014 exist.)
+this branch reports **714 passed**, not 487. 714 was the number a later PR must
+not decrease **as of this ADR's acceptance**; the live baseline is the one
+`CLAUDE.md` states, which `tests/unit/test_claude_md_baseline.py` enforces
+mechanically across three documents. Do not read the figure above as current.
+(`CLAUDE.md` also described the ADR range as 0001–0008 at the time; it now
+points at `docs/adr/README.md` as the index instead of naming a range.)
 
 ### Open questions, deliberately not decided here
 
