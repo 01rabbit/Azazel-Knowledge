@@ -315,10 +315,11 @@ through 0014 exist.)
 - **Fabric baseline — settled.** Moved to `v0.8.0` by
   [ADR-0016](0016-fabric-pin-v0-8-0.md), with the cross-repository rationale
   and the test evidence recorded there.
-- **Delta bundles and deletes.** `tools/bundle_build.py` documents that Phase-1
-  differential bundles emit only `upsert` and produce no tombstones. Whether a
-  Lite delta needs deletes, and what a consumer does with an undeletable stale
-  row, is a separable decision.
+- **Delta bundles and deletes — settled.** Lite is full-only by
+  [ADR-0017](0017-lite-is-full-only.md): D4's mandatory expiry already retires
+  a stale row without an out-of-band delete, so the problem tombstones would
+  solve does not arise for Lite. The Phase-2 tombstone TODO stays open for the
+  general bundle path.
 - **Exact canary seeding mechanism** and the dataset-by-dataset field
   allowlists, which belong in the implementation PR's policy file rather than
   in an ADR.
