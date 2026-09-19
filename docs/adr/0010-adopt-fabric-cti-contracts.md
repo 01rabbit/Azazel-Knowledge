@@ -2,6 +2,13 @@
 
 Status: accepted (2026-07-10, owner-authorized Phase 2 boundary adoption)
 
+> **Pin superseded.** The `v0.3.0` tag recorded below is this ADR's original
+> decision and is kept as the historical record. The api-extra pin in force is
+> **`v0.6.0`**, moved by [ADR-0011](0011-deception-observation-ingest.md) §
+> *Consequences* and carried in `pyproject.toml`. Everything else in this ADR —
+> api-extra-only scope, `api/`+`taxii/` confinement, never a core dependency —
+> remains in force.
+
 ## Context
 
 [Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric) (AZ-05, formerly
