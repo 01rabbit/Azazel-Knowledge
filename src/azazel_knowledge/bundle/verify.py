@@ -64,7 +64,7 @@ import posixpath
 import tarfile
 import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 from nacl.exceptions import BadSignatureError
@@ -145,6 +145,35 @@ DEFAULT_MAX_RATIO = 100
 #: signed, whereas a builder that outgrew the reader would have signed
 #: artifacts no conforming reader accepts.
 DEFAULT_MAX_MEMBERS = 256
+
+#: How deep a member's path may be, counted in components.
+#:
+#: `DEFAULT_MAX_MEMBERS` bounds how many *files* a bundle may declare; it does
+#: not bound how many *directories* extracting them creates. Extraction runs
+#: `dest_path.parent.mkdir(parents=True)`, which creates one directory per
+#: component, so a single declared member named `a/b/c/.../x.jsonl` with two-
+#: character components and a name a few million characters long produces
+#: directories on the order of millions -- an inode bomb the member cap does
+#: not touch, because it is one member. Capping depth is what closes it: at
+#: most `DEFAULT_MAX_MEMBERS * DEFAULT_MAX_MEMBER_DEPTH` directories can be
+#: created regardless of how the names are shaped.
+#:
+#: A real bundle is two deep (`tables/<table>.jsonl`, `deltas/<table>.jsonl`)
+#: and the two metadata members are one, so 8 is four times the deepest shape
+#: either builder emits. Like the member cap this is defence in depth against
+#: a compromised or careless signer, not against an anonymous attacker:
+#: extraction only runs on an artifact whose signature already verified.
+DEFAULT_MAX_MEMBER_DEPTH = 8
+
+#: How long a member name may be, in bytes.
+#:
+#: Depth alone closes the directory bomb, but a single component may still be
+#: arbitrarily long, and the filesystem -- not this module -- is what refuses
+#: it, with an `OSError` that carries no `BUNDLE_*` code for a caller to
+#: dispatch on. This bound keeps that refusal inside the verifier's own error
+#: vocabulary. `POSIX PATH_MAX` is commonly 4096 and a real member name is
+#: around thirty bytes, so 1024 is generous while still bounded.
+DEFAULT_MAX_MEMBER_NAME_BYTES = 1024
 
 _COPY_CHUNK = 256 * 1024
 
@@ -507,7 +536,12 @@ def _check_anti_rollback(manifest: dict, last_imported_version: int) -> None:
             )
 
 
-def _safe_member(member: tarfile.TarInfo) -> str:
+def _safe_member(
+    member: tarfile.TarInfo,
+    *,
+    max_depth: int = DEFAULT_MAX_MEMBER_DEPTH,
+    max_name_bytes: int = DEFAULT_MAX_MEMBER_NAME_BYTES,
+) -> str:
     name = member.name
     if name.startswith("/") or name.startswith("\\"):
         raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"absolute path in bundle: {name!r}")
@@ -545,6 +579,23 @@ def _safe_member(member: tarfile.TarInfo) -> str:
     # refused here.
     if name == "." or posixpath.normpath(name) != name:
         raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"non-canonical path in bundle: {name!r}")
+    # Depth and length are resource bounds rather than path-safety rules, so
+    # they carry their own codes: a caller that wants to tell "this bundle is
+    # shaped like an attack" from "this bundle is too big" can, and the tests
+    # for each cannot pass because the other fired. They live here because
+    # this is the one place that sees a member name before anything is created
+    # from it.
+    if len(name.encode("utf-8")) > max_name_bytes:
+        raise BundleVerifyError(
+            "BUNDLE_MEMBER_NAME_TOO_LONG",
+            f"member name is {len(name.encode('utf-8'))} bytes, over the cap of {max_name_bytes}",
+        )
+    depth = len(PurePosixPath(name).parts)
+    if depth > max_depth:
+        raise BundleVerifyError(
+            "BUNDLE_MEMBER_PATH_TOO_DEEP",
+            f"member path is {depth} components deep, over the cap of {max_depth}: {name!r}",
+        )
     if member.issym() or member.islnk():
         raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"link member not allowed: {name!r}")
     if member.isdev() or member.isfifo() or member.ischr() or member.isblk():

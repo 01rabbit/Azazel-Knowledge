@@ -69,10 +69,34 @@ Two gaps are worth naming precisely rather than vaguely:
   escape the staging directory. It was closed by requiring canonical member
   names rather than by normalising them, so that the raw name, the manifest key
   and the staging path are provably the same string.
-- **Sparse members and nested archives** are not separately named. Sparse
-  members are covered transitively (`isreg()` is required and expansion is
-  capped); a nested archive is inert because nothing in the reader extracts a
-  member's *contents* as an archive.
+- **Sparse members and nested archives** are not separately named. A nested
+  archive is inert because nothing in the reader extracts a member's *contents*
+  as an archive.
+
+  **Correction (2026-09-19) — the reason given for sparse members was wrong.**
+  This originally read "sparse members are covered transitively (`isreg()` is
+  required and expansion is capped)". The `isreg()` half does not hold:
+  CPython's `tarfile.REGULAR_TYPES` is
+  `(REGTYPE, AREGTYPE, CONTTYPE, GNUTYPE_SPARSE)`, so `isreg()` returns
+  **True** for a GNU sparse member and `_safe_member`'s non-regular catch-all
+  never refuses one. Measured: a crafted sparse member carrying 1 KiB of
+  archived data delivered 67,108,864 bytes through the streaming reader, with
+  `isreg() is True` and `type == b'S'`.
+
+  **The conclusion stands and no new control is needed**: the expansion caps
+  are a real and sufficient bound, and the ratio cap bounds exactly the
+  small-in/large-out asymmetry sparse provides. Only the stated reason was
+  false, and it was load-bearing in the wrong direction — a later reader
+  trimming `_safe_member` on the strength of that sentence would have believed
+  sparse was covered by a shape check that never covered it. The true behaviour
+  is now pinned by `test_a_sparse_member_is_not_caught_by_the_non_regular_catch_all`
+  and `test_sparse_member_within_the_caps_is_ordinary_content`.
+
+  **Also added since**: a member-count cap, a path-depth cap and a member-name
+  length cap, which together bound the inode primitive the archive-safety
+  inventory above did not address. Depth is the one that matters: extraction
+  runs `mkdir(parents=True)` per component, so a *single* declared member can
+  create millions of directories and the member count cannot see it.
 
 ### Intel tier versus local tier
 
@@ -317,6 +341,27 @@ Both thresholds live in the anchors, never in the manifest (F-7). A bundle may
 *claim* an epoch; it may not decide which epoch suffices, or any holder of a
 valid key could lower the bar for itself. Both gates are inert when the anchors
 declare nothing, so existing deployments are unaffected until they opt in.
+
+**Extended (2026-09-19) — four gates became six.** This section named signature
+threshold, signer role, security epoch and anti-rollback. Two more now stand
+beside them, on the same terms:
+
+- **Compatibility.** The manifest declares a bundle *format* version and the
+  reader declares the range it supports. Without it, a future incompatible
+  artifact could only fail somewhere later under a misleading code. A manifest
+  with no version field is normalised to format 1 and then compared like any
+  other — a default, never an exemption, so raising the supported floor refuses
+  the old unversioned artifacts rather than waving them through.
+- **Export-policy acceptance.** `anchors.toml` may declare
+  `accepted_export_policy_digests`; the reader compares them against the
+  `export_policy_digest` the manifest already records. This closes a gap D5
+  left open: the digest was *recorded* but no consumer-side acceptance rule
+  existed, so **a consumer had no way to refuse an artifact built under a
+  privacy policy it does not accept**. Absence in the anchors is inert, as
+  above; absence in the artifact never satisfies a requirement.
+
+That second gate is a D5 privacy decision as much as a D5b trust one, and D5
+should be read with it.
 
 ### D6 — Build never touches `local.db` or the active generation
 
