@@ -155,9 +155,18 @@ reach 8443 at all.
 ## 4. First enriched event
 
 Edge sends evidence fire-and-forget (`POST /v1/events`, `/v1/flows`);
-the worker's P1 stage drains that spool into `observation` rows on its
-normal cycle (every `--interval-s`, default 5 s, or immediately under
-`--once`). Once Edge hits a query trigger (critical alert, unknown IOC/
+the worker's P1 stage drains that spool into `observation` rows every
+`--drain-interval-s` (default 0.5 s), or immediately under `--once`.
+
+The drains (P0/P1) and the periodic stages (P2 feed pulls and sweeps, P3
+retention) run on separate cadences: `--drain-interval-s` for the drains,
+`--interval-s` (default 5 s) for the rest. They used to share one loop, which
+put the 5 s maintenance cadence under every ingested record's wait — measured
+at p50 2 579 ms for a single Edge at 200 records/s, none of it database
+contention (ADR-0003). Ingest is still fire-and-forget and still promises no
+visibility deadline; this is a better default, not a new guarantee. Setting
+`--drain-interval-s` equal to `--interval-s` restores the earlier
+single-cadence behaviour exactly. Once Edge hits a query trigger (critical alert, unknown IOC/
 JA3/JA4, first contact, high local score) it calls `POST /v1/context`
 and gets back the full advisory contract: `threat_context`,
 `threat_score`, `confidence`, `reason[]`, `recommendation` with
