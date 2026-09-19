@@ -376,7 +376,19 @@ How to read it:
 - **Per-feed age** -- compare `last_success` to now for each feed in
   `feeds[]`; a feed with no route to the internet simply stops
   advancing, it does not error. `GET /v1/health` (Edge-facing) reports
-  the same per-feed ages plus pin status and `cache_state`.
+  the same per-feed ages plus pin status and `cache_state`. It requires
+  `Scope.READ` like every other read route: it reports intel generation,
+  cache state and audit-writer status, which is not for an
+  unauthenticated caller on a published port.
+- **The container healthcheck is liveness, not readiness** -- because
+  `/v1/health` needs a token, `ops/docker-compose.yml` probes it without
+  one and treats **401 as live**: that answer already proves gunicorn is
+  up, the ASGI app loaded, the router is mounted and the auth layer ran.
+  It does not prove the cache is warm or the audit writer is healthy. A
+  container reported healthy is therefore *serving*, not *ready*; read
+  readiness from an authenticated `GET /v1/health` or from
+  `azctl health`. Before the probe accepted 401 it required a bare 200
+  and marked a working container unhealthy forever (issue #10).
 - **Freshness decay, not a cliff** -- every advisory's `confidence` and
   `threat_score` fold in a `freshness` factor that decays smoothly
   (`0.5^(age_days/30)`, floor `0.2`) as a feed goes stale; there is no
