@@ -275,6 +275,18 @@ def select_lite_content(
             "rows": total_rows,
             "uncompressed_bytes": total_bytes,
         },
+        # Dataset-level provenance travels with the artifact so a consumer can
+        # read all eight D4 roles for any claim: the per-row half comes from the
+        # row, this half from here. Recording it once is what lets `decay` and
+        # `limitations` be stated at all -- they are the same sentence for every
+        # row, and no column holds them.
+        "provenance": {
+            dataset: {
+                "row": dict(sorted(policy.datasets[dataset].provenance.row.items())),
+                "dataset": dict(sorted(policy.datasets[dataset].provenance.dataset.items())),
+            }
+            for dataset in sorted(selected)
+        },
     }
     return LiteSelection(datasets=selected, profile_block=profile_block)
 

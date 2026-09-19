@@ -51,7 +51,29 @@ _DENYLIST_SHAPED_KEYS: frozenset[str] = frozenset(
 
 _ALLOWED_MODES: frozenset[str] = frozenset({"allow", "alias"})
 _ALLOWED_FIELD_KEYS: frozenset[str] = frozenset({"name", "mode", "optional"})
-_ALLOWED_DATASET_KEYS: frozenset[str] = frozenset({"fields"})
+_ALLOWED_DATASET_KEYS: frozenset[str] = frozenset({"fields", "provenance"})
+_ALLOWED_PROVENANCE_KEYS: frozenset[str] = frozenset({"row", "dataset"})
+
+#: The provenance every exported claim must carry (ADR-0015 D4).
+#:
+#: Each role is satisfied either per row (mapped to a column) or per dataset
+#: (a literal recorded once in the manifest). The split is not a convenience:
+#: `freshness` and `expiry` genuinely differ per row, while `decay` and
+#: `limitations` are properties of the dataset -- the same sentence for every
+#: row in it. Copying such a sentence onto 750,000 rows would consume the byte
+#: ceiling to say one thing many times, and the intel schema has no column for
+#: them anyway. What D4 requires is that a consumer can read all eight for any
+#: claim, not that all eight live in the row.
+PROVENANCE_ROLES: tuple[str, ...] = (
+    "citation",
+    "source",
+    "freshness",
+    "generation",
+    "expiry",
+    "decay",
+    "confidence_ceiling",
+    "limitations",
+)
 _ALLOWED_ROOT_KEYS: frozenset[str] = frozenset({"version", "datasets"})
 
 #: Hex characters kept from the alias HMAC. 16 hex chars = 64 bits, which is
@@ -79,11 +101,20 @@ class FieldRule:
 
 
 @dataclass(frozen=True)
+class DatasetProvenance:
+    """How each D4 provenance role is satisfied for one dataset."""
+
+    row: Mapping[str, str]
+    dataset: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class DatasetPolicy:
     """The complete set of fields exportable from one dataset."""
 
     dataset: str
     fields: tuple[FieldRule, ...]
+    provenance: DatasetProvenance
 
     def rule(self, name: str) -> FieldRule | None:
         for field in self.fields:
@@ -140,6 +171,79 @@ def _reject_unknown_keys(node: Mapping[str, Any], allowed: frozenset[str], where
     unknown = sorted(set(node) - allowed)
     if unknown:
         raise LitePolicyError("LITE_POLICY_INVALID", f"{where}: unknown key(s) {unknown}")
+
+
+def _parse_provenance(
+    raw: Any, rules: tuple[FieldRule, ...], where: str
+) -> DatasetProvenance:
+    """Validate that all eight D4 roles are covered exactly once.
+
+    Requiring *every* role -- rather than letting a policy list whatever it
+    happens to have -- is what stops an unprovenanced claim being exported
+    simply because nobody wrote the mapping down.
+    """
+    prov_where = f"{where}.provenance"
+    raw = _require_mapping(raw if raw is not None else {}, prov_where)
+    _reject_unknown_keys(raw, _ALLOWED_PROVENANCE_KEYS, prov_where)
+
+    row = _require_mapping(raw.get("row", {}), f"{prov_where}.row")
+    dataset = _require_mapping(raw.get("dataset", {}), f"{prov_where}.dataset")
+
+    overlap = sorted(set(row) & set(dataset))
+    if overlap:
+        raise LitePolicyError(
+            "LITE_PROVENANCE_INVALID",
+            f"{prov_where}: role(s) {overlap} are satisfied both per row and per dataset; pick one",
+        )
+
+    covered = set(row) | set(dataset)
+    unknown = sorted(covered - set(PROVENANCE_ROLES))
+    if unknown:
+        raise LitePolicyError(
+            "LITE_PROVENANCE_INVALID", f"{prov_where}: unknown provenance role(s) {unknown}"
+        )
+    missing = sorted(set(PROVENANCE_ROLES) - covered)
+    if missing:
+        raise LitePolicyError(
+            "LITE_PROVENANCE_INCOMPLETE",
+            f"{prov_where}: no provenance declared for role(s) {missing}; ADR-0015 D4 requires all of "
+            f"{list(PROVENANCE_ROLES)}",
+        )
+
+    by_name = {rule.name: rule for rule in rules}
+    for role, column in row.items():
+        if not isinstance(column, str) or not column:
+            raise LitePolicyError(
+                "LITE_PROVENANCE_INVALID", f"{prov_where}.row.{role}: must name a field"
+            )
+        rule = by_name.get(column)
+        if rule is None:
+            raise LitePolicyError(
+                "LITE_PROVENANCE_INVALID",
+                f"{prov_where}.row.{role}: field {column!r} is not in this dataset's allowlist, so it "
+                "would never be exported",
+            )
+        if rule.optional:
+            raise LitePolicyError(
+                "LITE_PROVENANCE_INVALID",
+                f"{prov_where}.row.{role}: field {column!r} is optional; provenance cannot be optional",
+            )
+        if role == "confidence_ceiling" and rule.mode != "allow":
+            raise LitePolicyError(
+                "LITE_PROVENANCE_INVALID",
+                f"{prov_where}.row.confidence_ceiling: field {column!r} is {rule.mode!r}; aliasing a "
+                "confidence destroys the value a consumer must not exceed",
+            )
+    for role, literal in dataset.items():
+        if not isinstance(literal, str) or not literal.strip():
+            raise LitePolicyError(
+                "LITE_PROVENANCE_INVALID", f"{prov_where}.dataset.{role}: must be a non-empty string"
+            )
+
+    return DatasetProvenance(
+        row={str(k): str(v) for k, v in row.items()},
+        dataset={str(k): str(v) for k, v in dataset.items()},
+    )
 
 
 def parse_export_policy(document: Mapping[str, Any]) -> ExportPolicy:
@@ -201,10 +305,19 @@ def parse_export_policy(document: Mapping[str, Any]) -> ExportPolicy:
         # Sorted by field name so the digest depends on the policy's meaning,
         # never on the order it happened to be written in.
         ordered = tuple(sorted(rules, key=lambda rule: rule.name))
-        datasets[dataset_name] = DatasetPolicy(dataset=dataset_name, fields=ordered)
-        normalised[dataset_name] = [
-            {"name": rule.name, "mode": rule.mode, "optional": rule.optional} for rule in ordered
-        ]
+        provenance = _parse_provenance(raw_dataset.get("provenance"), ordered, where)
+        datasets[dataset_name] = DatasetPolicy(
+            dataset=dataset_name, fields=ordered, provenance=provenance
+        )
+        normalised[dataset_name] = {
+            "fields": [
+                {"name": rule.name, "mode": rule.mode, "optional": rule.optional} for rule in ordered
+            ],
+            "provenance": {
+                "row": dict(sorted(provenance.row.items())),
+                "dataset": dict(sorted(provenance.dataset.items())),
+            },
+        }
 
     digest = hashlib.sha256(
         _canonical_json_bytes({"version": version, "datasets": normalised})
@@ -271,6 +384,7 @@ def apply_export_policy(
     if not scope:
         raise LitePolicyError("LITE_SCOPE_MISSING", "an alias scope is required to apply an export policy")
 
+    provenance_columns = {column: role for role, column in dataset_policy.provenance.row.items()}
     exported: dict[str, Any] = {}
     for rule in dataset_policy.fields:
         if rule.name not in row:
@@ -281,6 +395,13 @@ def apply_export_policy(
                 f"dataset {dataset!r}: policy requires field {rule.name!r}, row does not carry it",
             )
         value = row[rule.name]
+        if rule.name in provenance_columns and value is None:
+            raise LitePolicyError(
+                "LITE_PROVENANCE_MISSING",
+                f"dataset {dataset!r}: field {rule.name!r} carries provenance "
+                f"({provenance_columns[rule.name]}) but is null on this row; the claim cannot be "
+                "exported without it",
+            )
         if rule.mode == "alias":
             exported[rule.name] = alias_value(
                 value, alias_key=alias_key, scope=scope, dataset=dataset, field=rule.name

@@ -279,6 +279,9 @@ def cmd_build_lite(args: argparse.Namespace) -> int:
         "files": files,
         "tables": sorted(selection.datasets),
         "profile": selection.profile_block,
+        # The artifact *claims* an epoch; whether the claim is acceptable is
+        # decided locally from anchors.toml, never from here (F-7).
+        "security_epoch": args.security_epoch,
     }
     manifest_bytes = canonical_manifest_bytes(manifest)
     sig_bytes = _sign_manifest(manifest_bytes, args.sign_key)
@@ -342,6 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
     lite.add_argument("--stats-generation", type=int, required=True)
     lite.add_argument("--attack-version", required=True)
     lite.add_argument("--config-hash", required=True)
+    lite.add_argument(
+        "--security-epoch",
+        type=int,
+        required=True,
+        help="the security epoch this artifact is built under; a consumer refuses anything "
+        "below its own anchors' minimum_security_epoch",
+    )
     lite.add_argument("--sign-key", action="append", required=True, dest="sign_key")
     lite.set_defaults(func=cmd_build_lite)
 

@@ -96,16 +96,52 @@ def canonical_manifest_bytes(manifest: dict) -> bytes:
     return json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _load_anchors(anchors_path: str | Path) -> tuple[int, dict[str, VerifyKey], frozenset[str]]:
+@dataclass(frozen=True)
+class TrustAnchors:
+    """Everything trust-related, read exclusively from `anchors.toml` (F-7).
+
+    `required_signer_role` and `minimum_security_epoch` live here rather than in
+    the manifest on purpose: a bundle must not be able to state which role may
+    sign it or which epoch is acceptable, or an attacker holding any valid key
+    could simply declare itself eligible. The manifest may only *claim* an
+    epoch; whether that claim is good enough is decided locally.
+    """
+
+    threshold: int
+    keys: dict[str, VerifyKey]
+    revoked: frozenset[str]
+    key_roles: dict[str, str]
+    required_signer_role: str | None
+    minimum_security_epoch: int | None
+
+
+def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
     path = Path(anchors_path)
     with path.open("rb") as fh:
         doc = tomllib.load(fh)
-    threshold = int(doc.get("threshold", 1))
-    revoked = frozenset(doc.get("revoked", []))
     keys: dict[str, VerifyKey] = {}
     for key_id, hex_key in dict(doc.get("keys", {})).items():
         keys[key_id] = VerifyKey(bytes.fromhex(hex_key))
-    return threshold, keys, revoked
+
+    required_role = doc.get("required_signer_role")
+    if required_role is not None and (not isinstance(required_role, str) or not required_role):
+        raise BundleVerifyError(
+            "BUNDLE_ANCHORS_INVALID", "required_signer_role must be a non-empty string when present"
+        )
+    minimum_epoch = doc.get("minimum_security_epoch")
+    if minimum_epoch is not None and (not isinstance(minimum_epoch, int) or isinstance(minimum_epoch, bool)):
+        raise BundleVerifyError(
+            "BUNDLE_ANCHORS_INVALID", "minimum_security_epoch must be an integer when present"
+        )
+
+    return TrustAnchors(
+        threshold=int(doc.get("threshold", 1)),
+        keys=keys,
+        revoked=frozenset(doc.get("revoked", [])),
+        key_roles={str(k): str(v) for k, v in dict(doc.get("key_roles", {})).items()},
+        required_signer_role=required_role,
+        minimum_security_epoch=minimum_epoch,
+    )
 
 
 def _read_last_imported_version(state_path: str | Path) -> int:
@@ -136,7 +172,7 @@ def _check_signature_threshold(
     threshold: int,
     keys: dict[str, VerifyKey],
     revoked: frozenset[str],
-) -> None:
+) -> set[str]:
     signer_key_ids = {key_id for key_id, _ in sig_lines}
     revoked_signers = signer_key_ids & revoked
     if revoked_signers:
@@ -161,6 +197,61 @@ def _check_signature_threshold(
         raise BundleVerifyError(
             "BUNDLE_SIGNATURE_THRESHOLD_NOT_MET",
             f"only {len(verified_key_ids)} of required {threshold} signatures verified",
+        )
+    return verified_key_ids
+
+
+def _check_signer_role(verified_key_ids: set[str], anchors: TrustAnchors) -> None:
+    """Gate on *which* key signed, separately from whether the signature is valid.
+
+    A cryptographically perfect signature from a key provisioned for another
+    purpose -- a full-node bundle key signing a Lite artifact, say -- passes the
+    threshold check and must still be refused here. Keeping this separate is the
+    point: a role failure reports as a role failure rather than hiding inside a
+    threshold count.
+
+    A key with no declared role never satisfies a required role. Silence is not
+    permission.
+    """
+    required = anchors.required_signer_role
+    if required is None:
+        return
+    matching = {k for k in verified_key_ids if anchors.key_roles.get(k) == required}
+    if len(matching) < anchors.threshold:
+        raise BundleVerifyError(
+            "BUNDLE_SIGNER_ROLE_NOT_PERMITTED",
+            f"{len(matching)} of required {anchors.threshold} verified signature(s) carry role "
+            f"{required!r}; signers present: "
+            f"{sorted((k, anchors.key_roles.get(k)) for k in verified_key_ids)}",
+        )
+
+
+def _check_security_epoch(manifest: dict, anchors: TrustAnchors) -> None:
+    """Gate on the artifact's security epoch, separately from its version.
+
+    Anti-rollback compares version numbers and so cannot catch an artifact that
+    is *newer* yet predates a security event -- a bundle built before a key
+    compromise still has a higher bundle_version than everything before it. The
+    epoch is the independent statement that such an artifact is no longer
+    acceptable, however new and however correctly signed it is.
+    """
+    minimum = anchors.minimum_security_epoch
+    if minimum is None:
+        return
+    declared = manifest.get("security_epoch")
+    if declared is None:
+        raise BundleVerifyError(
+            "BUNDLE_SECURITY_EPOCH_MISSING",
+            f"anchors require security_epoch >= {minimum} but the manifest declares none",
+        )
+    if not isinstance(declared, int) or isinstance(declared, bool):
+        raise BundleVerifyError(
+            "BUNDLE_SECURITY_EPOCH_INVALID", f"security_epoch must be an integer, got {declared!r}"
+        )
+    if declared < minimum:
+        raise BundleVerifyError(
+            "BUNDLE_SECURITY_EPOCH_TOO_LOW",
+            f"bundle security_epoch {declared} is below the required minimum {minimum}",
         )
 
 
@@ -357,10 +448,17 @@ def verify_bundle(
     manifest, sig_bytes = _read_manifest_and_signature(bundle_path, max_manifest_bytes)
     _validate_manifest_shape(manifest)
 
-    threshold, keys, revoked = _load_anchors(anchors_path)
+    anchors = _load_anchors(anchors_path)
     sig_lines = _parse_signature_lines(sig_bytes)
     manifest_bytes = canonical_manifest_bytes(manifest)
-    _check_signature_threshold(manifest_bytes, sig_lines, threshold, keys, revoked)
+    # Four independent gates. Passing one says nothing about the others, which
+    # is why they are separate calls with separate error codes rather than one
+    # combined "is this bundle acceptable" predicate.
+    verified_key_ids = _check_signature_threshold(
+        manifest_bytes, sig_lines, anchors.threshold, anchors.keys, anchors.revoked
+    )
+    _check_signer_role(verified_key_ids, anchors)
+    _check_security_epoch(manifest, anchors)
 
     last_imported_version = _read_last_imported_version(state_path)
     _check_anti_rollback(manifest, last_imported_version)

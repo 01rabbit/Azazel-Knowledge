@@ -430,3 +430,174 @@ def test_nested_archive_member_is_inert_opaque_content(bundle_env):
     assert exc.value.code == "BUNDLE_FILE_HASH_MISMATCH"
     # And nothing was expanded: no directory was created for the nested entry.
     assert not (staging / "tables" / "ioc.jsonl").is_dir()
+
+
+# --- signer role and security epoch: separate gates (Azazel-Knowledge#73) ---
+
+
+def _resign(bundle_env, tmp_path: Path, members, manifest: dict) -> Path:
+    """Rewrite a bundle around a modified manifest and sign it properly.
+
+    Every epoch test needs a *validly signed* artifact, because the point is
+    that a correct signature is not sufficient. Tampering without re-signing
+    would fail at the signature gate and prove nothing about the epoch gate.
+    """
+    manifest_bytes = canonical_manifest_bytes(manifest)
+    signing_key = SigningKey(bytes.fromhex(Path(bundle_env["key_path"]).read_text().strip()))
+    key_id = signing_key.verify_key.encode().hex()[:8]
+    signature = signing_key.sign(manifest_bytes).signature.hex()
+    sig_bytes = f"{key_id}:{signature}\n".encode()
+
+    out = tmp_path / "resigned.tar.gz"
+    with tarfile.open(out, "w:gz") as tar:
+        for name, data in ((MANIFEST_MEMBER, manifest_bytes), (SIGNATURE_MEMBER, sig_bytes)):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        for info, data in members:
+            if info.name in (MANIFEST_MEMBER, SIGNATURE_MEMBER):
+                continue
+            new_info = tarfile.TarInfo(name=info.name)
+            new_info.size = len(data)
+            tar.addfile(new_info, io.BytesIO(data))
+    return out
+
+
+def _anchors_epoch(tmp_path: Path, bundle_env, *, minimum: int) -> Path:
+    path = tmp_path / "anchors_epoch.toml"
+    path.write_text(
+        "threshold = 1\nrevoked = []\n"
+        f"minimum_security_epoch = {minimum}\n"
+        f'\n[keys]\n{bundle_env["key_id"]} = "{bundle_env["verify_hex"]}"\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+def _anchors_with_role(tmp_path: Path, key_id: str, verify_hex: str, *, key_role: str, required: str) -> Path:
+    path = tmp_path / "anchors_role.toml"
+    path.write_text(
+        "threshold = 1\n"
+        "revoked = []\n"
+        f'required_signer_role = "{required}"\n'
+        "\n[keys]\n"
+        f'{key_id} = "{verify_hex}"\n'
+        "\n[key_roles]\n"
+        f'{key_id} = "{key_role}"\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_signer_role_matching_the_requirement_is_accepted(bundle_env, tmp_path):
+    anchors = _anchors_with_role(
+        tmp_path,
+        bundle_env["key_id"],
+        bundle_env["verify_hex"],
+        key_role="knowledge-lite",
+        required="knowledge-lite",
+    )
+    verify_bundle(bundle_env["bundle_path"], anchors, bundle_env["state_path"], tmp_path / "staging")
+
+
+def test_valid_signature_from_the_wrong_role_is_refused(bundle_env, tmp_path):
+    """A perfect signature from a key provisioned for another purpose still fails.
+
+    This is what makes the role a *separate* gate: the signature verifies and
+    the threshold is met, so the only thing that can reject it is the role.
+    """
+    anchors = _anchors_with_role(
+        tmp_path,
+        bundle_env["key_id"],
+        bundle_env["verify_hex"],
+        key_role="knowledge-full",
+        required="knowledge-lite",
+    )
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], anchors, bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_SIGNER_ROLE_NOT_PERMITTED"
+
+
+def test_key_with_no_declared_role_never_satisfies_a_required_role(bundle_env, tmp_path):
+    """Silence is not permission: an unroled key cannot stand in for a role."""
+    path = tmp_path / "anchors_noroles.toml"
+    path.write_text(
+        "threshold = 1\nrevoked = []\n"
+        'required_signer_role = "knowledge-lite"\n'
+        f'\n[keys]\n{bundle_env["key_id"]} = "{bundle_env["verify_hex"]}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], path, bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_SIGNER_ROLE_NOT_PERMITTED"
+
+
+def test_role_gate_is_inert_when_anchors_require_no_role(bundle_env, tmp_path):
+    """Existing deployments that declare no role keep working unchanged."""
+    verify_bundle(
+        bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], tmp_path / "staging"
+    )
+
+
+def test_security_epoch_below_the_anchor_minimum_is_refused(bundle_env, tmp_path):
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    manifest["security_epoch"] = 1
+    _resign(bundle_env, tmp_path, members, manifest)
+    anchors = _anchors_epoch(tmp_path, bundle_env, minimum=5)
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(tmp_path / "resigned.tar.gz", anchors, bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_SECURITY_EPOCH_TOO_LOW"
+
+
+def test_security_epoch_at_or_above_the_minimum_is_accepted(bundle_env, tmp_path):
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    manifest["security_epoch"] = 5
+    _resign(bundle_env, tmp_path, members, manifest)
+    anchors = _anchors_epoch(tmp_path, bundle_env, minimum=5)
+    verify_bundle(tmp_path / "resigned.tar.gz", anchors, bundle_env["state_path"], tmp_path / "staging")
+
+
+def test_missing_security_epoch_is_refused_when_anchors_require_one(bundle_env, tmp_path):
+    anchors = _anchors_epoch(tmp_path, bundle_env, minimum=1)
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], anchors, bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_SECURITY_EPOCH_MISSING"
+
+
+def test_epoch_gate_is_independent_of_anti_rollback(bundle_env, tmp_path):
+    """A bundle can be newer by version and still fail the epoch gate.
+
+    Anti-rollback only compares version numbers, so an artifact built before a
+    key compromise passes it easily -- it is newer than everything before it.
+    The epoch is the separate statement that it is no longer acceptable, and a
+    test that did not set a *higher* version would not show the difference.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    manifest["bundle_version"] = 999  # unambiguously newer than any watermark
+    manifest["security_epoch"] = 1
+    _resign(bundle_env, tmp_path, members, manifest)
+    anchors = _anchors_epoch(tmp_path, bundle_env, minimum=7)
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(tmp_path / "resigned.tar.gz", anchors, bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_SECURITY_EPOCH_TOO_LOW"
+
+
+def test_manifest_cannot_supply_its_own_minimum_epoch(bundle_env, tmp_path):
+    """The bundle may claim an epoch; it may not decide which epoch suffices.
+
+    Trust comes only from anchors (F-7). A manifest carrying its own minimum is
+    simply ignored, so a correctly signed artifact cannot lower the bar for
+    itself.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    manifest["security_epoch"] = 1
+    manifest["minimum_security_epoch"] = 1  # must have no effect
+    _resign(bundle_env, tmp_path, members, manifest)
+    anchors = _anchors_epoch(tmp_path, bundle_env, minimum=9)
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(tmp_path / "resigned.tar.gz", anchors, bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_SECURITY_EPOCH_TOO_LOW"

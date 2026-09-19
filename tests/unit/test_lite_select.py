@@ -23,17 +23,43 @@ AS_OF = "2026-09-19T00:00:00Z"
 FRESH = "2026-09-18T00:00:00Z"
 STALE = "2026-01-01T00:00:00Z"
 
+#: Provenance satisfied per row where the data varies, per dataset where it does
+#: not. Every dataset must cover all eight D4 roles or the policy is rejected.
+_ROW_PROV = {"freshness": "last_seen", "expiry": "expires_at", "confidence_ceiling": "confidence"}
+_DATASET_PROV = {
+    "citation": "test citation",
+    "source": "test source",
+    "generation": "test generation",
+    "decay": "test decay",
+    "limitations": "advisory only",
+}
+_STATIC_PROV = {
+    "row": {},
+    "dataset": {
+        **_DATASET_PROV,
+        "freshness": "static reference content; revised with the ATT&CK version",
+        "expiry": "does not expire independently of its ATT&CK version",
+        "confidence_ceiling": "not confidence-scored",
+    },
+}
+
 POLICY_DOC = {
     "version": "lite-export-v1",
     "datasets": {
         "ioc": {
+            "provenance": {"row": _ROW_PROV, "dataset": _DATASET_PROV},
             "fields": [
                 {"name": "value", "mode": "alias"},
                 {"name": "kind"},
                 {"name": "last_seen"},
-            ]
+                {"name": "expires_at"},
+                {"name": "confidence"},
+            ],
         },
-        "attack_technique": {"fields": [{"name": "technique_id"}, {"name": "name"}]},
+        "attack_technique": {
+            "provenance": _STATIC_PROV,
+            "fields": [{"name": "technique_id"}, {"name": "name"}],
+        },
     },
 }
 
@@ -59,7 +85,14 @@ def inputs(policy):
 def _rows(count: int = 2, *, seen: str = FRESH):
     return {
         "ioc": [
-            {"value": f"10.0.0.{i}", "kind": "ip", "last_seen": seen} for i in range(count)
+            {
+                "value": f"10.0.0.{i}",
+                "kind": "ip",
+                "last_seen": seen,
+                "expires_at": "2027-01-01T00:00:00Z",
+                "confidence": 60,
+            }
+            for i in range(count)
         ]
     }
 
@@ -124,7 +157,8 @@ def test_freshness_is_measured_against_as_of_not_the_current_time(policy, inputs
     near its own timestamp, which the next assertion shows -- so the window
     genuinely follows as_of rather than whatever today happens to be.
     """
-    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": STALE}]}
+    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": STALE,
+                     "expires_at": "2027-01-01T00:00:00Z", "confidence": 60}]}
     assert _select(rows, inputs, policy).profile_block["counts"]["rows"] == 0
 
     near = dataclasses.replace(inputs, as_of="2026-01-05T00:00:00Z")
@@ -132,13 +166,15 @@ def test_freshness_is_measured_against_as_of_not_the_current_time(policy, inputs
 
 
 def test_an_as_of_far_in_the_past_still_selects_deterministically(policy, inputs):
-    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": "1999-01-02T00:00:00Z"}]}
+    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": "1999-01-02T00:00:00Z",
+                     "expires_at": "2027-01-01T00:00:00Z", "confidence": 60}]}
     past = dataclasses.replace(inputs, as_of="1999-01-03T00:00:00Z")
     assert _select(rows, past, policy).profile_block["counts"]["rows"] == 1
 
 
 def test_naive_timestamp_is_refused_rather_than_assumed_utc(policy, inputs):
-    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": "2026-09-18T00:00:00"}]}
+    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": "2026-09-18T00:00:00",
+                     "expires_at": "2027-01-01T00:00:00Z", "confidence": 60}]}
     with pytest.raises(LiteSelectionError) as exc:
         _select(rows, inputs, policy)
     assert exc.value.code == "LITE_TIMESTAMP_INVALID"
@@ -152,7 +188,8 @@ def test_dataset_without_a_freshness_field_is_exempt(policy, inputs):
 
 
 def test_declared_freshness_field_missing_from_a_row_is_refused(policy, inputs):
-    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip"}]}
+    rows = {"ioc": [{"value": "10.0.0.1", "kind": "ip",
+                     "expires_at": "2027-01-01T00:00:00Z", "confidence": 60}]}
     with pytest.raises(LiteSelectionError) as exc:
         _select(rows, inputs, policy)
     assert exc.value.code == "LITE_FRESHNESS_FIELD_MISSING"
@@ -189,7 +226,8 @@ def test_dataset_count_ceiling_fails_closed(policy, inputs, monkeypatch):
     tight = dataclasses.replace(PROFILES["knowledge-lite-16g"], max_datasets=1)
     monkeypatch.setitem(PROFILES, "knowledge-lite-16g", tight)
     rows = {
-        "ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": FRESH}],
+        "ioc": [{"value": "10.0.0.1", "kind": "ip", "last_seen": FRESH,
+                 "expires_at": "2027-01-01T00:00:00Z", "confidence": 60}],
         "attack_technique": [{"technique_id": "T1110", "name": "Brute Force"}],
     }
     with pytest.raises(LiteSelectionError) as exc:
@@ -253,3 +291,27 @@ def test_profile_block_records_the_tuple_the_ceilings_and_the_counts(policy, inp
     assert block["ceilings"]["freshness_window_days"] == 30
     assert block["counts"] == {"datasets": 1, "rows": 4, "uncompressed_bytes": block["counts"]["uncompressed_bytes"]}
     assert block["counts"]["uncompressed_bytes"] > 0
+
+
+def test_profile_block_carries_dataset_level_provenance(policy, inputs):
+    """The half of D4 that is not in the row travels in the manifest.
+
+    A consumer reads per-row provenance from the row and the rest from here, so
+    all eight roles are available for any claim without repeating a constant
+    sentence on every row.
+    """
+    block = _select(_rows(), inputs, policy).profile_block
+    prov = block["provenance"]["ioc"]
+    assert prov["row"]["freshness"] == "last_seen"
+    assert prov["dataset"]["limitations"] == "advisory only"
+    covered = set(prov["row"]) | set(prov["dataset"])
+    assert covered == {
+        "citation",
+        "source",
+        "freshness",
+        "generation",
+        "expiry",
+        "decay",
+        "confidence_ceiling",
+        "limitations",
+    }
