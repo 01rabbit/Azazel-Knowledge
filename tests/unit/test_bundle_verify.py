@@ -346,3 +346,87 @@ def test_undeclared_member_rejected(bundle_env):
     with pytest.raises(BundleVerifyError) as exc:
         verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
     assert exc.value.code == "BUNDLE_UNDECLARED_MEMBER"
+
+
+def _first_declared_member(members: list[tuple[tarfile.TarInfo, bytes | None]]) -> tuple[str, bytes]:
+    manifest = _decode_manifest(members)
+    declared = manifest["files"]
+    for info, data in members:
+        if info.name in declared:
+            return info.name, data
+    raise AssertionError("bundle declares no content files")
+
+
+def test_duplicate_member_rejected_before_the_second_copy_is_written(bundle_env):
+    """A repeated member name is refused outright, not merely caught by the hash.
+
+    The extractor writes each member to its declared path, so a second member
+    reusing that name would overwrite the first. The per-member hash check makes
+    that non-substitutive, but only after the bytes have landed. The verifier
+    must reject the duplicate up front instead.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    name, data = _first_declared_member(members)
+    # Re-append the same name with the *same* bytes: the hash check cannot see a
+    # problem here, so only an explicit duplicate control can reject it.
+    _rewrite_tar(bundle_env["bundle_path"], members, insert=[(name, data)])
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_DUPLICATE_MEMBER"
+
+
+def test_duplicate_member_with_different_content_rejected_as_duplicate(bundle_env):
+    """A differing duplicate is a duplicate first, not a hash mismatch.
+
+    Both codes would be safe outcomes, but the duplicate control has to fire
+    before extraction for the "no byte of the second copy is written" property
+    to hold, which pins the ordering here.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    name, _ = _first_declared_member(members)
+    _rewrite_tar(bundle_env["bundle_path"], members, insert=[(name, b'{"evil": true}\n')])
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_DUPLICATE_MEMBER"
+
+
+def test_duplicate_manifest_member_rejected(bundle_env):
+    """A second manifest.json cannot be smuggled in behind the signed first one."""
+    members = _read_all_members(bundle_env["bundle_path"])
+    forged = json.dumps({"bundle_version": 99, "kind": "full", "files": {}}).encode()
+    _rewrite_tar(bundle_env["bundle_path"], members, insert=[(MANIFEST_MEMBER, forged)])
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_DUPLICATE_MEMBER"
+
+
+def test_nested_archive_member_is_inert_opaque_content(bundle_env):
+    """A member whose bytes are themselves a tar.gz gets no special handling.
+
+    Nothing in the reader opens a member's *contents* as an archive, so a nested
+    archive is ordinary opaque content and stays subject to the same declared
+    SHA-256 gate as any other member. Swapping a declared file's bytes for an
+    archive therefore fails the hash, exactly as swapping them for any other
+    bytes would -- it is not expanded, and it gets no path of its own.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    name, _ = _first_declared_member(members)
+
+    inner = io.BytesIO()
+    with tarfile.open(fileobj=inner, mode="w:gz") as nested:
+        payload = b"payload that must never be expanded\n"
+        info = tarfile.TarInfo(name="tables/ioc.jsonl")
+        info.size = len(payload)
+        nested.addfile(info, io.BytesIO(payload))
+    nested_bytes = inner.getvalue()
+
+    _rewrite_tar(bundle_env["bundle_path"], members, replace={name: nested_bytes})
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_FILE_HASH_MISMATCH"
+    # And nothing was expanded: no directory was created for the nested entry.
+    assert not (staging / "tables" / "ioc.jsonl").is_dir()

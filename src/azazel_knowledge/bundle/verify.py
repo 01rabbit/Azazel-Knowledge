@@ -19,6 +19,13 @@ exclusively from a `state.toml` path supplied by the caller (F-7). A
 manifest that embeds any field shaped like those trust documents, or
 that names a local-tier table, hard-aborts before a single content byte
 is written to disk (F-1).
+
+Member names are unique within a bundle: a repeated name aborts with
+``BUNDLE_DUPLICATE_MEMBER`` before the second copy is extracted. The
+per-member hash check would already stop a *differing* duplicate from
+substituting content, but only after writing it, and an identical
+duplicate would pass unremarked; the explicit control states the
+property instead of leaving it to be inferred.
 """
 
 from __future__ import annotations
@@ -264,9 +271,23 @@ def _extract_declared_files(
     ratio_cap_bytes = bundle_size_on_disk * max_ratio
     total_bytes = 0
     seen: dict[str, Path] = {}
+    # Every member name seen so far, including manifest.json/manifest.sig. A tar
+    # may physically carry the same name twice; extraction would then overwrite
+    # the first copy with the second. The per-member hash check below already
+    # makes that non-substitutive -- it hashes what it just wrote and compares
+    # against the single declared digest, so a differing duplicate fails
+    # BUNDLE_FILE_HASH_MISMATCH -- but that is safety by accident. Reject the
+    # duplicate up front, before any byte of the second copy is written, so the
+    # property is stated rather than inferred.
+    member_names: set[str] = set()
 
     with tarfile.open(bundle_path, mode="r|gz") as tar:
         for member in tar:
+            if member.name in member_names:
+                raise BundleVerifyError(
+                    "BUNDLE_DUPLICATE_MEMBER", f"member appears more than once: {member.name!r}"
+                )
+            member_names.add(member.name)
             if member.name in (MANIFEST_MEMBER, SIGNATURE_MEMBER):
                 continue
             name = _safe_member(member)
