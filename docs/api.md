@@ -596,6 +596,82 @@ and is advisory-only — a consumer has to be able to tell "Edge says it is in
   with the same `observation_ref` is a no-op; the same ref with different
   content is refused rather than rewritten.
 
+### `engagement_advisory` (additive, optional; Knowledge#52)
+
+> **Knowledge advises; it never selects, commands, schedules, or executes.**
+
+`POST /v1/context` gains one **additive, top-level, optional** field, default
+`null`, plus `engagement_repeatability_score`. A caller that names no
+`actor_key` gets exactly the response it got before.
+
+The block is a Fabric `EngagementAdvisory`, folded from two immutable
+local-tier lanes the caller already populated — `reaction` (which bounded
+action was applied, and how the actor behaved after it) and `behavior_pattern`
+(the deterministic behavior class and its confidence).
+
+```json
+{
+  "engagement_advisory": {
+    "schema_version": "engagement-advisory/v0.1",
+    "advisory_id": "01J...",
+    "advisor": "azazel-knowledge",
+    "seen_before": true,
+    "behavior_class": "adaptive_probe",
+    "confidence": 0.79,
+    "prior_outcomes": {
+      "redirect": {"dominant_reaction": "followed_decoy", "evidence_count": 7, "distinct_reactions": 2},
+      "throttle": {"dominant_reaction": "continued_scanning", "evidence_count": 12, "distinct_reactions": 1}
+    },
+    "posture_suggestion": {
+      "objective": "collect",
+      "approach": "channel",
+      "supported_activities": ["redirect", "redirect_to_decoy"],
+      "reasons": ["similar_patterns_previously_engaged_decoy"]
+    },
+    "limitations": ["describes observed outcomes only; it is not a prediction, ..."],
+    "authority": "advisory_only",
+    "executable": false
+  },
+  "engagement_repeatability_score": 62
+}
+```
+
+- **`null` means Knowledge has nothing to say**, not "Knowledge is unsure".
+  Fewer stored reactions than `engagement_advisory.minimum_reactions`, or no
+  named actor, yields no block at all. A consumer can only tell the two apart
+  if they look different.
+- **Keyed on the actor the caller named**, `actor_key` in the request body —
+  never on the API client. `reaction.actor_key` is the *source entity* (ip /
+  ja3 / session cluster); the client's own identity is a different concept
+  wearing the same word, and folding one under the other is a cross-actor leak.
+- **A tie is `unknown`.** When no reaction outnumbers the others after an
+  action, the outcome is `unknown` and the tie is named in `limitations`. It is
+  never resolved by whichever value happens to sort first.
+- **A posture needs evidence for that posture.** `redirect_to_decoy` appears
+  only where prior decoy actions actually produced decoy engagement, at least
+  `decoy_support_minimum` times. Below `posture_confidence_floor` there is no
+  suggestion at all, though the observations are still reported.
+- **`delay` and `deception` suggest no activity, by design.** They have no
+  equivalent in Fabric's canonical activity vocabulary. They still inform
+  `prior_outcomes`, whose keys are free-form, and the gap is named in
+  `limitations` — inventing a mapping from a product-local action to a
+  canonical one would make the product word canonical by the back door.
+- **Advisory-only by construction.** `authority` and `executable` are pinned
+  `Literal` types on the Fabric model, and `extra="forbid"` leaves nowhere to
+  put a command, a deadline, a handler name, or a firewall rule.
+- **Two directive layers, two vocabularies.** The builder runs Fabric's
+  recursive runtime-directive walk (`shell_command`, `nft_rule`, `execute_now`,
+  `bypass_arbiter`, ...) — not redundant with `extra="forbid"`, because
+  `prior_outcomes` keys are free-form and a directive could hide one level
+  down. The response-level assertion then runs `BANNED_DIRECTIVE_FIELDS`
+  (`directive`, `must_execute`, `override`, `required_action`). A word only the
+  builder owns drops the block and serves a normal `200`; a word only the
+  response layer owns fails the whole response closed with a `500`.
+- **Outside the deterministic 7-tuple and `content_hash`.** Folded after
+  scoring completes, from `local.db` alone.
+- **No attribution.** No identity, intent, belief, or prediction is asserted,
+  and the advisory says so in its own `limitations`.
+
 ### Other read endpoints
 
 | Endpoint | Purpose |

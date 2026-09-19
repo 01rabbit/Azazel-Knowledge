@@ -111,6 +111,22 @@ research:
 # same 7-tuple replays byte-identically. Not weight-sum-validated (that check is
 # only for top-level `weights`/`confidence_weights`); the whole file still folds
 # into config_hash, so any edit here is visible in the determinism tuple.
+# Engagement-effectiveness advisory (Knowledge#52). Advisory-only context folded
+# from the immutable `reaction` and `behavior_pattern` lanes; never a scoring
+# weight, never in the 7-element replay tuple. Absent block -> built-in
+# conservative defaults in correlate/engagement_advisory.py.
+engagement_advisory:
+  version: 1
+  # Fewer stored reactions than this yields NO advisory, not an empty one.
+  minimum_reactions: 3
+  # Below this confidence the advisory still reports what was observed, but
+  # suggests no posture.
+  posture_confidence_floor: 0.5
+  # Prior decoy engagements required before `redirect_to_decoy` is a supported
+  # activity rather than a guess.
+  decoy_support_minimum: 2
+  round_ndigits: 6
+
 deception_effectiveness:
   version: 1
   confidence:

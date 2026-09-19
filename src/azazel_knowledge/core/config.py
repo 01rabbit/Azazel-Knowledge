@@ -129,6 +129,17 @@ class TrackedConfigLoader:
         block = self.scoring().get("deception_effectiveness", {}) or {}
         return _require_mapping(block, "scoring.yaml:deception_effectiveness")
 
+    def engagement_advisory(self) -> Mapping[str, Any]:
+        """Engagement-advisory config block (Knowledge#52).
+
+        Optional, exactly like `deception_effectiveness`: an absent block falls
+        back to the conservative built-in defaults. Not weight-sum-validated --
+        it is not a scoring weight vector -- but it still folds into
+        `config_hash` because the whole `scoring.yaml` document does.
+        """
+        block = self.scoring().get("engagement_advisory", {}) or {}
+        return _require_mapping(block, "scoring.yaml:engagement_advisory")
+
     def feeds(self) -> Mapping[str, Any]:
         return self.raw("feeds.yaml")
 
