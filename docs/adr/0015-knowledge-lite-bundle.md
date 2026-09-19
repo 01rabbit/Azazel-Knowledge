@@ -163,6 +163,36 @@ Confidence ceilings are carried per dataset. A Lite artifact MUST NOT raise a
 confidence above what the full node would have reported for the same claim;
 bounding the data must not sharpen it.
 
+**Where each role lives (settled during implementation).** Requiring all eight
+as *columns* is not possible and would not be right. The intel schema has no
+`decay` or `limitations` column, and `ioc` alone has no source or generation —
+so a column-only rule would make Lite export nothing. It would also be
+wasteful where the columns do exist in spirit: decay behaviour and limitations
+are the same sentence for every row in a dataset, and copying them onto 750,000
+rows would spend the byte ceiling repeating one fact.
+
+Each role is therefore satisfied **either** per row (mapped to an allowlisted,
+non-optional column) **or** per dataset (a literal recorded once in the
+manifest's `profile.provenance`). The export policy must cover all eight
+exactly once — covering a role twice, leaving one out, or inventing a ninth is
+rejected — so a consumer can always read every role for any claim: the varying
+half from the row, the constant half from the manifest. What D4 requires is
+that the provenance be *available*, not that it be duplicated.
+
+Three consequences follow, and each is enforced:
+
+- a provenance column that is **null** refuses the row, because a column that
+  exists but holds nothing carries no provenance;
+- a provenance column may not be `optional`, since optional provenance is a
+  contradiction — the claim could ship without it;
+- the `confidence_ceiling` column may not be aliased, because a pseudonymised
+  confidence cannot be compared at all, which is worse than raising it.
+
+In practice this means **an indicator that has not been through aggregation is
+not exportable**: it has no expiry and no confidence yet, so it cannot carry
+D4 provenance however complete the policy looks. That is the intended outcome,
+not a limitation to work around.
+
 ### D5 — Export privacy defaults to deny
 
 Local-sensitive export is **denied by default**. An export policy names, per
@@ -187,6 +217,29 @@ an artifact is a release blocker, not a warning.
 Each export records a destination and retention receipt. The receipt is
 evidence of what left the node and under which policy; it is not a permission
 to export.
+
+### D5b — Signer role and security epoch are gates of their own
+
+A valid signature answers one question only: that *some* trusted key signed
+this. Two further questions are independent of it and of each other.
+
+**Which key signed.** `anchors.toml` may declare `key_roles` and a
+`required_signer_role`. A cryptographically perfect signature from a key
+provisioned for another purpose — a full-node key signing a Lite artifact —
+meets the threshold and is still refused. A key with no declared role never
+satisfies a required role: silence is not permission.
+
+**Whether the artifact predates a security event.** `anchors.toml` may declare
+`minimum_security_epoch`; a Lite manifest declares its `security_epoch`.
+Anti-rollback compares version numbers and so cannot catch an artifact that is
+*newer* yet was built before a key compromise — it outranks everything before
+it. The epoch is the separate statement that such an artifact is no longer
+acceptable, however new and however correctly signed.
+
+Both thresholds live in the anchors, never in the manifest (F-7). A bundle may
+*claim* an epoch; it may not decide which epoch suffices, or any holder of a
+valid key could lower the bar for itself. Both gates are inert when the anchors
+declare nothing, so existing deployments are unaffected until they opt in.
 
 ### D6 — Build never touches `local.db` or the active generation
 

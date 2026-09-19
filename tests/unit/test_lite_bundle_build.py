@@ -30,16 +30,42 @@ POLICY_YAML = """\
 version: lite-export-v1
 datasets:
   ioc:
+    provenance:
+      row:
+        freshness: last_seen
+        expiry: agg_next_expiry
+        confidence_ceiling: agg_raw_confidence
+      dataset:
+        citation: "azazel-knowledge intel.ioc, keyed by (type, value)"
+        source: "aggregated feed intake; per-feed detail lives in ioc_source"
+        generation: "the intel_generation recorded in this bundle's selection_inputs"
+        decay: "confidence decays per docs/scoring.md; a consumer must not re-raise it"
+        limitations: "advisory only; carries no enforcement authority"
     fields:
       - name: value
         mode: alias
       - name: type
       - name: last_seen
+      - name: agg_next_expiry
+      - name: agg_raw_confidence
   ioc_source:
+    provenance:
+      row:
+        source: feed_id
+        freshness: last_seen
+        generation: intel_generation
+        expiry: expires_at
+        confidence_ceiling: source_confidence
+      dataset:
+        citation: "azazel-knowledge intel.ioc_source, keyed by (ioc_id, feed_id)"
+        decay: "confidence decays per docs/scoring.md; a consumer must not re-raise it"
+        limitations: "advisory only; carries no enforcement authority"
     fields:
       - name: feed_id
       - name: source_confidence
       - name: last_seen
+      - name: intel_generation
+      - name: expires_at
 """
 
 
@@ -59,8 +85,10 @@ def _make_source_db(path: Path, *, ioc_rows: int = 3, last_seen: str = "2026-09-
     apply_migrations(conn, "intel")
     for i in range(ioc_rows):
         conn.execute(
-            "INSERT INTO ioc (type, value, first_seen, last_seen) VALUES "
-            "('ip', ?, '2026-01-01T00:00:00Z', ?)",
+            "INSERT INTO ioc (type, value, first_seen, last_seen, agg_raw_confidence, "
+            "agg_next_expiry, agg_computed_at) VALUES "
+            "('ip', ?, '2026-01-01T00:00:00Z', ?, 60.0, '2027-01-01T00:00:00Z', "
+            "'2026-09-18T12:00:00Z')",
             (f"10.0.0.{i}", last_seen),
         )
         conn.execute(
@@ -107,6 +135,7 @@ def _build_lite(env, out: Path, **overrides) -> subprocess.CompletedProcess:
         "--stats-generation": "3",
         "--attack-version": "v15.1",
         "--config-hash": "cfg-abc",
+        "--security-epoch": "3",
         "--sign-key": str(env["sign_key"]),
     }
     args.update(overrides)
@@ -258,11 +287,15 @@ def test_unknown_profile_is_rejected_by_the_cli(lite_env, tmp_path):
         "v1",
         "--config-hash",
         "c",
+        "--security-epoch",
+        "1",
         "--sign-key",
         str(lite_env["sign_key"]),
         expect_success=False,
     )
     assert result.returncode != 0
+    # Must fail *on the profile*, not because an argument was forgotten here.
+    assert "knowledge-lite-99g" in result.stderr
 
 
 def test_aliased_field_is_not_emitted_verbatim(lite_env, tmp_path):
@@ -292,3 +325,20 @@ def test_policy_naming_a_nonexistent_dataset_is_refused(lite_env, tmp_path):
     )
     assert result.returncode != 0
     assert "no_such_table" in result.stderr
+
+
+def test_manifest_carries_provenance_for_every_exported_dataset(lite_env, tmp_path):
+    out = tmp_path / "lite.tar.gz"
+    _build_lite(lite_env, out)
+    manifest = peek_manifest(out)
+    provenance = manifest["profile"]["provenance"]
+    assert set(provenance) == set(manifest["tables"])
+    for dataset, roles in provenance.items():
+        covered = set(roles["row"]) | set(roles["dataset"])
+        assert len(covered) == 8, f"{dataset} does not cover all eight D4 roles"
+
+
+def test_manifest_declares_its_security_epoch(lite_env, tmp_path):
+    out = tmp_path / "lite.tar.gz"
+    _build_lite(lite_env, out)
+    assert peek_manifest(out)["security_epoch"] == 3

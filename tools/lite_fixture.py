@@ -62,11 +62,24 @@ POLICY_YAML = """\
 version: lite-fixture-v1
 datasets:
   ioc:
+    provenance:
+      row:
+        freshness: last_seen
+        expiry: agg_next_expiry
+        confidence_ceiling: agg_raw_confidence
+      dataset:
+        citation: "azazel-knowledge intel.ioc, keyed by (type, value)"
+        source: "aggregated feed intake; per-feed detail lives in ioc_source"
+        generation: "the intel_generation recorded in this bundle's selection_inputs"
+        decay: "confidence decays per docs/scoring.md; a consumer must not re-raise it"
+        limitations: "advisory only; carries no enforcement authority"
     fields:
       - name: value
         mode: alias
       - name: type
       - name: last_seen
+      - name: agg_next_expiry
+      - name: agg_raw_confidence
 """
 
 # Rows are written in a fixed order with fixed values; nothing here varies
@@ -87,9 +100,16 @@ def _write_source_db(path: Path) -> None:
     try:
         apply_migrations(conn, "intel")
         for kind, value, last_seen in _FIXTURE_IOCS:
+            # Aggregated columns are populated because an IOC that has not been
+            # through aggregation carries no expiry and no confidence, and so
+            # cannot satisfy ADR-0015 D4. Such a row is refused rather than
+            # exported without provenance, and a fixture built from
+            # pre-aggregation rows would not represent anything exportable.
             conn.execute(
-                "INSERT INTO ioc (type, value, first_seen, last_seen) VALUES (?, ?, ?, ?)",
-                (kind, value, "2020-01-01T00:00:00Z", last_seen),
+                "INSERT INTO ioc (type, value, first_seen, last_seen, agg_raw_confidence, "
+                "agg_next_expiry, agg_computed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (kind, value, "2020-01-01T00:00:00Z", last_seen, 72.5,
+                 "2027-01-01T00:00:00Z", "2026-09-18T12:00:00Z"),
             )
         conn.commit()
     finally:
@@ -135,6 +155,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
             "--stats-generation", "1",
             "--attack-version", "fixture-v1",
             "--config-hash", "fixture-config-hash",
+            "--security-epoch", "1",
             "--sign-key", str(sign_key_path),
         ],
         capture_output=True,
