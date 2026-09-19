@@ -34,6 +34,26 @@ that, ``tables/x.jsonl`` and ``tables/./x.jsonl`` are two keys for the
 duplicate guard and for ``manifest.files`` but one path on disk, and a
 manifest could declare an honest digest for one and a substituted digest
 for the other while a single, substituted file lands in staging.
+
+Before any of the trust gates run, the manifest must declare a bundle
+**format** version this reader knows how to read. That is a different
+question from every other gate here: the others ask whether a document
+this reader understands is acceptable, while compatibility asks whether
+it is a document this reader understands at all. Asking it first is what
+makes an incompatible artifact report as ``BUNDLE_FORMAT_UNSUPPORTED``
+rather than as whichever later gate happens to trip over a field a
+future format moved, renamed, or gave a new meaning -- a misleading code
+is worse than a refusal, because it sends the operator after the wrong
+problem. See ``_check_format_compatibility`` for what an absent field
+means and why.
+
+The number of members is capped as well (``DEFAULT_MAX_MEMBERS``). The
+byte caps below bound how much data lands in staging but say nothing
+about how many *files* do, and each declared file costs a
+``mkdir -p`` plus a create. An 8 MiB manifest can name on the order of
+10**5 files whose bytes sum to almost nothing, which is an inode
+exhaustion primitive rather than a disk one, so it needs a count cap of
+its own rather than a tighter byte cap.
 """
 
 from __future__ import annotations
@@ -80,11 +100,52 @@ _FORBIDDEN_MANIFEST_FIELDS: frozenset[str] = _TRUST_ANCHOR_FIELDS | _ROLLBACK_ST
 MANIFEST_MEMBER = "manifest.json"
 SIGNATURE_MEMBER = "manifest.sig"
 
+#: The manifest field carrying the bundle *format* version. This is not
+#: `bundle_version`, which is the monotonic content counter the anti-rollback
+#: gate compares against the watermark: two bundles of the same format differ
+#: in `bundle_version` on every rebuild, and a change of format is expected to
+#: happen a handful of times in the artifact's life, if ever.
+MANIFEST_FORMAT_FIELD = "bundle_format_version"
+
+#: The format this builder emits.
+BUNDLE_FORMAT_VERSION = 1
+
+#: The format a manifest that carries no `bundle_format_version` is taken to
+#: be. See `_check_format_compatibility` for the argument.
+IMPLICIT_BUNDLE_FORMAT_VERSION = 1
+
+#: The inclusive range of formats this reader can read.
+MIN_SUPPORTED_BUNDLE_FORMAT = 1
+MAX_SUPPORTED_BUNDLE_FORMAT = 1
+
 DEFAULT_MAX_BUNDLE_BYTES = 8 * 1024 * 1024 * 1024
 DEFAULT_MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_FILE_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 DEFAULT_MAX_RATIO = 100
+
+#: Total tar members a bundle may contain, the two metadata members included.
+#:
+#: Chosen from what the builders in this repository can actually emit, not from
+#: a round number. `tools/bundle_build.py build` emits one member per eligible
+#: intel table -- 12 in the current schema (`attack_mitigation`,
+#: `attack_relation`, `attack_technique`, `engage_activity`,
+#: `engage_attack_map`, `feed_state`, `ioc`, `ioc_cidr`, `ioc_source`, `kev`,
+#: `sigma_rule_corpus`, `yara_rule_corpus`) -- plus `manifest.json` and
+#: `manifest.sig`: 14. `build-lite` is bounded by `LiteCeilings.max_datasets`,
+#: at most 12 under `knowledge-lite-32g`, so 14 there too. 256 is roughly 18x
+#: the largest artifact either builder can produce, which leaves room for the
+#: intel schema to more than double before a legitimate bundle came near the
+#: cap -- and a schema that grew past ~250 tables is an event that deserves a
+#: deliberate decision here rather than a cap quietly sized to never fire.
+#:
+#: The margin sits on the reader's side of the contract, as ADR-0015 D3 puts
+#: the per-dataset byte ceiling below `DEFAULT_MAX_FILE_BYTES` for the same
+#: reason: a reader may tighten later without invalidating bundles already
+#: signed, whereas a builder that outgrew the reader would have signed
+#: artifacts no conforming reader accepts.
+DEFAULT_MAX_MEMBERS = 256
+
 _COPY_CHUNK = 256 * 1024
 
 
@@ -109,11 +170,13 @@ def canonical_manifest_bytes(manifest: dict) -> bytes:
 class TrustAnchors:
     """Everything trust-related, read exclusively from `anchors.toml` (F-7).
 
-    `required_signer_role` and `minimum_security_epoch` live here rather than in
-    the manifest on purpose: a bundle must not be able to state which role may
-    sign it or which epoch is acceptable, or an attacker holding any valid key
-    could simply declare itself eligible. The manifest may only *claim* an
-    epoch; whether that claim is good enough is decided locally.
+    `required_signer_role`, `minimum_security_epoch` and
+    `accepted_export_policy_digests` live here rather than in the manifest on
+    purpose: a bundle must not be able to state which role may sign it, which
+    epoch is acceptable, or which privacy policy the consumer will tolerate, or
+    an attacker holding any valid key could simply declare itself eligible. The
+    manifest may only *claim* an epoch and *record* the policy digest it was
+    built under; whether those claims are good enough is decided locally.
     """
 
     threshold: int
@@ -122,6 +185,7 @@ class TrustAnchors:
     key_roles: dict[str, str]
     required_signer_role: str | None
     minimum_security_epoch: int | None
+    accepted_export_policy_digests: frozenset[str] | None
 
 
 def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
@@ -143,6 +207,20 @@ def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
             "BUNDLE_ANCHORS_INVALID", "minimum_security_epoch must be an integer when present"
         )
 
+    accepted_policies = doc.get("accepted_export_policy_digests")
+    if accepted_policies is not None:
+        if (
+            not isinstance(accepted_policies, list)
+            or not accepted_policies
+            or not all(isinstance(digest, str) and digest for digest in accepted_policies)
+        ):
+            raise BundleVerifyError(
+                "BUNDLE_ANCHORS_INVALID",
+                "accepted_export_policy_digests must be a non-empty list of non-empty strings "
+                "when present",
+            )
+        accepted_policies = frozenset(accepted_policies)
+
     return TrustAnchors(
         threshold=int(doc.get("threshold", 1)),
         keys=keys,
@@ -150,6 +228,7 @@ def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
         key_roles={str(k): str(v) for k, v in dict(doc.get("key_roles", {})).items()},
         required_signer_role=required_role,
         minimum_security_epoch=minimum_epoch,
+        accepted_export_policy_digests=accepted_policies,
     )
 
 
@@ -264,6 +343,123 @@ def _check_security_epoch(manifest: dict, anchors: TrustAnchors) -> None:
         )
 
 
+def _check_export_policy(manifest: dict, anchors: TrustAnchors) -> None:
+    """Gate on the privacy policy the artifact was built under.
+
+    `export_policy_digest` is enforced builder-side already, but only against
+    the policy the *builder* was handed: `lite_select` refuses to sign content
+    that disagrees with the digest recorded beside it. That answers "does this
+    artifact describe the rules that produced it", never "are those rules ones
+    I accept". Knowledge signs whatever policy its operator supplies, so
+    without this gate a consumer has no way to refuse an artifact built under a
+    privacy policy it does not accept -- it can only take what it is sent.
+
+    Inert unless the anchors name accepted digests, exactly as
+    `required_signer_role` is, so every anchors file written before this gate
+    existed keeps working untouched.
+
+    An artifact recording *no* digest never satisfies a requirement. That is
+    the same rule as the unroled key and the missing epoch, and for the same
+    reason: absence is not a policy a consumer agreed to, and a bundle that
+    could opt out of the gate by staying silent would make the gate worthless
+    against exactly the artifact it exists to refuse.
+    """
+    accepted = anchors.accepted_export_policy_digests
+    if accepted is None:
+        return
+    declared: str | None = None
+    profile = manifest.get("profile")
+    if isinstance(profile, dict):
+        selection_inputs = profile.get("selection_inputs")
+        if isinstance(selection_inputs, dict):
+            value = selection_inputs.get("export_policy_digest")
+            if isinstance(value, str) and value:
+                declared = value
+    if declared is None:
+        raise BundleVerifyError(
+            "BUNDLE_EXPORT_POLICY_MISSING",
+            "anchors accept only export policy digest(s) "
+            f"{sorted(accepted)} but the manifest records none at "
+            "profile.selection_inputs.export_policy_digest",
+        )
+    if declared not in accepted:
+        raise BundleVerifyError(
+            "BUNDLE_EXPORT_POLICY_NOT_ACCEPTED",
+            f"bundle was built under export policy digest {declared!r}, which is not among the "
+            f"digest(s) these anchors accept: {sorted(accepted)}",
+        )
+
+
+def _check_format_compatibility(manifest: dict) -> None:
+    """Gate on whether this reader can read the artifact's *format* at all.
+
+    Versioned here is the shape of the document, not its contents:
+    `bundle_version` counts content and moves on every build, while this moves
+    only when the manifest or the layout changes incompatibly.
+
+    **An absent field means format 1, not "unknown".** A manifest with no
+    `bundle_format_version` can only have been written by a builder older than
+    the field, and every such builder emitted exactly one format -- the one
+    this reader still parses correctly. Refusing absence would therefore refuse
+    every artifact currently in the field to guard against a format that cannot
+    exist behind it, which is a breaking change bought for nothing.
+
+    Treating absence as "compatible, skip the check" would be the opposite
+    mistake, and this does not do that either: absence is *normalised to the
+    concrete version 1* and then run through the same comparison as any
+    declared version. So the gate keeps its teeth in both directions. A future
+    format 2 must say so, and a reader that supports only 1 refuses it by this
+    code rather than mis-parsing it; and on the day format 1 is retired,
+    raising `MIN_SUPPORTED_BUNDLE_FORMAT` above 1 refuses the old unversioned
+    artifacts automatically, because absence resolves to a value that is then
+    out of range. Absence is never an exemption, only a default.
+    """
+    declared = manifest.get(MANIFEST_FORMAT_FIELD, IMPLICIT_BUNDLE_FORMAT_VERSION)
+    if not isinstance(declared, int) or isinstance(declared, bool):
+        raise BundleVerifyError(
+            "BUNDLE_FORMAT_INVALID",
+            f"{MANIFEST_FORMAT_FIELD} must be an integer, got {declared!r}",
+        )
+    if not MIN_SUPPORTED_BUNDLE_FORMAT <= declared <= MAX_SUPPORTED_BUNDLE_FORMAT:
+        raise BundleVerifyError(
+            "BUNDLE_FORMAT_UNSUPPORTED",
+            f"bundle declares format version {declared}; this reader supports "
+            f"{MIN_SUPPORTED_BUNDLE_FORMAT}..{MAX_SUPPORTED_BUNDLE_FORMAT}",
+        )
+
+
+def _check_member_count(manifest: dict, max_members: int) -> None:
+    """Cap how many files a bundle may deliver, not just how many bytes.
+
+    The byte caps bound staging's size; nothing bounds its inode count. Every
+    declared file costs a `mkdir -p` and a create in `_extract_declared_files`,
+    and a manifest within `DEFAULT_MAX_MANIFEST_BYTES` can name on the order of
+    10**5 of them while declaring almost no content at all -- each one an empty
+    file whose SHA-256 checks out. Exhausting a filesystem's inodes, or its
+    directory-entry budget, is a denial of service the byte caps cannot see.
+
+    Counted from `manifest.files` before extraction begins, so the refusal
+    costs nothing and lands before the first byte is written. The tar cannot
+    carry more members than this bounds: a member not in `manifest.files` is
+    refused as undeclared and a repeated name is refused as a duplicate, so the
+    physical member count can never exceed the declared count plus the two
+    metadata members counted here.
+
+    Worth stating plainly: extraction only runs on a bundle whose signature
+    already verified, so this is a control against a compromised or careless
+    signer, not against an anonymous one. It is defence in depth, which is why
+    it belongs with the other caps rather than with the trust gates.
+    """
+    declared = manifest["files"]
+    total_members = len(declared) + 2  # manifest.json and manifest.sig
+    if total_members > max_members:
+        raise BundleVerifyError(
+            "BUNDLE_TOO_MANY_MEMBERS",
+            f"bundle declares {len(declared)} file(s), {total_members} members in all, "
+            f"which exceeds the cap of {max_members}",
+        )
+
+
 def _validate_manifest_shape(manifest: dict) -> None:
     if not isinstance(manifest, dict):
         raise BundleVerifyError("BUNDLE_MANIFEST_INVALID", "manifest.json is not a JSON object")
@@ -283,6 +479,16 @@ def _validate_manifest_shape(manifest: dict) -> None:
             raise BundleVerifyError("BUNDLE_MANIFEST_INVALID", f"manifest missing required field {required!r}")
     if manifest["kind"] not in ("full", "differential"):
         raise BundleVerifyError("BUNDLE_MANIFEST_INVALID", f"unknown kind {manifest['kind']!r}")
+    # `files` is a name -> digest mapping, and both the member cap and the
+    # extractor read it as one. Without this, a manifest declaring `files` as a
+    # list or a string reaches `dict(...)` in `_extract_declared_files` and dies
+    # with a bare TypeError/ValueError, which is neither a `BundleVerifyError`
+    # nor a code a caller can act on. Refusing shape here keeps every rejection
+    # on the one exception type callers already handle.
+    if not isinstance(manifest["files"], dict):
+        raise BundleVerifyError(
+            "BUNDLE_MANIFEST_INVALID", f"manifest 'files' must be an object, got {type(manifest['files']).__name__}"
+        )
 
 
 def _check_anti_rollback(manifest: dict, last_imported_version: int) -> None:
@@ -476,6 +682,7 @@ def verify_bundle(
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     max_ratio: int = DEFAULT_MAX_RATIO,
+    max_members: int = DEFAULT_MAX_MEMBERS,
 ) -> VerifiedBundle:
     bundle_path = Path(bundle_path)
     staging_dir = Path(staging_dir)
@@ -487,21 +694,39 @@ def verify_bundle(
 
     manifest, sig_bytes = _read_manifest_and_signature(bundle_path, max_manifest_bytes)
     _validate_manifest_shape(manifest)
+    # Compatibility comes before trust, and before everything else that reads a
+    # manifest field by name: the trust gates ask whether a document this
+    # reader understands is acceptable, and there is no answer to that for a
+    # document it does not understand. Run last, an artifact in a format that
+    # moved `security_epoch` would be reported as `BUNDLE_SECURITY_EPOCH_MISSING`
+    # and send the operator after a problem that is not there.
+    _check_format_compatibility(manifest)
 
     anchors = _load_anchors(anchors_path)
     sig_lines = _parse_signature_lines(sig_bytes)
     manifest_bytes = canonical_manifest_bytes(manifest)
-    # Four independent gates. Passing one says nothing about the others, which
-    # is why they are separate calls with separate error codes rather than one
-    # combined "is this bundle acceptable" predicate.
+    # Five independent trust gates, plus the compatibility gate above and the
+    # resource caps below. Passing one says nothing about the others, which is
+    # why they are separate calls with separate error codes rather than one
+    # combined "is this bundle acceptable" predicate:
+    #   * the signature threshold -- did enough trusted keys sign it;
+    #   * the signer role        -- were they keys provisioned for this purpose;
+    #   * the security epoch     -- does it postdate the last security event;
+    #   * the export policy      -- were the privacy rules ones we accept;
+    #   * anti-rollback          -- is it newer than what we already imported.
     verified_key_ids = _check_signature_threshold(
         manifest_bytes, sig_lines, anchors.threshold, anchors.keys, anchors.revoked
     )
     _check_signer_role(verified_key_ids, anchors)
     _check_security_epoch(manifest, anchors)
+    _check_export_policy(manifest, anchors)
 
     last_imported_version = _read_last_imported_version(state_path)
     _check_anti_rollback(manifest, last_imported_version)
+
+    # A resource cap, not a trust gate, so it runs after the trust gates have
+    # had their say -- but still before extraction opens its first file.
+    _check_member_count(manifest, max_members)
 
     file_paths = _extract_declared_files(
         bundle_path,
