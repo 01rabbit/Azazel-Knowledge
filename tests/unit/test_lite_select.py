@@ -361,3 +361,163 @@ def test_profile_block_carries_dataset_level_provenance(policy, inputs):
         "confidence_ceiling",
         "limitations",
     }
+
+
+# --- the ceilings that actually ship ---------------------------------------
+#
+# The ceiling tests above monkeypatch `PROFILES` with fabricated values (3 rows,
+# 10 bytes, 1 dataset). They prove the *enforcement mechanism* fires, which is
+# worth having, but they are blind to the shipped numbers: every one of them
+# would still pass if `knowledge-lite-16g` declared `max_rows_total=5` or
+# `max_rows_total=5_000_000_000`.
+#
+# These tests make the declared values load-bearing. Each one fails if a shipped
+# constant is wrong, not merely if a check is deleted.
+
+
+def _prov_dataset(name: str) -> dict:
+    """A minimal dataset block covering all eight D4 provenance roles."""
+    return {
+        "provenance": _STATIC_PROV,
+        "fields": [{"name": "technique_id"}, {"name": "name"}],
+    }
+
+
+@pytest.mark.parametrize("profile_id", sorted(PROFILES))
+def test_the_dataset_ceiling_is_enforced_at_its_shipped_value(profile_id, inputs):
+    """One dataset over the profile's own `max_datasets` fails; exactly at it passes.
+
+    No monkeypatch: this runs against the real `PROFILES` entry, so lowering or
+    raising the shipped `max_datasets` breaks it. `max_datasets` is the one
+    ceiling reachable without materialising hundreds of thousands of rows, which
+    is why the shipped value is pinned here rather than in a volume test.
+    """
+    limit = PROFILES[profile_id].max_datasets
+    profile_inputs = dataclasses.replace(inputs, profile_id=profile_id)
+
+    def build(count: int):
+        doc = {
+            "version": "lite-export-v1",
+            "datasets": {f"attack_technique_{i}": _prov_dataset(f"d{i}") for i in range(count)},
+        }
+        pol = parse_export_policy(doc)
+        rows = {name: [{"technique_id": "T1046", "name": "Network Service Discovery"}] for name in doc["datasets"]}
+        return rows, dataclasses.replace(profile_inputs, export_policy_digest=pol.digest), pol
+
+    rows, at_inputs, at_policy = build(limit)
+    assert len(select_lite_content(
+        rows, inputs=at_inputs, policy=at_policy, alias_key=b"k", scope="s", freshness_fields={}
+    ).datasets) == limit
+
+    rows, over_inputs, over_policy = build(limit + 1)
+    with pytest.raises(LiteSelectionError) as exc:
+        select_lite_content(
+            rows, inputs=over_inputs, policy=over_policy, alias_key=b"k", scope="s", freshness_fields={}
+        )
+    assert exc.value.code == "LITE_CEILING_EXCEEDED"
+    assert str(limit) in exc.value.message
+
+
+def test_the_freshness_window_is_the_one_the_profile_ships(policy, inputs):
+    """A 60-day-old row is outside 16g's window and inside 32g's.
+
+    This is what proves a 32g build applies *32g's own* numbers rather than
+    silently reusing 16g's: the two profiles differ by their shipped
+    `freshness_window_days` (30 vs 90), and a row aged between them is admitted
+    by exactly one of them. Changing either shipped constant breaks this.
+    """
+    sixty_days_old = "2026-07-21T00:00:00Z"  # 60 days before AS_OF
+    rows = _rows(3, seen=sixty_days_old)
+
+    on_16g = _select(rows, dataclasses.replace(inputs, profile_id="knowledge-lite-16g"), policy)
+    on_32g = _select(rows, dataclasses.replace(inputs, profile_id="knowledge-lite-32g"), policy)
+
+    assert PROFILES["knowledge-lite-16g"].freshness_window_days < 60
+    assert PROFILES["knowledge-lite-32g"].freshness_window_days > 60
+    assert len(on_16g.datasets.get("ioc", ())) == 0, "a 60-day-old row is outside the 16g window"
+    assert len(on_32g.datasets.get("ioc", ())) == 3, "a 60-day-old row is inside the 32g window"
+
+
+def test_every_profile_admits_the_shipped_default_export_policy():
+    """`max_datasets` must not be below what `config/lite-export-policy.yaml` names.
+
+    The shipped policy and the shipped profiles are two constants that have to
+    agree: a profile whose dataset ceiling sits below the default policy's
+    dataset count cannot build the default artifact at all, and nothing else in
+    the suite pairs them.
+    """
+    from pathlib import Path
+
+    from azazel_knowledge.bundle.lite_policy import load_export_policy
+
+    repo_root = Path(__file__).resolve().parents[2]
+    shipped = load_export_policy(repo_root / "config" / "lite-export-policy.yaml")
+    for profile_id, ceilings in PROFILES.items():
+        assert ceilings.max_datasets >= len(shipped.datasets), (
+            f"profile {profile_id!r} allows {ceilings.max_datasets} datasets but the shipped "
+            f"default policy names {len(shipped.datasets)}"
+        )
+
+
+def test_no_profile_allows_more_datasets_than_the_schema_can_supply():
+    """`max_datasets` is bounded above by the eligible intel tables that exist.
+
+    This is the half that the enforcement test above cannot see. That test reads
+    `max_datasets` and builds one dataset more, so it follows the constant
+    wherever it goes: raising the shipped 16g ceiling from 8 to 64 leaves it
+    green. The ceiling has to be pinned against something outside itself, and
+    the schema is that thing -- a profile admitting more datasets than the
+    database can ever yield is not a ceiling, it is a number nobody checked.
+
+    Derived from a freshly migrated intel schema rather than a copied count, so
+    a migration that adds or removes an exportable table moves the bound with it.
+
+    The bound is deliberately loose and this is not an oversight: the schema
+    currently yields 16 exportable tables against shipped ceilings of 8 and 12,
+    so it catches a ceiling that has lost contact with reality (8 -> 64) but not
+    an off-by-a-few edit (12 -> 13). Tightening it would mean asserting a number
+    somebody chose, which is the blindness this test exists to remove.
+    """
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    from azazel_knowledge.bundle.verify import LOCAL_TIER_TABLES
+    from azazel_knowledge.db.repository import apply_migrations
+
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = sqlite3.connect(Path(tmp) / "intel.db")
+        apply_migrations(conn, "intel")
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        conn.close()
+    eligible = names - set(LOCAL_TIER_TABLES)
+    assert eligible, "the intel schema yielded no exportable tables; the bound below is vacuous"
+    for profile_id, ceilings in PROFILES.items():
+        assert ceilings.max_datasets <= len(eligible), (
+            f"profile {profile_id!r} allows {ceilings.max_datasets} datasets but only "
+            f"{len(eligible)} exportable tables exist: {sorted(eligible)}"
+        )
+
+
+def test_no_profile_can_exceed_the_readers_total_cap():
+    """Companion to the per-dataset bound: the whole artifact must fit too.
+
+    `test_no_profile_can_emit_a_member_the_reader_would_refuse` pins one member
+    against `DEFAULT_MAX_FILE_BYTES`. A profile could satisfy that per member and
+    still declare a total the reader refuses, so the total is pinned against the
+    reader's own `DEFAULT_MAX_TOTAL_BYTES` the same way.
+    """
+    from azazel_knowledge.bundle.verify import DEFAULT_MAX_TOTAL_BYTES
+
+    for profile_id, ceilings in PROFILES.items():
+        assert ceilings.max_uncompressed_bytes <= DEFAULT_MAX_TOTAL_BYTES, (
+            f"profile {profile_id!r} allows {ceilings.max_uncompressed_bytes} uncompressed bytes, "
+            f"over the reader's total cap {DEFAULT_MAX_TOTAL_BYTES}"
+        )
+        assert ceilings.max_bytes_per_dataset <= ceilings.max_uncompressed_bytes
+        assert ceilings.max_rows_per_dataset <= ceilings.max_rows_total
