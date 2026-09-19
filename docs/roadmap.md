@@ -35,9 +35,19 @@ is the multi-edge *scale-out* around it.
   similarity/repeatability, and surfaced to Edges as advisory context
   (`threat_context.behavioral_cti`). The schema already carries `edge_id` on
   every behavior pattern.
-- **Remaining:** cross-edge correlation (same actor seen at two Edges is itself
-  intelligence — the schema tolerates multiple `edge_id` but cross-site logic is
-  not yet enabled) and multi-edge ingest scale.
+- **Cross-edge logic partly exists**, contrary to what this line said until
+  [ADR-0018](adr/0018-cross-edge-actor-inference.md): a reaction corroborated
+  across edges reaches trust tier `corroborated`
+  (`reactions/eligibility.py`); `edge_reported_ioc` promotion counts distinct
+  edges (`feeds/promotion.py`, `PromotionReason.DISTINCT_EDGES`); and
+  behavioral repeatability adds `cross_edge_score` when similar patterns span
+  more than one edge (`scoring/behavior_similarity.py`).
+- **Remaining:** the question all three depend on — *is the actor at Edge 1 the
+  actor at Edge 2?* Today `actor_cluster_key` arrives from the Edge and is
+  carried through unvalidated; Knowledge never computes it. ADR-0018 decides
+  that Knowledge infers the linkage itself, as advisory data beside the
+  Edge-supplied key, with weights and thresholds left to measurement. Also
+  remaining: multi-edge ingest scale.
 - Evaluate SQLite → PostgreSQL against measured write load (ADR-0003 exit
   criteria).
 - ~~Evaluate alignment/adoption of `azazel_fabric.cti_contracts`

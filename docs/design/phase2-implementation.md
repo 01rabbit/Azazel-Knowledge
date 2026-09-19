@@ -610,9 +610,18 @@ byte-identical generation replay test).
 - **S2-2 Pattern export to Edges** (roadmap Phase 2 line) — exporting compiled
   behavior patterns to Edges rides the existing bundle/sync channel (ADR-0004);
   out of scope for #31–#37. Trigger: multi-Edge deployment.
-- **S2-3 Cross-edge correlation** — schema carries `edge_id`/`actor_cluster_key`
-  so it is *possible* later, but no cross-site logic is enabled now (#29
-  out-of-scope). Trigger: Phase 2 multi-Edge ingest.
+- **S2-3 Cross-edge correlation** — *this entry was wrong*: three cross-site
+  mechanisms are enabled today (reaction trust tier `corroborated`;
+  `edge_reported_ioc` promotion on distinct edges; `cross_edge_score` in
+  behavioral repeatability). What is absent is cross-edge **actor identity**:
+  `actor_cluster_key` is an ingested field from the Edge
+  (`ingest/validators.py` `_PHASE2_PROMOTED_FIELDS`) that Knowledge never
+  computes or validates, so all three mechanisms rest on an unverified
+  assumption about Edge behavior.
+  [ADR-0018](../adr/0018-cross-edge-actor-inference.md) decides Knowledge
+  infers the linkage itself, advisory-only, beside the Edge key and barred from
+  feeding `cross_cluster_score`. Weights and thresholds await real multi-Edge
+  data. Trigger for the weights: Phase 2 multi-Edge ingest.
 - **S2-4 SQLite → PostgreSQL** (ADR-0003 exit criteria) — behavioral write load
   is modest (offline P2 batch); re-evaluate only against measured writer
   contention. Trigger: measured >1 s write queue or >10 M store.
