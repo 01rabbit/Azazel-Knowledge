@@ -129,7 +129,23 @@ read them with both in mind:
   one accept; the current one includes it, which is also what an Edge
   experiences.
 
-The 5 s worker interval is unchanged and still undecided.
+### Follow-up: the drain cadence is separated
+
+The second is closed too. P0/P1 (spool drains) and P2/P3 (feed pulls, sweeps,
+retention) now run on separate cadences: `--drain-interval-s`, default 0.5 s,
+and `--interval-s`, still 5 s. One loop running all four stages meant the
+maintenance cadence set the floor under every ingested record's wait.
+
+Lowering the single interval instead would have multiplied the feed and
+retention work by the same factor, which a Pi 4 cannot afford; the costs are
+unrelated, so the cadences are. Ingest remains fire-and-forget
+(`docs/api.md`) and still promises no visibility deadline — this is a better
+default, not a new guarantee, and `--drain-interval-s` set equal to
+`--interval-s` reproduces the old behaviour exactly.
+
+**Not re-measured.** The write-queue figures above stand as recorded; what
+this changes is the cadence that produced their floor, and confirming the new
+one is part of the Pi 4 run, not a number written here.
 
 ### Not measured
 

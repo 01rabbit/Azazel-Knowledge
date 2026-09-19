@@ -98,6 +98,17 @@ ADVISORY_LOG_FIELDS: tuple[str, ...] = (
 DEFAULT_ADVISORY_RETENTION_DAYS = 90
 DEFAULT_SPOOL_RETENTION_DAYS = 7
 
+#: Seconds between spool drains (P0/P1) in continuous mode.
+#:
+#: The drain cadence is the floor under every ingested record's wait, and it
+#: used to be the maintenance cadence (5 s) because one loop ran all four
+#: stages. Ingest is fire-and-forget (`docs/api.md`) and promises no visibility
+#: deadline, so this is a better default rather than a new guarantee: a drain
+#: reads what is pending and stops, so running it often costs a bounded
+#: directory scan, while a feed pull or a retention sweep does not belong at
+#: this rate.
+DEFAULT_DRAIN_INTERVAL_S = 0.5
+
 FEED_ADAPTER_REGISTRY: dict[str, type[FeedAdapter]] = {
     "attack_stix": AttackAdapter,
     "cisa_kev": KevAdapter,
@@ -642,18 +653,39 @@ def run_p3(
 # --------------------------------------------------------------------------
 
 
-def run_once(
+def maintenance_is_due(now_s: float, last_run_s: float | None, interval_s: float) -> bool:
+    """Whether the periodic stages (P2/P3) should run on this pass.
+
+    The drain stages run far more often than these, so the loop asks this on
+    every pass. ``None`` means they have never run, and a non-positive interval
+    means "every pass" -- the caller has asked for no separation, which must
+    behave exactly like the single-cadence loop this replaced rather than
+    silently never running maintenance.
+    """
+    if last_run_s is None:
+        return True
+    if interval_s <= 0:
+        return True
+    return (now_s - last_run_s) >= interval_s
+
+
+def run_drain_stages(
     paths: WorkerPaths,
     local_writer: PrioritySingleWriterQueue,
-    intel_writer: PrioritySingleWriterQueue,
-    config_loader: TrackedConfigLoader,
     *,
     clock: Clock,
-    online: bool = False,
-    exclusion_policy: ExclusionPolicy | None = None,
     burst_guard: BurstGuard | None = None,
     stage_hook: Callable[[str], None] | None = None,
-) -> RunStats:
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """P0 and P1 -- the spool drains, which decide ingest latency.
+
+    Separated from P2/P3 because their costs are unrelated. A drain reads
+    whatever is pending and stops; a feed pull talks to the internet and a
+    retention sweep walks the spool. Running the drains at the maintenance
+    cadence put that cadence under every ingested record's wait: at the shipped
+    5 s a single Edge at 200 records/s measured p50 2 579 ms / p99 5 029 ms,
+    none of it contention (ADR-0003, "Measurement (2026-09-19)").
+    """
     spool = SpoolWriter(paths.ingest_root)
 
     if stage_hook is not None:
@@ -664,6 +696,21 @@ def run_once(
         stage_hook("p1")
     p1 = run_p1(local_writer, spool, clock=clock, burst_guard=burst_guard)
 
+    return p0, p1
+
+
+def run_maintenance_stages(
+    paths: WorkerPaths,
+    local_writer: PrioritySingleWriterQueue,
+    intel_writer: PrioritySingleWriterQueue,
+    config_loader: TrackedConfigLoader,
+    *,
+    clock: Clock,
+    online: bool = False,
+    exclusion_policy: ExclusionPolicy | None = None,
+    stage_hook: Callable[[str], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """P2 and P3 -- feed pulls, sweeps and retention. Periodic, not latency-bound."""
     if stage_hook is not None:
         stage_hook("p2")
     p2 = run_p2(
@@ -676,6 +723,30 @@ def run_once(
         stage_hook("p3")
     p3 = run_p3(paths, local_writer, clock=clock)
 
+    return p2, p3
+
+
+def run_once(
+    paths: WorkerPaths,
+    local_writer: PrioritySingleWriterQueue,
+    intel_writer: PrioritySingleWriterQueue,
+    config_loader: TrackedConfigLoader,
+    *,
+    clock: Clock,
+    online: bool = False,
+    exclusion_policy: ExclusionPolicy | None = None,
+    burst_guard: BurstGuard | None = None,
+    stage_hook: Callable[[str], None] | None = None,
+) -> RunStats:
+    """One full cycle, P0 through P3, in order. What `--once` and azctl run."""
+    p0, p1 = run_drain_stages(
+        paths, local_writer, clock=clock, burst_guard=burst_guard, stage_hook=stage_hook
+    )
+    p2, p3 = run_maintenance_stages(
+        paths, local_writer, intel_writer, config_loader,
+        clock=clock, online=online, exclusion_policy=exclusion_policy,
+        stage_hook=stage_hook,
+    )
     return RunStats(p0=p0, p1=p1, p2=p2, p3=p3)
 
 
@@ -753,7 +824,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--interval-s", type=float, default=5.0,
-        help="sleep between cycles in continuous mode (default: 5.0)",
+        help="seconds between P2/P3 maintenance passes in continuous mode (default: 5.0)",
+    )
+    parser.add_argument(
+        "--drain-interval-s", type=float, default=DEFAULT_DRAIN_INTERVAL_S,
+        help=(
+            "seconds between P0/P1 spool drains in continuous mode "
+            f"(default: {DEFAULT_DRAIN_INTERVAL_S}). This sets the floor under how "
+            "long an ingested record waits before it is committed; set it equal to "
+            "--interval-s for the single-cadence behaviour of earlier versions"
+        ),
     )
     return parser
 
@@ -785,12 +865,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        last_maintenance_s: float | None = None
         while not stop.is_set():
-            run_once(
-                paths, local_writer, intel_writer, config_loader,
-                clock=clock, online=args.online, exclusion_policy=exclusion_policy,
-            )
-            stop.wait(args.interval_s)
+            run_drain_stages(paths, local_writer, clock=clock)
+            now_s = time.monotonic()
+            if maintenance_is_due(now_s, last_maintenance_s, args.interval_s):
+                run_maintenance_stages(
+                    paths, local_writer, intel_writer, config_loader,
+                    clock=clock, online=args.online, exclusion_policy=exclusion_policy,
+                )
+                last_maintenance_s = now_s
+            stop.wait(args.drain_interval_s)
         return 0
     finally:
         local_writer.close()

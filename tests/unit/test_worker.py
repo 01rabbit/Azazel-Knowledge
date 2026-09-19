@@ -235,3 +235,65 @@ def test_run_once_with_online_false_never_calls_feed_endpoints(tmp_path, monkeyp
     finally:
         local_writer.close()
         intel_writer.close()
+
+
+# --- drain cadence is separate from maintenance cadence ---------------------
+
+
+def test_a_drain_pass_runs_no_feed_pull_or_retention(tmp_path):
+    """The drains must be cheap enough to run often, which means running only
+    the drains.
+
+    P0/P1 read whatever is pending and stop; P2 talks to the internet and P3
+    walks the spool. Lowering one cadence for ingest latency must not multiply
+    the other work -- on a Pi 4 that is the difference between a better default
+    and a worse node.
+    """
+    paths = _make_paths(tmp_path)
+    local_writer, intel_writer = _open_writers(paths)
+    try:
+        order: list[str] = []
+        worker.run_drain_stages(
+            paths, local_writer, clock=FixedClock(NOW), stage_hook=order.append
+        )
+        assert order == ["p0", "p1"]
+    finally:
+        local_writer.close()
+        intel_writer.close()
+
+
+def test_a_full_cycle_still_runs_every_stage_in_order(tmp_path):
+    """Splitting the stages must not change what `--once` and azctl do."""
+    paths = _make_paths(tmp_path)
+    local_writer, intel_writer = _open_writers(paths)
+    config_loader = TrackedConfigLoader(paths.config_dir)
+    try:
+        order: list[str] = []
+        worker.run_once(
+            paths, local_writer, intel_writer, config_loader,
+            clock=FixedClock(NOW), stage_hook=order.append,
+        )
+        assert order == ["p0", "p1", "p2", "p3"]
+    finally:
+        local_writer.close()
+        intel_writer.close()
+
+
+def test_maintenance_runs_on_the_first_pass_then_waits_its_interval():
+    """Never having run is not the same as having just run.
+
+    Treating an unset last-run as "recent" would delay the first feed pull and
+    the first retention sweep by a whole interval after every restart.
+    """
+    assert worker.maintenance_is_due(100.0, None, 5.0) is True
+    assert worker.maintenance_is_due(101.0, 100.0, 5.0) is False
+    assert worker.maintenance_is_due(104.999, 100.0, 5.0) is False
+    assert worker.maintenance_is_due(105.0, 100.0, 5.0) is True
+
+
+def test_equal_cadences_reproduce_the_single_loop_behaviour():
+    """Setting the drain interval to the maintenance interval must give back
+    exactly what earlier versions did, so an operator can undo this change
+    without a patch. A non-positive interval means every pass, not never."""
+    assert worker.maintenance_is_due(100.0, 100.0, 0.0) is True
+    assert worker.maintenance_is_due(100.0, 100.0, -1.0) is True
