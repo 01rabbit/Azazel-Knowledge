@@ -118,27 +118,86 @@ bundle already requires.
 
 ### D3 — Capacity profiles are ceilings, not targets
 
+**Ceilings the builder enforces.** Every row here is a field of
+`LiteCeilings` and is checked by `select_lite_content`; a build that would
+exceed one fails closed with `LITE_CEILING_EXCEEDED`.
+
 | Ceiling | `knowledge-lite-16g` | `knowledge-lite-32g` |
 |---|---|---|
-| Uncompressed content bytes | 256 MiB | 1 GiB |
-| Compressed artifact bytes | 64 MiB | 256 MiB |
+| Uncompressed content bytes, total | 192 MiB | 512 MiB |
+| Uncompressed content bytes, per dataset | 128 MiB | 256 MiB |
 | Total rows | 750 000 | 3 000 000 |
 | Rows per dataset | 250 000 | 1 000 000 |
 | Distinct datasets | 8 | 12 |
 | IOC freshness window | 30 days | 90 days |
-| Reader resident memory during import | 128 MiB | 256 MiB |
 
-**These numbers are proposed, not measured.** They are sized from the consuming
-products' declared resource envelopes and from the reader memory ceiling a
-`core`-envelope host can spare, not from a benchmark of real bundle content.
-They need owner ratification, and the implementation PR should re-derive them
-against a real corpus and an actual reader measurement — reporting back if the
-evidence disagrees with this table rather than quietly adopting it.
+These values replace the ones first proposed here, which were sized from the
+consuming products' resource envelopes rather than from a benchmark. The
+measurement is recorded below, including the defect it exposed.
 
-These are **ceilings the builder enforces**, not sizes it pads to. A build that
-would exceed a ceiling fails closed with a named error rather than silently
-truncating: a truncated knowledge bundle is a bundle that lies about its
-coverage. Which rows are dropped to fit a ceiling is part of the deterministic
+#### Why there is a per-dataset byte ceiling
+
+One dataset is one tar member, and `verify.py` refuses any single member over
+`DEFAULT_MAX_FILE_BYTES` (512 MiB) with `BUNDLE_DECOMPRESSION_BOMB`. The
+original table bounded only the *total*, so under `knowledge-lite-32g` a
+selection of 900 000 `ioc` rows carrying ordinary tag text — **inside every
+declared ceiling**: 900 000 ≤ 1 000 000 rows per dataset, 900 000 ≤ 3 000 000
+rows total, 1 ≤ 12 datasets, 534.7 MiB ≤ 1 GiB — built and signed, and was
+then refused by `verify_bundle`. The builder could sign an artifact no
+conforming reader accepts.
+
+Lowering the total alone would not close this: it would leave the per-member
+guarantee resting on an unstated assumption about bytes per row. The
+per-dataset ceiling is set to half the reader's per-file cap so the margin
+sits on the reader's side of the contract, where a future reader can tighten
+without invalidating bundles already signed. `test_lite_select.py`
+asserts the relation against `verify.DEFAULT_MAX_FILE_BYTES` itself rather
+than a copied number, so the two modules cannot drift apart silently.
+
+#### Measured characteristics — observed, not enforced
+
+These are **not ceilings**; nothing in `LiteCeilings` checks them. They are
+recorded so the enforced numbers above can be read against evidence. Measured
+on a 4-core Linux host, CPython 3.11, synthetic D4-conformant `ioc` corpora
+built through `tools/bundle_build.py build-lite`.
+
+| Property | Observed |
+|---|---|
+| Bytes per row, fixture-shaped policy | 143.7–150.1 B (constant from 10k to 2M rows) |
+| Bytes per row, all-columns `ioc` policy | 250.3–250.4 B |
+| Compression ratio (gzip) | 6.88–9.98 : 1 |
+| Compressed artifact at the row ceiling | 11.1 MiB (16g) / 43.8 MiB (32g) |
+| Reader resident memory, `verify_bundle` | 20.3–20.6 MiB, flat to 500 MB of content |
+| Reader staging disk | equal to uncompressed content bytes |
+| Builder peak RSS | ≈1.2–1.6 KiB per selected row |
+
+Consequences worth stating plainly:
+
+- **The row ceiling binds first in every case measured.** At exactly the
+  declared row ceiling the artifact reached 40% of the old byte ceiling
+  (102.8 MiB of 256 MiB; 413.2 MiB of 1 GiB). The old byte ceilings implied
+  357.9 B/row in both profiles — 1.4×–2.5× the measured density.
+- **Reader memory holds with a large margin, but only for a streaming
+  reader.** A Lite reader MUST parse JSONL a line at a time. Verification is
+  flat at ~2 MiB over a CPython baseline because it streams; loading a dataset
+  whole costs ~1.2–1.6 KiB/row, which breaks a 128 MiB budget at ~110 000 rows.
+  This is a requirement on the consumer, not a property of the artifact.
+- **A Lite build is a full-node operation.** Peak builder RSS is 899 MiB at
+  the 16g row ceiling and 3.44 GiB at the 32g row ceiling, because the builder
+  materialises each dataset before rendering it. A 4 GB Pi 4 cannot build a
+  32g artifact. This is a documented cost, not an accident.
+- **The consumer needs free disk equal to the uncompressed content**, on top
+  of the artifact itself, for verification staging.
+
+**Not measured, and not to be read as verified:** the 30- and 90-day freshness
+windows. Every row in the measured corpora was inside its window by
+construction, so there is no evidence here about how much a real feed corpus
+loses to freshness — and freshness is the lever this ADR expects an operator
+to pull when a ceiling is hit.
+
+Ceilings are limits, not sizes the builder pads to. A build that would exceed
+one fails closed with a named error rather than silently truncating: a
+truncated knowledge bundle is a bundle that lies about its coverage. Which rows are dropped to fit a ceiling is part of the deterministic
 selection function, never a build-time heuristic.
 
 The profile name refers to the consuming host's **resource envelope**, not to
@@ -320,6 +379,10 @@ through 0014 exist.)
   a stale row without an out-of-band delete, so the problem tombstones would
   solve does not arise for Lite. The Phase-2 tombstone TODO stays open for the
   general bundle path.
+- **Capacity ceilings — settled.** D3's table was re-derived against measured
+  corpora; the numbers there are now the measured ones, and the measurement
+  exposed a builder/reader contradiction that a new per-dataset byte ceiling
+  closes. The freshness windows remain unmeasured and are marked as such.
 - **Exact canary seeding mechanism** and the dataset-by-dataset field
   allowlists, which belong in the implementation PR's policy file rather than
   in an ADR.
