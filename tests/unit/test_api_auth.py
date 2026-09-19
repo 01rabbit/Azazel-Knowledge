@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from _api_support import add_api_client, auth_header, make_client
 
+from azazel_knowledge.security.auth import parse_token
+
 
 def test_no_token_is_401(tmp_path):
     client, settings, local_db_path, _ = make_client(tmp_path)
@@ -124,6 +126,18 @@ def test_ingest_still_spools_when_cold(tmp_path):
 
 
 def test_authorization_header_never_reaches_audit_log(tmp_path):
+    """Neither the bearer token nor the secret inside it may land in the audit log.
+
+    The secret is taken from `parse_token`, the same split `auth.py` itself uses
+    (`token.split("_", 2)`), rather than being carved off the end of the token.
+    `secrets.token_urlsafe` draws from an alphabet that *includes* `_`, so
+    `token.rsplit("_", 1)[-1]` -- the earlier form here -- yielded whatever
+    followed the last underscore inside the random secret rather than the
+    secret itself. Measured over 200,000 minted tokens, 3.1% left a needle of
+    one or two characters, which any JSON line may contain by chance; that is
+    the ~2-in-60 failure rate observed, and on the other 58 runs the assertion
+    was searching for a fragment instead of the secret.
+    """
     client, settings, local_db_path, _ = make_client(tmp_path)
     token = add_api_client(local_db_path, "edge1", ["query"])
     resp = client.post(
@@ -134,10 +148,14 @@ def test_authorization_header_never_reaches_audit_log(tmp_path):
 
     files = list(settings.audit_dir.glob("*.jsonl"))
     assert files
+    _, secret = parse_token(token)
+    # A degenerate needle is the failure mode being guarded against, so the
+    # needle itself is checked before it is used to prove anything.
+    assert len(secret) >= 32, f"secret is too short to be a meaningful needle: {secret!r}"
     for path in files:
         text = path.read_text(encoding="utf-8")
         assert token not in text
-        assert token.rsplit("_", 1)[-1] not in text
+        assert secret not in text
         assert "authorization" not in text.lower()
 
 

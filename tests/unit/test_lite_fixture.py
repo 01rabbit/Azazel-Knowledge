@@ -8,8 +8,11 @@ claims in `expected.json` is what a reader actually finds.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
+import io
 import json
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -17,7 +20,10 @@ from pathlib import Path
 
 import pytest
 
+from azazel_knowledge.bundle.importer import import_full
 from azazel_knowledge.bundle.verify import BundleVerifyError, peek_manifest, verify_bundle
+from azazel_knowledge.db import generations
+from azazel_knowledge.db.repository import apply_migrations
 
 _TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 
@@ -94,6 +100,29 @@ def test_fixture_anchor_names_only_the_fixture_key(fixture_dir):
 # --- interrupted extraction (ADR-0015 Consequences 7) ----------------------
 
 
+def _corrupted_copy(bundle: Path, out: Path) -> Path:
+    """A copy of `bundle` whose content members no longer match their declared digests.
+
+    The manifest and its signature are carried over untouched, so the artifact
+    is still correctly signed and still passes every gate up to the per-member
+    hash check -- which is the point: the failure has to happen *during*
+    extraction, after bytes have already been written to staging, or it says
+    nothing about an interrupted one.
+    """
+    with tarfile.open(bundle, "r:gz") as tar:
+        members = [(i, tar.extractfile(i).read()) for i in tar.getmembers() if i.isreg()]
+    with out.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode="w") as tar:
+                for info, data in members:
+                    if info.name.startswith("tables/"):
+                        data = data + b'{"tampered": true}\n'
+                    new = tarfile.TarInfo(name=info.name)
+                    new.size = len(data)
+                    tar.addfile(new, io.BytesIO(data))
+    return out
+
+
 def test_failed_extraction_leaves_no_verified_result(fixture_dir, tmp_path):
     """A bundle that fails mid-extraction yields an exception, never a partial result.
 
@@ -101,24 +130,7 @@ def test_failed_extraction_leaves_no_verified_result(fixture_dir, tmp_path):
     what keeps an interrupted import from touching the current generation: the
     verifier stages, and only a *successful* return lets a caller promote.
     """
-    bundle = fixture_dir / "lite.tar.gz"
-    corrupted = tmp_path / "corrupted.tar.gz"
-
-    with tarfile.open(bundle, "r:gz") as tar:
-        members = [(i, tar.extractfile(i).read()) for i in tar.getmembers() if i.isreg()]
-
-    import gzip as _gzip
-    import io as _io
-
-    with corrupted.open("wb") as raw:
-        with _gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
-            with tarfile.open(fileobj=gz, mode="w") as tar:
-                for info, data in members:
-                    if info.name.startswith("tables/"):
-                        data = data + b'{"tampered": true}\n'
-                    new = tarfile.TarInfo(name=info.name)
-                    new.size = len(data)
-                    tar.addfile(new, _io.BytesIO(data))
+    corrupted = _corrupted_copy(fixture_dir / "lite.tar.gz", tmp_path / "corrupted.tar.gz")
 
     staging = tmp_path / "staging"
     with pytest.raises(BundleVerifyError) as exc:
@@ -126,24 +138,51 @@ def test_failed_extraction_leaves_no_verified_result(fixture_dir, tmp_path):
     assert exc.value.code == "BUNDLE_FILE_HASH_MISMATCH"
 
 
-def test_staging_is_separate_from_any_live_tree(fixture_dir, tmp_path):
-    """Extraction writes only under the caller-supplied staging directory.
+def test_interrupted_staging_leaves_the_live_generation_in_service(fixture_dir, tmp_path):
+    """Interrupted staging leaves the current generation unchanged (ADR-0015 Consequences 7).
 
-    Promotion is the caller's step, so an interrupted verification cannot have
-    modified a live generation -- it never had a path to one.
+    The test this replaces created a `sentinel` directory, called
+    `verify_bundle` **without ever passing it**, and asserted the sentinel was
+    untouched. That holds for any function that has never heard of the
+    directory, and would have held just as well if verification had deleted
+    every generation on the host -- its own docstring conceded the reader "never
+    had a path to one".
+
+    So this hands the code under test a live tree it genuinely does receive.
+    `import_full` takes `data_db_dir`: it builds the next generation inside it,
+    repoints `current`, and garbage-collects old generations. The assertions
+    below are about that directory after a bundle fails *mid-extraction*, with
+    bytes already written to staging. They go red if verification were ever
+    reordered after the swap, if a half-built generation were left behind, or if
+    a failed import recorded itself in the rollback anchor.
     """
-    staging = tmp_path / "staging"
-    sentinel = tmp_path / "live"
-    sentinel.mkdir()
-    (sentinel / "generation.txt").write_text("untouched", encoding="utf-8")
-
-    verify_bundle(
-        fixture_dir / "lite.tar.gz",
-        fixture_dir / "anchors.toml",
-        tmp_path / "state.toml",
-        staging,
+    data_db_dir = tmp_path / "data" / "db"
+    live_db = generations.build_next_generation(data_db_dir)
+    conn = sqlite3.connect(live_db)
+    apply_migrations(conn, "intel")
+    conn.execute(
+        "INSERT INTO ioc (type, value, first_seen, last_seen) VALUES "
+        "('ip', '198.51.100.7', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')"
     )
+    conn.commit()
+    conn.close()
+    generations.swap_current(data_db_dir, 1)
+    before = hashlib.sha256(live_db.read_bytes()).hexdigest()
 
-    assert (sentinel / "generation.txt").read_text() == "untouched"
-    assert list(sentinel.iterdir()) == [sentinel / "generation.txt"]
-    assert staging.exists()
+    corrupted = _corrupted_copy(fixture_dir / "lite.tar.gz", tmp_path / "corrupted.tar.gz")
+    state_path = tmp_path / "state.toml"
+
+    with pytest.raises(BundleVerifyError) as exc:
+        import_full(corrupted, fixture_dir / "anchors.toml", state_path, data_db_dir)
+    assert exc.value.code == "BUNDLE_FILE_HASH_MISMATCH"
+
+    assert generations.current_generation(data_db_dir) == 1
+    assert hashlib.sha256(live_db.read_bytes()).hexdigest() == before
+    assert sorted(p.name for p in data_db_dir.iterdir() if p.name.startswith("gen-")) == ["gen-1"]
+    assert not state_path.exists(), "a failed import must not record itself in the rollback anchor"
+
+    conn = sqlite3.connect(live_db)
+    try:
+        assert [r[0] for r in conn.execute("SELECT value FROM ioc")] == ["198.51.100.7"]
+    finally:
+        conn.close()
