@@ -243,6 +243,56 @@ def test_full_import_rejects_tampered_bundle_before_any_swap(env):
     assert generations.current_generation(env["data_db_dir"]) is None
 
 
+def test_failed_verification_leaves_the_generation_already_in_service_untouched(env):
+    """A generation already serving queries survives a bundle that fails verification.
+
+    The test above starts from an empty tree and asserts
+    `current_generation(...) is None`, which proves no generation was
+    *created*. That is a weaker statement than the one that matters in
+    operation: a node with a generation already in service must come out of a
+    failed import serving exactly the same bytes it served before. Asserting the
+    live database's digest, not just the symlink, is what makes the difference
+    -- a swap that pointed `current` back at gen-1 after clobbering its contents
+    would satisfy the symlink check alone.
+    """
+    import hashlib
+    import io
+    import tarfile
+
+    bundle1 = env["tmp_path"] / "bundle1.tar.gz"
+    _build(env["tmp_path"], env["source_db"], bundle1, version=1, sign_keys=[env["key_path"]])
+    import_full(bundle1, env["anchors_path"], env["state_path"], env["data_db_dir"])
+    assert generations.current_generation(env["data_db_dir"]) == 1
+
+    live_path = generations.intel_db_path(env["data_db_dir"], 1)
+    before = hashlib.sha256(live_path.read_bytes()).hexdigest()
+
+    # A newer bundle, correctly signed, whose content no longer matches the
+    # digests its manifest declares: it clears signature and anti-rollback and
+    # fails during extraction, which is the case that has bytes in flight.
+    bundle2 = env["tmp_path"] / "bundle2.tar.gz"
+    _build(env["tmp_path"], env["source_db"], bundle2, version=2, sign_keys=[env["key_path"]])
+    with tarfile.open(bundle2, "r:gz") as tar:
+        members = [(i, tar.extractfile(i).read() if i.isreg() else None) for i in tar.getmembers()]
+    with tarfile.open(bundle2, "w:gz") as tar:
+        for info, data in members:
+            if info.name == "tables/ioc.jsonl":
+                data = b"tampered"
+            new_info = tarfile.TarInfo(name=info.name)
+            new_info.size = len(data) if data is not None else 0
+            tar.addfile(new_info, io.BytesIO(data) if data is not None else None)
+
+    with pytest.raises(BundleVerifyError) as exc:
+        import_full(bundle2, env["anchors_path"], env["state_path"], env["data_db_dir"])
+    assert exc.value.code == "BUNDLE_FILE_HASH_MISMATCH"
+
+    assert generations.current_generation(env["data_db_dir"]) == 1
+    assert hashlib.sha256(live_path.read_bytes()).hexdigest() == before
+    assert read_state(env["state_path"]).last_imported_version == 1
+    remaining = sorted(p.name for p in env["data_db_dir"].iterdir() if p.name.startswith("gen-"))
+    assert remaining == ["gen-1"]
+
+
 def test_differential_import_applies_upserts_to_live_generation(env):
     full_bundle = env["tmp_path"] / "full.tar.gz"
     _build(env["tmp_path"], env["source_db"], full_bundle, version=1, sign_keys=[env["key_path"]])

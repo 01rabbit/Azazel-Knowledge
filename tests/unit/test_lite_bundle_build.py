@@ -69,6 +69,66 @@ datasets:
 """
 
 
+#: A dataset block that satisfies every ADR-0015 D4 provenance role, so a policy
+#: using it is *valid* and the build proceeds past `load_export_policy` to the
+#: guard being tested. Without this, a policy naming an unwanted dataset dies at
+#: policy load and the eligibility guard is never reached.
+def _valid_dataset_block(dataset: str, field: str) -> str:
+    roles = "\n".join(
+        f'        {role}: "stated once for the dataset"'
+        for role in (
+            "citation",
+            "source",
+            "freshness",
+            "generation",
+            "expiry",
+            "decay",
+            "confidence_ceiling",
+            "limitations",
+        )
+    )
+    return (
+        f"  {dataset}:\n"
+        f"    provenance:\n"
+        f"      dataset:\n"
+        f"{roles}\n"
+        f"    fields:\n"
+        f"      - name: {field}\n"
+    )
+
+
+def _add_local_tier_table(source_db: Path, tmp_path: Path, table: str) -> None:
+    """Give the source database a real local-tier table, with its real DDL and a row.
+
+    Copied from a freshly migrated local database rather than hand-written, so
+    the test cannot drift from the schema it is protecting.
+    """
+    scratch = tmp_path / f"_local_donor_{table}.db"
+    donor = sqlite3.connect(scratch)
+    try:
+        apply_migrations(donor, "local")
+        ddl = donor.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        assert ddl is not None, f"{table!r} is not a table in a migrated local.db"
+    finally:
+        donor.close()
+    scratch.unlink()
+
+    conn = sqlite3.connect(source_db)
+    try:
+        conn.executescript(ddl[0])
+        conn.execute(
+            "INSERT INTO reaction (edge_id, actor_key, action_applied, applied_at, reaction, "
+            "reaction_window_s, classifier, classifier_version, created_at) VALUES "
+            "('edge-1', '10.0.0.1', 'throttle', '2026-09-18T00:00:00Z', 'disengaged', 60, "
+            "'c', '1', '2026-09-18T00:00:00Z')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _run_cli(*args: str, expect_success: bool = True) -> subprocess.CompletedProcess:
     result = subprocess.run(
         [sys.executable, str(_TOOLS_DIR / "bundle_build.py"), *args],
@@ -317,14 +377,59 @@ def test_policy_naming_a_nonexistent_dataset_is_refused(lite_env, tmp_path):
     deny-by-default design exists to avoid.
     """
     policy = tmp_path / "drifted.yaml"
+    # The added dataset block is deliberately *valid*: with an incomplete one
+    # the build dies in `load_export_policy` on missing provenance, which also
+    # mentions the dataset name in stderr and so looks like a pass while the
+    # drift guard is never reached.
     policy.write_text(
-        POLICY_YAML + "  no_such_table:\n    fields:\n      - name: whatever\n", encoding="utf-8"
+        POLICY_YAML + _valid_dataset_block("no_such_table", "whatever"), encoding="utf-8"
     )
     result = _build_lite(
         lite_env, tmp_path / "x.tar.gz", **{"--export-policy": str(policy), "_expect_success": False}
     )
     assert result.returncode != 0
+    assert "not exportable intel tables" in result.stderr
     assert "no_such_table" in result.stderr
+    assert not (tmp_path / "x.tar.gz").exists()
+
+
+def test_policy_naming_a_local_tier_table_is_refused(lite_env, tmp_path):
+    """Absolute Constraint 5, pinned: no Lite artifact can be built over local-tier data.
+
+    `reaction` is research data. It is never exported, never bundled, never
+    signed into an artifact -- and, unlike the drifted-policy case above, this
+    is not about a name that does not resolve. The table is created in the
+    source database first, with its real DDL and a real row, so the refusal can
+    only come from `_eligible_tables` filtering `LOCAL_TIER_TABLES`. Drop that
+    filter and the row below would be dumped, hashed, and signed into a Lite
+    bundle; the specific message is asserted because a build that got that far
+    and then failed for some unrelated reason would still exit non-zero.
+    """
+    table = "reaction"
+    assert table in LOCAL_TIER_TABLES, "read the constant: this test is pinning a local-tier table"
+
+    _add_local_tier_table(lite_env["source_db"], tmp_path, table)
+    conn = sqlite3.connect(lite_env["source_db"])
+    try:
+        present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        rows = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        conn.close()
+    assert present is not None and rows == 1, "the table must really exist, or this proves nothing"
+
+    policy = tmp_path / "local_tier.yaml"
+    policy.write_text(POLICY_YAML + _valid_dataset_block(table, "edge_id"), encoding="utf-8")
+    out = tmp_path / "must-not-exist.tar.gz"
+    result = _build_lite(
+        lite_env, out, **{"--export-policy": str(policy), "_expect_success": False}
+    )
+
+    assert result.returncode != 0
+    assert "not exportable intel tables" in result.stderr
+    assert table in result.stderr
+    assert not out.exists(), "a refused build must leave no artifact behind"
 
 
 def test_manifest_carries_provenance_for_every_exported_dataset(lite_env, tmp_path):

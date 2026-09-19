@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -93,11 +94,21 @@ def _rewrite_tar(
     replace: dict[str, bytes] | None = None,
     remove: set[str] | None = None,
     to_symlink: dict[str, str] | None = None,
+    to_hardlink: dict[str, str] | None = None,
     insert: list[tuple[str, bytes]] | None = None,
+    insert_special: list[tarfile.TarInfo] | None = None,
 ) -> None:
+    """Rewrite a bundle's tar with members altered, removed, or added.
+
+    `to_hardlink` and `insert_special` exist so the archive *shapes* a verifier
+    must refuse -- hardlinks, FIFOs, character and block devices -- can be put
+    into a bundle at all. `insert` can only ever produce a regular file, so on
+    its own it cannot reach those branches.
+    """
     replace = replace or {}
     remove = remove or set()
     to_symlink = to_symlink or {}
+    to_hardlink = to_hardlink or {}
     with tarfile.open(bundle_path, "w:gz") as tar:
         for info, data in members:
             if info.name in remove:
@@ -108,6 +119,12 @@ def _rewrite_tar(
                 sym.linkname = to_symlink[info.name]
                 tar.addfile(sym)
                 continue
+            if info.name in to_hardlink:
+                lnk = tarfile.TarInfo(name=info.name)
+                lnk.type = tarfile.LNKTYPE
+                lnk.linkname = to_hardlink[info.name]
+                tar.addfile(lnk)
+                continue
             if info.name in replace:
                 data = replace[info.name]
             new_info = tarfile.TarInfo(name=info.name)
@@ -117,6 +134,8 @@ def _rewrite_tar(
             new_info = tarfile.TarInfo(name=name)
             new_info.size = len(data)
             tar.addfile(new_info, io.BytesIO(data))
+        for special in insert_special or []:
+            tar.addfile(special)
 
 
 def _decode_manifest(members: list[tuple[tarfile.TarInfo, bytes | None]]) -> dict:
@@ -601,3 +620,178 @@ def test_manifest_cannot_supply_its_own_minimum_epoch(bundle_env, tmp_path):
     with pytest.raises(BundleVerifyError) as exc:
         verify_bundle(tmp_path / "resigned.tar.gz", anchors, bundle_env["state_path"], tmp_path / "staging")
     assert exc.value.code == "BUNDLE_SECURITY_EPOCH_TOO_LOW"
+
+
+# --- archive shapes a verifier must refuse ---------------------------------
+
+
+def test_bomb_guard_hardlink_member_rejected(bundle_env):
+    """A hardlink is refused for the same reason as a symlink, and needs its own test.
+
+    `_safe_member` tests `issym() or islnk()` in one expression, so a symlink
+    test alone leaves the hardlink half of it unexecuted -- deleting `islnk()`
+    would not turn any test red. A tar hardlink also does not carry content of
+    its own, so an extractor that honoured it would produce a staged path whose
+    bytes came from somewhere the manifest never hashed.
+
+    The diagnostic is asserted, not just the code, because the catch-all
+    `not isreg()` check further down refuses a hardlink too: a test that only
+    asserted `BUNDLE_UNSAFE_MEMBER` would stay green with `islnk()` deleted and
+    would be pinning nothing. It also matters operationally -- an operator
+    reading "link member not allowed" learns the shape of what was refused,
+    where "non-regular member" leaves them guessing.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    _rewrite_tar(
+        bundle_env["bundle_path"], members, to_hardlink={"tables/ioc.jsonl": "tables/ioc_source.jsonl"}
+    )
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_UNSAFE_MEMBER"
+    assert "link member not allowed" in str(exc.value)
+    assert not (staging / "tables" / "ioc.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    "member_type, label",
+    [
+        (tarfile.FIFOTYPE, "fifo"),
+        (tarfile.CHRTYPE, "character device"),
+        (tarfile.BLKTYPE, "block device"),
+    ],
+)
+def test_bomb_guard_device_member_rejected(bundle_env, member_type, label):
+    """FIFO and device members are refused before anything opens them.
+
+    Nothing legitimate puts one in a knowledge bundle, and a reader that
+    created one would hand the rest of the pipeline a path that blocks on read
+    or addresses hardware, neither of which any declared SHA-256 describes.
+
+    As with the hardlink case the diagnostic is asserted, because the catch-all
+    `not isreg()` check would refuse these anyway: asserting only the code would
+    leave the device branch dead and the test none the wiser.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    special = tarfile.TarInfo(name="tables/device.jsonl")
+    special.type = member_type
+    special.devmajor = 1
+    special.devminor = 3
+    _rewrite_tar(bundle_env["bundle_path"], members, insert_special=[special])
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_UNSAFE_MEMBER", label
+    assert "device/fifo member not allowed" in str(exc.value), label
+    assert not (staging / "tables" / "device.jsonl").exists()
+
+
+# --- path aliases: one file on disk must not be two names in the manifest ---
+
+
+def _alias_of(name: str) -> str:
+    head, _, tail = name.rpartition("/")
+    return f"{head}/./{tail}"
+
+
+def _bundle_with_alias_member(bundle_env, tmp_path: Path, payload: bytes) -> tuple[Path, dict, str, str]:
+    """A *validly signed* bundle declaring a member twice: real name and `./` alias.
+
+    The manifest declares the honest digest for `tables/<x>.jsonl` and the
+    digest of `payload` for `tables/./<x>.jsonl`. Re-signing is essential: a
+    manifest edited without re-signing dies at the signature gate and would
+    prove nothing about the gates after it.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    victim, _ = _first_declared_member(members)
+    alias = _alias_of(victim)
+    manifest["files"][alias] = hashlib.sha256(payload).hexdigest()
+    members.append((tarfile.TarInfo(name=alias), payload))
+    return _resign(bundle_env, tmp_path, members, manifest), manifest, victim, alias
+
+
+def test_path_alias_member_rejected_though_validly_signed(bundle_env, tmp_path):
+    """`tables/./x.jsonl` is refused as a member name, signature notwithstanding.
+
+    Two manifest keys that collapse to one path on disk let a manifest declare
+    the honest digest under the real name and a substituted digest under the
+    alias: the duplicate guard sees two distinct raw names, the declared-files
+    lookup finds each, the hash check hashes what it just wrote against the
+    alias's digest -- and every gate passes while the file in staging holds the
+    substituted bytes.
+
+    The bundle here is signed with the fixture's own key, so nothing upstream
+    of the member check can be what refuses it.
+    """
+    bundle, _, _, alias = _bundle_with_alias_member(bundle_env, tmp_path, b'{"substituted": true}\n')
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle, bundle_env["anchors_path"], bundle_env["state_path"], tmp_path / "staging")
+    assert exc.value.code == "BUNDLE_UNSAFE_MEMBER"
+    assert alias in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "tables/./ioc.jsonl",  # a `.` component: Path.parts drops it silently
+        "tables//ioc.jsonl",  # a doubled separator
+        "tables/ioc.jsonl/",  # a trailing separator
+        "./tables/ioc.jsonl",  # a leading `./`
+        "tables/",  # a trailing separator on a bare directory name
+        ".",  # normalises to itself, so the comparison alone would pass it
+        "",  # normalises to ".", so the comparison catches it
+    ],
+)
+def test_non_canonical_member_names_rejected(bundle_env, form):
+    """Every spelling that is not already its own normpath is refused.
+
+    Each of these survives the `..`, empty-part and absolute-path checks --
+    `Path("tables/./ioc.jsonl").parts` is `('tables', 'ioc.jsonl')`, same as the
+    canonical spelling -- so the canonical-form check is the only thing
+    standing between them and a staging path that disagrees with the name the
+    manifest was keyed on. The members are deliberately *undeclared*: the name
+    check has to fire before the `manifest.files` lookup, or a declared alias
+    would already have been half-processed by the time anything noticed.
+    """
+    members = _read_all_members(bundle_env["bundle_path"])
+    _rewrite_tar(bundle_env["bundle_path"], members, insert=[(form, b"x")])
+    staging = bundle_env["tmp_path"] / "staging"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(bundle_env["bundle_path"], bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_UNSAFE_MEMBER"
+
+
+def test_rejected_bundle_stages_no_file_failing_its_declared_digest(bundle_env, tmp_path):
+    """The effect, not the code: staging never holds bytes the manifest disowns.
+
+    `verify_bundle`'s promise is that a file it leaves in staging answers to the
+    digest `manifest.files` declares **for the path it landed on**. This asserts
+    exactly that, sweeping staging after a rejected bundle rather than trusting
+    the error code -- so it holds whatever new alias shape someone finds, and it
+    would have failed on the `./` alias before that shape was refused: back then
+    `verify_bundle` returned successfully with the substituted payload sitting
+    at the victim's path while the manifest still declared the honest digest
+    there.
+    """
+    payload = b'{"substituted": true}\n'
+    bundle, manifest, victim, _ = _bundle_with_alias_member(bundle_env, tmp_path, payload)
+    staging = tmp_path / "staging"
+
+    outcome: BundleVerifyError | None = None
+    try:
+        verify_bundle(bundle, bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    except BundleVerifyError as exc:
+        outcome = exc
+
+    staged = sorted(p for p in staging.rglob("*") if p.is_file())
+    for path in staged:
+        relative = path.relative_to(staging).as_posix()
+        assert relative in manifest["files"], f"staged a path the manifest never declared: {relative}"
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == manifest["files"][relative], (
+            f"staged bytes at {relative} do not match the digest the manifest declares for it"
+        )
+    assert payload not in b"".join(p.read_bytes() for p in staged)
+    assert victim in manifest["files"]
+    assert outcome is not None, "a bundle naming one file under two names must not verify"
+    assert outcome.code == "BUNDLE_UNSAFE_MEMBER"

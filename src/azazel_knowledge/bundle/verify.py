@@ -26,12 +26,21 @@ per-member hash check would already stop a *differing* duplicate from
 substituting content, but only after writing it, and an identical
 duplicate would pass unremarked; the explicit control states the
 property instead of leaving it to be inferred.
+
+Uniqueness is only meaningful if two names cannot denote one file, so
+member names must also be canonical: anything that is not already its
+own ``posixpath.normpath`` aborts with ``BUNDLE_UNSAFE_MEMBER``. Without
+that, ``tables/x.jsonl`` and ``tables/./x.jsonl`` are two keys for the
+duplicate guard and for ``manifest.files`` but one path on disk, and a
+manifest could declare an honest digest for one and a substituted digest
+for the other while a single, substituted file lands in staging.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import tarfile
 import tomllib
 from dataclasses import dataclass, field
@@ -299,6 +308,37 @@ def _safe_member(member: tarfile.TarInfo) -> str:
     parts = Path(name).parts
     if ".." in parts or any(p == "" for p in parts):
         raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"unsafe path in bundle: {name!r}")
+    # A member name must already be canonical -- not merely normalisable into
+    # something safe. `tables/./ioc.jsonl` clears every check above (its
+    # `Path.parts` is `('tables', 'ioc.jsonl')`: no `..`, no empty part, not
+    # absolute) and yet names the same file on disk as `tables/ioc.jsonl`. That
+    # matters because three separate things key off "which file is this": the
+    # duplicate-member guard keys on the raw tar name, the `manifest.files`
+    # lookup keys on the raw tar name, and the filesystem keys on the path
+    # after it has collapsed the `.`. An alias makes the first two see two
+    # members while the third sees one, so a manifest can declare the honest
+    # digest under the real name and a substituted digest under the alias, and
+    # every gate passes while the bytes left in staging are the substituted
+    # ones.
+    #
+    # Rejecting, rather than normalising and carrying on, is the point. After
+    # this check the raw tar name, the manifest key and the staging path are
+    # provably the *same string*, so those three views cannot disagree at all.
+    # Normalising would close this one alias and leave the divergence itself
+    # intact, available to the next shape nobody thought of.
+    #
+    # Tar member names are POSIX-style regardless of the host OS, so
+    # `posixpath` is the right normaliser here; `os.path`/`Path` would rewrite
+    # separators on Windows and change what counts as canonical. This does not
+    # replace the `..`/absolute checks above and must not: `a/../b` normalises
+    # to `b`, so a normpath comparison alone would wave it through.
+    # `posixpath.normpath("")` is `"."`, so an empty name fails the comparison;
+    # a bare `"."` normalises to itself and has to be named explicitly.
+    # `tools/bundle_build.py` writes `tables/<table>.jsonl` and
+    # `deltas/<table>.jsonl` literally, so no bundle a real builder produces is
+    # refused here.
+    if name == "." or posixpath.normpath(name) != name:
+        raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"non-canonical path in bundle: {name!r}")
     if member.issym() or member.islnk():
         raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"link member not allowed: {name!r}")
     if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
