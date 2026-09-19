@@ -20,7 +20,13 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from azazel_knowledge.api import limits
-from azazel_knowledge.api.app import AuthContext, ensure_warm_cache, read_raw_body, require_scope_dep
+from azazel_knowledge.api.app import (
+    AuthContext,
+    ensure_warm_cache,
+    open_local_readonly,
+    read_raw_body,
+    require_scope_dep,
+)
 from azazel_knowledge.api.contracts import (
     AdvisoryInvariantViolation,
     assert_response_advisory_only,
@@ -30,6 +36,7 @@ from azazel_knowledge.audit.logger import AuditUnavailable
 from azazel_knowledge.core.clock import to_rfc3339
 from azazel_knowledge.ingest.spool import QuotaExceeded
 from azazel_knowledge.correlate.engage_rule_refs import lookup_engage_refs, lookup_rule_refs
+from azazel_knowledge.db.defensive_state_memory import lookup_reported_defensive_state
 from azazel_knowledge.correlate.pipeline import (
     ContextRequest,
     ContextRequestTooLarge as PipelineRequestTooLarge,
@@ -144,8 +151,19 @@ def post_context(
     # never turns this 200 into a 500, and never touches any scored field or
     # `content_hash` (scoring completed inside `run_context`). Reuses the same
     # intel read path (`repo.connection()`) the pipeline used.
+    # The authoritative Defensive State **fact lane** (Knowledge#65).
+    #
+    # Knowledge advises; it never sets Defensive State. This reports what an
+    # authoritative producer said about itself, and is kept structurally apart
+    # from `recommendation`, which is Knowledge's own inference. The two must
+    # never be merged: a consumer has to be able to tell "Edge says it is in X"
+    # from "Knowledge suggests considering Y".
+    #
+    # `None` means unknown -- nothing reported, unreadable, or newer than this
+    # query. Knowledge never substitutes a default.
     engage_refs: list[dict] = []
     rule_refs: list[dict] = []
+    reported_state = None
     if time.monotonic() < deadline:
         techniques = [
             m["technique"]
@@ -159,6 +177,20 @@ def post_context(
         except Exception:  # noqa: BLE001 -- best-effort enrichment, fail-open to []
             engage_refs = []
             rule_refs = []
+        if body.trace_id:
+            # `local.db` alone, not `repo.connection()`: the fact lane lives in
+            # the local tier and must keep working through the cold-boot window
+            # before any intel generation exists.
+            try:
+                local_conn = open_local_readonly(state.settings.local_db_path)
+                try:
+                    reported_state = lookup_reported_defensive_state(
+                        local_conn, body.trace_id, query_as_of=created_at
+                    )
+                finally:
+                    local_conn.close()
+            except Exception:  # noqa: BLE001 -- unknown, never an error, never a state
+                reported_state = None
 
     # Fabric advisory-only invariant (ADR-0010): assert the assembled advisory
     # carries no directive-shaped field, on a COPY built from pipeline output.
@@ -175,6 +207,9 @@ def post_context(
         "advisory_notice": result.advisory_notice,
         "engage_refs": engage_refs,
         "rule_refs": rule_refs,
+        "reported_defensive_state": (
+            reported_state.as_fact() if reported_state is not None else None
+        ),
     }
     try:
         assert_response_advisory_only(advisory_view)
@@ -196,4 +231,7 @@ def post_context(
         multi_ioc_scope=result.multi_ioc_scope,
         engage_refs=engage_refs,
         rule_refs=rule_refs,
+        reported_defensive_state=(
+            reported_state.as_fact() if reported_state is not None else None
+        ),
     )

@@ -13,7 +13,7 @@ drift hazard rather than a safety net.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -60,6 +60,11 @@ class ContextApiRequest(BaseModel):
     edge_id: str = ""
     actor_key: str = ""
     event_id: str | None = None
+    #: Optional correlation key for the authoritative Defensive State lane
+    #: (Knowledge#65). Additive and backward-compatible: a caller that omits it
+    #: gets exactly the response it got before, with `reported_defensive_state`
+    #: null. It is never a scoring input and never enters the determinism tuple.
+    trace_id: str | None = None
 
 
 class EngageRef(BaseModel):
@@ -92,6 +97,30 @@ class RuleRef(BaseModel):
     source_url: str | None = None
 
 
+class ReportedDefensiveStateFact(BaseModel):
+    """One producer's report about its own Defensive State.
+
+    Knowledge advises; it never sets Defensive State. This model carries no
+    target, no request, and no transition -- only what was reported, by whom,
+    under which decision, and when.
+
+    `reported_state` is a plain string carried exactly as it arrived, and
+    `state_vocabulary` names the vocabulary it was reported in. Knowledge does
+    not enumerate the values: the canonical vocabulary is Azazel-Fabric's
+    (Fabric#14), and a second copy here would drift from it.
+    """
+
+    reported_state: str
+    state_vocabulary: str
+    producer_product: str
+    producer_node: str
+    trace_id: str
+    decision_ref: str
+    observed_at: str
+    observation_ref: str
+    authority_class: Literal["producer_reported_state"] = "producer_reported_state"
+
+
 class ContextResponse(BaseModel):
     threat_context: dict[str, Any]
     threat_score: float
@@ -105,6 +134,14 @@ class ContextResponse(BaseModel):
     multi_ioc_scope: dict[str, Any]
     engage_refs: list[EngageRef] = Field(default_factory=list)
     rule_refs: list[RuleRef] = Field(default_factory=list)
+    #: The **fact lane** (Knowledge#65). What an authoritative producer reported
+    #: about its own Defensive State, with provenance -- kept structurally
+    #: separate from `recommendation`, which is Knowledge's inference and is
+    #: advisory-only. `None` means unknown: nothing was reported, the value was
+    #: unreadable, or everything reported is newer than this query. Knowledge
+    #: never substitutes a default, because a default would be Knowledge
+    #: asserting another product's posture out of its own ignorance.
+    reported_defensive_state: ReportedDefensiveStateFact | None = None
 
 
 class IngestAcceptedResponse(BaseModel):

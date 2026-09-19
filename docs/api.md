@@ -537,6 +537,65 @@ new technique-matching input, only cite what the advisory already attributed:
   `(technique, rule_type, rule_id)`. Both are capped at a fixed count; a call
   replayed against the same intel generation returns byte-identical lists.
 
+### `reported_defensive_state` (additive, optional; Knowledge#65)
+
+> **Knowledge advises; it never sets Defensive State.**
+
+`POST /v1/context` gains one **additive, top-level, optional** field, default
+`null`, and one optional **request** field, `trace_id`. A caller that sends no
+`trace_id` gets exactly the response it got before, with
+`reported_defensive_state` null.
+
+This is the **fact lane**. It reports what an authoritative producer said about
+its *own* Defensive State, with the provenance needed to attribute it. It is
+kept structurally apart from `recommendation`, which is Knowledge's inference
+and is advisory-only — a consumer has to be able to tell "Edge says it is in
+`THROTTLE`" from "Knowledge suggests considering something".
+
+```json
+{
+  "reported_defensive_state": {
+    "reported_state": "THROTTLE",
+    "state_vocabulary": "azazel-fabric/defensive-state/v1",
+    "producer_product": "azazel-edge",
+    "producer_node": "edge-1",
+    "trace_id": "trace-1",
+    "decision_ref": "decision-1",
+    "observed_at": "2026-07-05T00:00:00+00:00",
+    "observation_ref": "dso-1",
+    "authority_class": "producer_reported_state"
+  }
+}
+```
+
+- **`null` means unknown, and unknown is not a state.** Nothing reported, the
+  value unreadable, the local tier unavailable, or everything reported newer
+  than this query all yield `null`. Knowledge never substitutes a default —
+  specifically never `OBSERVE` — because a default would be Knowledge asserting
+  another product's posture out of its own ignorance.
+- **Knowledge does not enumerate the values.** `reported_state` is carried
+  exactly as it arrived and `state_vocabulary` names the vocabulary it arrived
+  in. The canonical vocabulary is Azazel-Fabric's (Fabric#14); a second copy
+  here would drift from it. Validation against the canonical enum lands at the
+  ingest boundary once a Fabric release carries it — this repository pins
+  `v0.8.0` and no tag carries `DefensiveState` yet.
+- **Nothing here is a request.** The storage lane refuses a payload carrying
+  `set_state`, `target_state`, `requested_state`, `next_state`,
+  `transition_to`, `apply`, `execute`, `enforce`, `command`, `override`, or an
+  attacker-belief field, recursively and at any nesting depth. A producer
+  sending one has misunderstood the lane, and silently storing a cleaned copy
+  would hide that.
+- **No state is inferred.** Deception telemetry on the event does not produce a
+  `REDIRECT`, and no attacker belief or intent is derived from a reported state.
+  The only way this field is non-null is that a producer reported it.
+- **Outside the deterministic 7-tuple and `content_hash`.** Read after scoring
+  completes, from `local.db` alone (not the intel generation), so it can never
+  move `threat_score`/`confidence`/`reason[]`/the audit event.
+- **Immutable.** `defensive_state_observation_v0` is append-only; triggers
+  reject `UPDATE` and `DELETE` (Absolute Constraint 5). A redelivered report
+  with the same `observation_ref` is a no-op; the same ref with different
+  content is refused rather than rewritten.
+
 ### Other read endpoints
 
 | Endpoint | Purpose |
