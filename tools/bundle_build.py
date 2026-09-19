@@ -18,6 +18,7 @@ produced by this tool (a Phase-2 TODO), only consumed by the importer.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -284,11 +285,19 @@ def cmd_build_lite(args: argparse.Namespace) -> int:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(out_path, mode="w:gz") as tar:
-        _add_bytes(tar, MANIFEST_MEMBER, manifest_bytes)
-        _add_bytes(tar, SIGNATURE_MEMBER, sig_bytes)
-        for name in sorted(content_bytes):
-            _add_bytes(tar, name, content_bytes[name])
+    # The gzip container is written with a zeroed header: `tarfile.open(mode="w:gz")`
+    # stamps the current time into it, and an embedded filename varies with the
+    # output path, so an otherwise identical rebuild would still differ byte for
+    # byte. Tar member metadata is already fixed by `_add_bytes`. D2 claims a
+    # byte-identical unsigned artifact for a repeated tuple, and that claim has
+    # to hold for the artifact, not merely for its members.
+    with out_path.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode="w") as tar:
+                _add_bytes(tar, MANIFEST_MEMBER, manifest_bytes)
+                _add_bytes(tar, SIGNATURE_MEMBER, sig_bytes)
+                for name in sorted(content_bytes):
+                    _add_bytes(tar, name, content_bytes[name])
 
     counts = selection.profile_block["counts"]
     print(

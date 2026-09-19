@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import struct
 import subprocess
 import sys
 import tarfile
@@ -137,20 +138,36 @@ def test_lite_bundle_verifies_under_the_existing_verifier(lite_env, tmp_path):
 def test_same_tuple_rebuilds_byte_identically(lite_env, tmp_path):
     """ADR-0015 D2: the pinned tuple determines the unsigned artifact.
 
-    The manifest carries no wall-clock stamp precisely so this can hold; a
-    `created_at` would make every rebuild differ for no informational gain,
-    since the instant that matters is the pinned `as_of` inside the profile.
+    Compared on the **file's bytes**, not merely on its members. An earlier
+    version of this test compared member contents only, and passed while the
+    gzip container header still carried the current time -- so the artifact
+    differed on every rebuild in a way the test could not see. D2 claims
+    byte-identity for the artifact, so that is what gets asserted.
     """
     first = tmp_path / "a.tar.gz"
     second = tmp_path / "b.tar.gz"
     _build_lite(lite_env, first)
     _build_lite(lite_env, second)
 
+    assert first.read_bytes() == second.read_bytes()
+
     def members(path: Path) -> dict[str, bytes]:
         with tarfile.open(path, "r:gz") as tar:
             return {i.name: tar.extractfile(i).read() for i in tar.getmembers() if i.isreg()}
 
     assert members(first) == members(second)
+
+
+def test_gzip_container_carries_no_wall_clock_stamp(lite_env, tmp_path):
+    """The gzip header's mtime field is zeroed.
+
+    Pinned separately from the byte-identity test because a same-second rebuild
+    would satisfy that test by accident; this one fails regardless of timing.
+    """
+    out = tmp_path / "lite.tar.gz"
+    _build_lite(lite_env, out)
+    header = out.read_bytes()[:10]
+    assert struct.unpack("<I", header[4:8])[0] == 0
 
 
 def test_changing_the_tuple_changes_the_manifest(lite_env, tmp_path):

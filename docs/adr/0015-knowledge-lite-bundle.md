@@ -100,6 +100,17 @@ The tuple appears verbatim in `manifest.profile.selection_inputs` so that a
 rebuild is reproducible by a third party without access to the original
 operator.
 
+Byte-identity is claimed for the **artifact**, not merely for its members, so
+the container must be deterministic too. Tar member metadata is fixed
+(`mtime=0`, fixed mode and ownership), and the gzip header is written with a
+zeroed mtime and no embedded filename. Implementation found that
+`tarfile.open(mode="w:gz")` stamps the current time into that header, which
+made otherwise identical rebuilds differ; a test compares whole-file bytes and
+a second test asserts the zeroed header directly, since a same-second rebuild
+would satisfy the first by accident. A Lite manifest also carries no
+`created_at` for the same reason: the instant that matters is the pinned
+`as_of`, already recorded above.
+
 Selection MUST NOT depend on filesystem enumeration order, `dict` iteration
 over an unordered source, randomness, locale, or environment variables.
 Ordering within every emitted table stays primary-key ordered, as the full
