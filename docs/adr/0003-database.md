@@ -112,9 +112,22 @@ ingest history. Re-measured with the same harness on the same host:
 | 5 000 | 232.92 ms | 1.83 ms |
 
 The point is not the 127× at 5 000 but that the curve is **flat**: the cost no
-longer depends on the population at all. The `write_queue` figures above were
-measured *before* this change and are left as recorded — they are what produced
-the finding, and re-running them is part of the Pi 4 work, not a paper edit.
+longer depends on the population at all.
+
+**The `write_queue` figures above were measured before this change and are left
+as recorded** — they are what produced the finding, and re-running them is part
+of the Pi 4 work, not a paper edit. Two things have since moved under them, so
+read them with both in mind:
+
+- The accept cost they include is the pre-fix one (the table above), which at
+  the higher sweep rates was a large share of the measured wait.
+- They were taken with the accept instant at the moment `write_batch`
+  *returned*. That is now the moment it *began*, because a batch becomes
+  drainable partway through the call — as soon as its payload lands — so an
+  aggressive drain could commit it before the API responded and the harness
+  read a negative wait. The old definition therefore understated the wait by
+  one accept; the current one includes it, which is also what an Edge
+  experiences.
 
 The 5 s worker interval is unchanged and still undecided.
 

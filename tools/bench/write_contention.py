@@ -227,7 +227,19 @@ def synthetic_ioc_rows(
 
 @dataclass(frozen=True)
 class BatchAccept:
-    """A batch the API accepted: `accepted_s` is when 202 would be returned."""
+    """A batch the API accepted.
+
+    ``accepted_s`` is when the accept *began*, not when 202 would be returned.
+    A batch becomes visible to the drainer partway through ``write_batch`` --
+    the instant its payload lands, before the ``.client`` sidecar is written
+    and before the call returns -- so an aggressive drain can genuinely commit
+    it before the API responds. Timing from the return instant made that
+    physically real ordering look like a negative wait, which it is not.
+
+    Measuring from the start of the accept also matches what an Edge
+    experiences: its wait includes the accept itself. ``accept_ms`` reports
+    that portion separately, so the two can still be told apart.
+    """
 
     batch_id: str
     client_key_id: str
@@ -262,8 +274,10 @@ def spool_to_commit_latencies(
     is counted, never imputed -- inventing a latency for a record the worker
     never committed would flatter the result exactly where it matters.
 
-    A commit instant preceding its accept instant means the instrumentation
-    is wrong, so it raises rather than reporting a negative wait.
+    A commit instant preceding its accept instant means the commit landed
+    before the accept even began, which no ordering makes possible, so it
+    raises rather than reporting a negative wait. (A commit before the accept
+    *returned* is possible and is not an error -- see `BatchAccept`.)
     """
     per_batch: list[float] = []
     per_record: list[float] = []
@@ -278,7 +292,7 @@ def spool_to_commit_latencies(
         elapsed_ms = (committed - accept.accepted_s) * 1000.0
         if elapsed_ms < 0.0:
             raise ValueError(
-                f"batch {accept.batch_id} committed before it was accepted "
+                f"batch {accept.batch_id} committed before its accept began "
                 f"({elapsed_ms:.3f} ms); the harness instrumentation is wrong"
             )
         per_batch.append(elapsed_ms)
@@ -539,6 +553,29 @@ class _Counter:
             self.value += delta
 
 
+def accept_one_batch(
+    spool: SpoolWriter, endpoint: str, client_key_id: str, lines: list[str]
+) -> BatchAccept:
+    """Spool one batch and record when its accept began.
+
+    The instant is taken **before** ``write_batch``, because the batch becomes
+    drainable partway through that call -- as soon as its payload lands, ahead
+    of the ``.client`` sidecar and of the return. Timing from the return let an
+    aggressive drain stamp a commit earlier than the accept, and the latency
+    guard then aborted the run over an ordering that genuinely happens.
+    """
+    before = time.perf_counter()
+    batch_id = spool.write_batch(endpoint, client_key_id, lines)
+    returned_s = time.perf_counter()
+    return BatchAccept(
+        batch_id=batch_id,
+        client_key_id=client_key_id,
+        records=len(lines),
+        accepted_s=before,
+        accept_ms=(returned_s - before) * 1000.0,
+    )
+
+
 def _producer(
     *,
     client_index: int,
@@ -575,9 +612,8 @@ def _producer(
         if delay > 0:
             if stop_event.wait(delay):
                 return
-        before = time.perf_counter()
         try:
-            batch_id = spool.write_batch(endpoint, client_key_id, lines)
+            accepts.append(accept_one_batch(spool, endpoint, client_key_id, lines))
         except QuotaExceeded:
             # The spool's own backpressure (503 ingest_quota_exceeded at the
             # API). Counted, not smoothed over: it is how the system bounds
@@ -585,16 +621,6 @@ def _producer(
             quota_rejections.add(1)
             sent += size
             continue
-        accepted_s = time.perf_counter()
-        accepts.append(
-            BatchAccept(
-                batch_id=batch_id,
-                client_key_id=client_key_id,
-                records=size,
-                accepted_s=accepted_s,
-                accept_ms=(accepted_s - before) * 1000.0,
-            )
-        )
         accepted_records.add(size)
         sent += size
 
