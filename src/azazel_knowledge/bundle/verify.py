@@ -58,6 +58,7 @@ its own rather than a tighter byte cap.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import posixpath
@@ -489,6 +490,22 @@ def _check_member_count(manifest: dict, max_members: int) -> None:
         )
 
 
+def _table_of_member(name: str) -> str | None:
+    """The table a content member carries, or None if the name is not one.
+
+    `tables/<t>.jsonl` and `deltas/<t>.jsonl` are the only shapes either
+    builder emits. Anything else contributes no table name, which keeps this a
+    recogniser rather than a parser: an unrecognised member is refused by the
+    undeclared/declared checks on its own terms, not by being mis-parsed here.
+    """
+    for prefix in ("tables/", "deltas/"):
+        if name.startswith(prefix) and name.endswith(".jsonl"):
+            stem = name[len(prefix) : -len(".jsonl")]
+            if stem and "/" not in stem:
+                return stem
+    return None
+
+
 def _validate_manifest_shape(manifest: dict) -> None:
     if not isinstance(manifest, dict):
         raise BundleVerifyError("BUNDLE_MANIFEST_INVALID", "manifest.json is not a JSON object")
@@ -498,7 +515,30 @@ def _validate_manifest_shape(manifest: dict) -> None:
             "BUNDLE_SHADOWS_TRUST_ANCHOR", f"manifest embeds trust/state fields: {sorted(shadowed)}"
         )
     tables = manifest.get("tables", [])
-    touched_local = LOCAL_TIER_TABLES & set(tables)
+    # F-1 is checked against *both* halves of the manifest, and the two are
+    # required to agree.
+    #
+    # Checking `tables` alone left a hole: nothing tied `manifest["tables"]` to
+    # `manifest["files"]`, so a manifest could omit `reaction` from `tables`
+    # while declaring `tables/reaction.jsonl` in `files`, and local-tier-named
+    # content would be written to staging and handed back in `file_paths`. The
+    # rows were never inserted -- `import_full` iterates `tables` -- so
+    # Absolute Constraint 5 held, but the docstring above promises the abort
+    # happens "before a single content byte is written to disk", and it did
+    # not. A signing key was required either way; this is the same
+    # defence-in-depth posture as the member caps.
+    #
+    # `bundle_build.py` derives `files` *from* `tables`, so every artifact a
+    # real builder produces already satisfies this.
+    #
+    # Deliberately *not* added here: a rule that `files` may name no table
+    # absent from `tables`. It would be sound for a real builder, but it
+    # reshapes the refusal code for a large class of malformed manifests that
+    # other checks already refuse on their own terms, and F-1 does not need it.
+    # Tracked separately rather than smuggled in behind this fix.
+    declared_tables = set(tables)
+    file_tables = {t for t in (_table_of_member(name) for name in manifest.get("files", {})) if t}
+    touched_local = LOCAL_TIER_TABLES & (declared_tables | file_tables)
     if touched_local:
         raise BundleVerifyError(
             "BUNDLE_TOUCHES_LOCAL_TIER", f"bundle names local-tier table(s): {sorted(touched_local)}"
@@ -612,8 +652,36 @@ def _read_capped(fileobj: BinaryIO, max_bytes: int, code: str) -> bytes:
     return data
 
 
+@contextlib.contextmanager
+def _archive(bundle_path: Path):
+    """Open the bundle, turning container-level failures into a BUNDLE_ code.
+
+    `tarfile` raises `tarfile.TarError` (and `gzip`/`zlib` raise `OSError` and
+    `EOFError`) when the container itself is unreadable -- a truncated stream,
+    a corrupt deflate block, a header that does not parse. None of those carry
+    a `BUNDLE_*` code, so a consumer catching `BundleVerifyError` saw an
+    unhandled exception rather than a refusal, even though the outcome was
+    fail-closed either way.
+
+    The refusal was never in doubt; its *vocabulary* was. Every way this module
+    can decline an artifact now names itself, which is what lets a consumer
+    write one except clause and mean it. The negative fixture set ships a
+    truncated bundle precisely so Nexus and Boot can prove they handle this
+    case, and it needs a code to assert on.
+    """
+    try:
+        with tarfile.open(bundle_path, mode="r|gz") as tar:
+            yield tar
+    except BundleVerifyError:
+        raise
+    except (tarfile.TarError, EOFError, OSError) as exc:
+        raise BundleVerifyError(
+            "BUNDLE_ARCHIVE_UNREADABLE", f"archive could not be read: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _read_manifest_and_signature(bundle_path: Path, max_manifest_bytes: int) -> tuple[dict, bytes]:
-    with tarfile.open(bundle_path, mode="r|gz") as tar:
+    with _archive(bundle_path) as tar:
         first = tar.next()
         if first is None or first.name != MANIFEST_MEMBER:
             raise BundleVerifyError("BUNDLE_MANIFEST_MISSING", "manifest.json must be the first tar member")
@@ -669,7 +737,7 @@ def _extract_declared_files(
     # property is stated rather than inferred.
     member_names: set[str] = set()
 
-    with tarfile.open(bundle_path, mode="r|gz") as tar:
+    with _archive(bundle_path) as tar:
         for member in tar:
             if member.name in member_names:
                 raise BundleVerifyError(

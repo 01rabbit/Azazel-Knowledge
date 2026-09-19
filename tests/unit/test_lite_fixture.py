@@ -375,16 +375,19 @@ def test_corrupt_truncated_fixture_fails_at_the_archive_gate(fixture_dir, tmp_pa
     # genuinely reached and passed before the decoder gives up.
     assert peek_manifest(corrupt) == peek_manifest(fixture_dir / "lite.tar.gz")
 
-    with pytest.raises(tarfile.ReadError):
+    with pytest.raises(BundleVerifyError) as exc:
         verify_bundle(
             corrupt,
             fixture_dir / "anchors.toml",
             tmp_path / "state.toml",
             tmp_path / "staging",
         )
+    assert exc.value.code == "BUNDLE_ARCHIVE_UNREADABLE"
+    # The underlying decoder error is preserved as the cause, so a consumer
+    # that wants the detail still has it while dispatching on the code.
+    assert isinstance(exc.value.__cause__, tarfile.TarError)
     outcome, _ = _attempt(corrupt, fixture_dir, tmp_path / "trunc")
-    assert outcome == "tarfile.ReadError"
-    assert not outcome.startswith("BUNDLE_")
+    assert outcome == "BUNDLE_ARCHIVE_UNREADABLE"
 
 
 def test_the_three_corrupt_fixtures_fail_at_three_distinct_gates(fixture_dir, tmp_path):
@@ -566,3 +569,41 @@ def test_interrupted_staging_leaves_the_live_generation_in_service(fixture_dir, 
         assert [r[0] for r in conn.execute("SELECT value FROM ioc")] == ["198.51.100.7"]
     finally:
         conn.close()
+
+
+def test_the_truncated_fixture_cuts_into_content_rather_than_a_block_boundary(fixture_dir):
+    """The construction must not be disarmed by an empty dataset.
+
+    `_corrupt_truncated` cuts the last content member in half. When the last
+    content member is *empty*, half of zero is zero, the cut lands exactly on a
+    tar block boundary, and the result is a shorter but perfectly well-formed
+    archive: a "truncated" fixture that decodes without complaint and refuses
+    nothing.
+
+    This is not hypothetical. Adding `kev` to the default export policy put an
+    empty `tables/kev.jsonl` last in the fixture and silently turned this
+    fixture into a valid archive; the only reason it surfaced was that the
+    tests asserting a refusal then failed. The emitter now excludes empty
+    members and asserts the cut falls strictly inside a member's data, and this
+    test pins the outcome rather than the mechanism.
+    """
+    full = gzip.decompress((fixture_dir / "lite.tar.gz").read_bytes())
+    cut = gzip.decompress((fixture_dir / "negative/corrupt-truncated.tar.gz").read_bytes())
+    assert len(cut) < len(full)
+
+    # The cut must not be a whole number of tar blocks, which is exactly what a
+    # boundary cut would produce and what a decoder would accept.
+    assert len(cut) % 512 != 0, (
+        "the truncated fixture ends on a tar block boundary, so it is a valid "
+        "archive rather than a truncated one"
+    )
+
+    # And every content member the fixture declares must be non-empty, or a
+    # later dataset could reintroduce the same trap.
+    with tarfile.open(fileobj=io.BytesIO(full)) as tar:
+        content = [m for m in tar.getmembers() if m.name.startswith("tables/")]
+    assert content, "the fixture carries no content members"
+    for member in content:
+        assert member.size > 0, (
+            f"{member.name} is empty; an empty last member disarms the truncated fixture"
+        )

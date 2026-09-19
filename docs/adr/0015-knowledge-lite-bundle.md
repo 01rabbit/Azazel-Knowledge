@@ -294,6 +294,39 @@ not exportable**: it has no expiry and no confidence yet, so it cannot carry
 D4 provenance however complete the policy looks. That is the intended outcome,
 not a limitation to work around.
 
+**Extended (2026-09-19) — the freshness window is declarable per dataset.**
+
+Exemption from the selection window already existed, but only as an accident of
+schema: `_freshness_fields` picks a table's timestamp column from a fixed
+candidate list, and a table with none of them is simply absent from the map and
+therefore exempt. That is why ATT&CK techniques are not expired on a 30-day
+clock — "expiring it on a 30-day clock would be wrong rather than
+conservative", as the builder already says.
+
+The gap was a table that *has* a candidate column whose meaning is not
+"observed here". CISA KEV's only timestamp is `date_added`, which records when
+an entry joined the catalogue. Windowing on it produces an artifact carrying
+the recent tail of the catalogue whose manifest looks complete, and a consumer
+then cannot distinguish **"this CVE is not in KEV"** from **"this CVE aged out
+of this bundle"**. It would answer the first when the truth was the second — a
+catalogue wrong by omission, which is worse than an absent one, because the
+absence would at least be visible.
+
+An export policy may therefore declare `freshness_exempt: true` on a dataset.
+This is an **extension of D4, not a reversal**: it changes nothing about what
+provenance a claim must carry, and an exempt dataset still covers all eight
+roles, including the `freshness` role that states what its timestamp means. It
+moves a judgement that was implicit in a schema into something declared and
+reviewable.
+
+The flag is part of `export_policy_digest`, because it changes which rows an
+artifact may carry: two policies differing only by it are not the same policy.
+It widens nothing else — the field allowlist and every D3 ceiling still apply.
+
+Use it only for the shape it was added for: a catalogue or reference set whose
+timestamp describes the *entry* rather than *observation on this node*. The
+shipped default policy uses it for exactly one dataset, `kev`.
+
 ### D5 — Export privacy defaults to deny
 
 Local-sensitive export is **denied by default**. An export policy names, per

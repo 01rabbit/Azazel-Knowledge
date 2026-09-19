@@ -51,7 +51,7 @@ _DENYLIST_SHAPED_KEYS: frozenset[str] = frozenset(
 
 _ALLOWED_MODES: frozenset[str] = frozenset({"allow", "alias"})
 _ALLOWED_FIELD_KEYS: frozenset[str] = frozenset({"name", "mode", "optional"})
-_ALLOWED_DATASET_KEYS: frozenset[str] = frozenset({"fields", "provenance"})
+_ALLOWED_DATASET_KEYS: frozenset[str] = frozenset({"fields", "provenance", "freshness_exempt"})
 _ALLOWED_PROVENANCE_KEYS: frozenset[str] = frozenset({"row", "dataset"})
 
 #: The provenance every exported claim must carry (ADR-0015 D4).
@@ -115,6 +115,24 @@ class DatasetPolicy:
     dataset: str
     fields: tuple[FieldRule, ...]
     provenance: DatasetProvenance
+    #: Whether the selection window must not be applied to this dataset.
+    #:
+    #: Exemption already existed, but only as an accident of schema: a table
+    #: with none of the candidate timestamp columns is absent from the
+    #: freshness map and is therefore exempt, which is why ATT&CK techniques
+    #: are not expired on a 30-day clock. A catalogue that *has* a timestamp
+    #: naming when an entry was added -- KEV's `date_added` -- is windowed on
+    #: it, and the result is an artifact that looks complete while carrying
+    #: only the recent tail. A consumer then cannot tell "not in the
+    #: catalogue" from "aged out of this bundle", which is worse than either.
+    #:
+    #: Declaring the exemption makes the judgement explicit and reviewable
+    #: instead of depending on whether a table happens to have a column. It
+    #: never widens what is exported: the field allowlist and every ceiling
+    #: still apply, and an exempt dataset still carries its full D4
+    #: provenance, including the freshness role that says what its timestamp
+    #: means.
+    freshness_exempt: bool = False
 
     def rule(self, name: str) -> FieldRule | None:
         for field in self.fields:
@@ -306,9 +324,18 @@ def parse_export_policy(document: Mapping[str, Any]) -> ExportPolicy:
         # never on the order it happened to be written in.
         ordered = tuple(sorted(rules, key=lambda rule: rule.name))
         provenance = _parse_provenance(raw_dataset.get("provenance"), ordered, where)
+        exempt = raw_dataset.get("freshness_exempt", False)
+        if not isinstance(exempt, bool):
+            raise LitePolicyError(
+                "LITE_POLICY_INVALID",
+                f"datasets.{dataset_name}.freshness_exempt must be a boolean when present",
+            )
         datasets[dataset_name] = DatasetPolicy(
-            dataset=dataset_name, fields=ordered, provenance=provenance
+            dataset=dataset_name, fields=ordered, provenance=provenance, freshness_exempt=exempt
         )
+        # `freshness_exempt` is part of the digest: it changes which rows an
+        # artifact may carry, so two policies that differ only by it are not
+        # the same policy and must not share an `export_policy_digest`.
         normalised[dataset_name] = {
             "fields": [
                 {"name": rule.name, "mode": rule.mode, "optional": rule.optional} for rule in ordered
@@ -317,6 +344,7 @@ def parse_export_policy(document: Mapping[str, Any]) -> ExportPolicy:
                 "row": dict(sorted(provenance.row.items())),
                 "dataset": dict(sorted(provenance.dataset.items())),
             },
+            "freshness_exempt": exempt,
         }
 
     digest = hashlib.sha256(

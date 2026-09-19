@@ -148,6 +148,15 @@ _FIXTURE_IOCS = (
 #: provenance says they do not expire on a clock. Their job in the fixture is
 #: to give a consumer a second dataset -- and, in `expired.tar.gz`, content
 #: that is still good while every indicator beside it has expired.
+#: Two catalogue entries, one recent and one from 2019. The old one is the
+#: point: `kev` is `freshness_exempt` in the default policy, so it must ship,
+#: and a consumer that received only the recent one is looking at a windowed
+#: catalogue that claims to be whole.
+_FIXTURE_KEV: tuple[tuple[str, str, str], ...] = (
+    ("CVE-2026-0001", "2026-09-10T00:00:00Z", "2026-10-01T00:00:00Z"),
+    ("CVE-2019-0708", "2019-05-14T00:00:00Z", "2019-06-04T00:00:00Z"),
+)
+
 _FIXTURE_TECHNIQUES = (
     ("T1046", "Network Service Discovery", ["discovery"]),
     ("T1110", "Brute Force", ["credential-access"]),
@@ -169,6 +178,19 @@ def _write_source_db(path: Path, *, expiry: str) -> None:
                 "agg_next_expiry, agg_computed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (kind, value, "2020-01-01T00:00:00Z", last_seen, float(FIXTURE_CONFIDENCE),
                  expiry, "2026-09-18T12:00:00Z"),
+            )
+        for cve_id, date_added, due_date in _FIXTURE_KEV:
+            # KEV is in the shipped default policy and is declared
+            # `freshness_exempt`, so the fixture carries an entry from well
+            # outside the freshness window on purpose: a consumer checking this
+            # artifact against `expected.json` is checking that the catalogue
+            # ships whole rather than windowed.
+            conn.execute(
+                "INSERT INTO kev (cve_id, catalog_version, date_added, due_date, "
+                "vendor_project, product, vulnerability_name, short_description, "
+                "required_action) VALUES (?, 'fixture-2026.09', ?, ?, 'ExampleCorp', "
+                "'ExampleProduct', 'Fixture vulnerability', 'fixture entry', 'not exported')",
+                (cve_id, date_added, due_date),
             )
         for technique_id, name, tactics in _FIXTURE_TECHNIQUES:
             conn.execute(
@@ -322,8 +344,23 @@ def _corrupt_truncated(tar_bytes: bytes) -> tuple[bytes, str]:
     therefore be holding fully verified content and must still promote none of
     it.
     """
-    name, offset, size = _member_span(tar_bytes, _is_content_member, last=True)
-    return tar_bytes[: offset + size // 2], name
+    name, offset, size = _member_span(
+        tar_bytes, lambda m: _is_content_member(m) and m.size > 0, last=True
+    )
+    # An *empty* member would make `offset + size // 2` land exactly on a block
+    # boundary, producing a shorter but perfectly well-formed archive that
+    # decodes without complaint -- a "truncated" fixture that is not truncated.
+    # That is not hypothetical: adding an empty dataset to the default policy
+    # silently turned this fixture into a valid archive once. The predicate
+    # above excludes empty members; the assertions below refuse to emit a
+    # fixture that does not actually cut into content.
+    cut = offset + size // 2
+    if not offset < cut < offset + size:
+        raise AssertionError(
+            f"truncation offset {cut} does not fall inside member {name!r} "
+            f"(data {offset}..{offset + size}); the fixture would not be truncated"
+        )
+    return tar_bytes[:cut], name
 
 
 def _sha256(path: Path) -> str:
@@ -374,8 +411,8 @@ def _write_negative_index(out_dir: Path, paths: dict[str, Path], truncated_membe
             "exists": True,
             "sha256": _sha256(paths["corrupt-truncated"]),
             "gate": "archive decode",
-            "expected_error_code": None,
-            "expected_exception": "tarfile.ReadError",
+            "expected_error_code": "BUNDLE_ARCHIVE_UNREADABLE",
+            "expected_exception": "BundleVerifyError",
             "verifies": False,
             "staging_written": True,
             "truncated_member": truncated_member,
