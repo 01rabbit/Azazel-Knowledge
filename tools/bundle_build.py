@@ -31,6 +31,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from nacl.signing import SigningKey  # noqa: E402
 
+from azazel_knowledge.bundle.lite_policy import load_export_policy  # noqa: E402
+from azazel_knowledge.bundle.lite_select import (  # noqa: E402
+    PROFILES,
+    SelectionInputs,
+    select_lite_content,
+)
 from azazel_knowledge.bundle.verify import (  # noqa: E402
     LOCAL_TIER_TABLES,
     MANIFEST_MEMBER,
@@ -117,6 +123,17 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sign_manifest(manifest_bytes: bytes, sign_keys: list[str]) -> bytes:
+    sig_lines = []
+    for key_path in sign_keys:
+        hex_key = Path(key_path).read_text(encoding="utf-8").strip()
+        signing_key = SigningKey(bytes.fromhex(hex_key))
+        key_id = signing_key.verify_key.encode().hex()[:8]
+        signature = signing_key.sign(manifest_bytes).signature.hex()
+        sig_lines.append(f"{key_id}:{signature}")
+    return ("\n".join(sig_lines) + "\n").encode("utf-8")
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     kind = args.kind or ("differential" if args.base is not None else "full")
     if kind == "differential" and args.base is None:
@@ -153,14 +170,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     }
     manifest_bytes = canonical_manifest_bytes(manifest)
 
-    sig_lines = []
-    for key_path in args.sign_key:
-        hex_key = Path(key_path).read_text(encoding="utf-8").strip()
-        signing_key = SigningKey(bytes.fromhex(hex_key))
-        key_id = signing_key.verify_key.encode().hex()[:8]
-        signature = signing_key.sign(manifest_bytes).signature.hex()
-        sig_lines.append(f"{key_id}:{signature}")
-    sig_bytes = ("\n".join(sig_lines) + "\n").encode("utf-8")
+    sig_bytes = _sign_manifest(manifest_bytes, args.sign_key)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +181,120 @@ def cmd_build(args: argparse.Namespace) -> int:
             _add_bytes(tar, name, content_bytes[name])
 
     print(f"wrote {out_path} (bundle_version={args.version}, kind={kind}, tables={len(table_names)})")
+    return 0
+
+
+def _freshness_fields(conn: sqlite3.Connection, tables: list[str]) -> dict[str, str]:
+    """Pick each table's freshness column from the fixed candidate list.
+
+    The candidate order is a constant, and a table with none of the candidates
+    is simply absent from the result, which makes it exempt from the freshness
+    window. Static reference material such as ATT&CK techniques has no
+    `last_seen`, and expiring it on a 30-day clock would be wrong rather than
+    conservative.
+    """
+    fields: dict[str, str] = {}
+    for table in tables:
+        columns = set(_table_columns(conn, table))
+        for candidate in _SINCE_CANDIDATE_COLUMNS:
+            if candidate in columns:
+                fields[table] = candidate
+                break
+    return fields
+
+
+def cmd_build_lite(args: argparse.Namespace) -> int:
+    """Build a signed Knowledge Lite bundle (ADR-0015).
+
+    A Lite bundle is an ordinary bundle with a selection profile applied and a
+    `profile` block in the manifest: same container, same member order, same
+    signature scheme, same trust sourcing. A verifier that handles a full
+    bundle handles this one unchanged.
+
+    The manifest deliberately carries **no** `created_at`. ADR-0015 D2 requires
+    the same selection tuple to produce a byte-identical unsigned artifact, and
+    a wall-clock stamp would break that for no gain: the build instant that
+    matters is the pinned `as_of`, which is recorded inside the profile block.
+    """
+    policy = load_export_policy(args.export_policy)
+    alias_key = bytes.fromhex(Path(args.alias_key_file).read_text(encoding="utf-8").strip())
+    if not alias_key:
+        raise SystemExit("--alias-key-file must contain a non-empty hex key")
+
+    inputs = SelectionInputs(
+        intel_generation=args.intel_generation,
+        stats_generation=args.stats_generation,
+        attack_version=args.attack_version,
+        config_hash=args.config_hash,
+        profile_id=args.profile,
+        export_policy_digest=policy.digest,
+        as_of=args.as_of,
+    )
+
+    # Read-only URI: the builder cannot write to the source database even by
+    # mistake, which is Absolute Constraint 5 enforced by the connection rather
+    # than by discipline.
+    conn = sqlite3.connect(f"file:{args.source_db}?mode=ro", uri=True)
+    try:
+        eligible = _eligible_tables(conn)
+        # The export policy decides which datasets a Lite bundle carries. A
+        # table the policy does not name is not "excluded" -- it was never
+        # included, which is the same deny-by-default rule that governs fields
+        # (ADR-0015 D5). Feeding every eligible table in and relying on the
+        # ceiling to trim would be truncation by another name.
+        named = sorted(set(policy.datasets) & set(eligible))
+        missing = sorted(set(policy.datasets) - set(eligible))
+        if missing:
+            raise SystemExit(
+                "export policy names dataset(s) that are not exportable intel tables in this "
+                f"database: {missing}"
+            )
+        rows_by_dataset = {table: _dump_table(conn, table, None) for table in named}
+        freshness_fields = _freshness_fields(conn, named)
+    finally:
+        conn.close()
+
+    selection = select_lite_content(
+        rows_by_dataset,
+        inputs=inputs,
+        policy=policy,
+        alias_key=alias_key,
+        scope=args.alias_scope,
+        freshness_fields=freshness_fields,
+    )
+
+    content_bytes = {
+        f"tables/{dataset}.jsonl": data for dataset, data in selection.content_bytes().items()
+    }
+    files = {name: hashlib.sha256(data).hexdigest() for name, data in content_bytes.items()}
+
+    manifest = {
+        "bundle_version": args.version,
+        "base_version": None,
+        "kind": "full",
+        "compression": "gzip",
+        "attack_version": args.attack_version,
+        "feeds": [],
+        "files": files,
+        "tables": sorted(selection.datasets),
+        "profile": selection.profile_block,
+    }
+    manifest_bytes = canonical_manifest_bytes(manifest)
+    sig_bytes = _sign_manifest(manifest_bytes, args.sign_key)
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(out_path, mode="w:gz") as tar:
+        _add_bytes(tar, MANIFEST_MEMBER, manifest_bytes)
+        _add_bytes(tar, SIGNATURE_MEMBER, sig_bytes)
+        for name in sorted(content_bytes):
+            _add_bytes(tar, name, content_bytes[name])
+
+    counts = selection.profile_block["counts"]
+    print(
+        f"wrote {out_path} (profile={args.profile}, datasets={counts['datasets']}, "
+        f"rows={counts['rows']}, uncompressed_bytes={counts['uncompressed_bytes']})"
+    )
     return 0
 
 
@@ -195,6 +319,22 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--feeds", nargs="*", default=None)
     build.add_argument("--sign-key", action="append", required=True, dest="sign_key")
     build.set_defaults(func=cmd_build)
+
+    lite = sub.add_parser("build-lite", help="build and sign a bounded Knowledge Lite bundle (ADR-0015)")
+    lite.add_argument("--source-db", required=True)
+    lite.add_argument("--out", required=True)
+    lite.add_argument("--version", type=int, required=True, dest="version")
+    lite.add_argument("--profile", required=True, choices=sorted(PROFILES))
+    lite.add_argument("--export-policy", required=True, help="path to the YAML export policy")
+    lite.add_argument("--alias-key-file", required=True, help="file holding the hex alias key")
+    lite.add_argument("--alias-scope", required=True, help="mission or request scope for aliases")
+    lite.add_argument("--as-of", required=True, help="RFC 3339 instant the selection is pinned to")
+    lite.add_argument("--intel-generation", type=int, required=True)
+    lite.add_argument("--stats-generation", type=int, required=True)
+    lite.add_argument("--attack-version", required=True)
+    lite.add_argument("--config-hash", required=True)
+    lite.add_argument("--sign-key", action="append", required=True, dest="sign_key")
+    lite.set_defaults(func=cmd_build_lite)
 
     inspect = sub.add_parser("inspect", help="print a bundle's manifest without verifying trust")
     inspect.add_argument("bundle")
