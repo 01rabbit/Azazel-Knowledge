@@ -42,12 +42,29 @@ services:
       - ../data:/app/data:ro
       - ../var:/app/var
       - ../secrets:/app/secrets:ro
+    # Liveness, not readiness. `/v1/health` requires Scope.READ, so an
+    # unauthenticated probe gets 401 — which still proves gunicorn is up, the
+    # ASGI app loaded, the router is mounted and the auth layer ran. Treating
+    # 401 as live is deliberate: the alternative is baking a bearer token into
+    # the deployment for a liveness check, and `/v1/health` reports generation,
+    # cache state and audit-writer status, which is not for an unauthenticated
+    # caller on a published port. Readiness (warm cache, audit writer healthy)
+    # is an authenticated call and belongs to monitoring, not to this probe.
+    # Before this accepted 401, a working container was marked unhealthy
+    # forever (#10).
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8443/v1/health', timeout=3).status == 200 else 1)"
+        - |-
+          import sys, urllib.error, urllib.request as u
+          try:
+              sys.exit(0 if u.urlopen('http://127.0.0.1:8443/v1/health', timeout=3).status == 200 else 1)
+          except urllib.error.HTTPError as exc:
+              sys.exit(0 if exc.code == 401 else 1)
+          except Exception:
+              sys.exit(1)
       interval: 30s
       timeout: 5s
       retries: 3
