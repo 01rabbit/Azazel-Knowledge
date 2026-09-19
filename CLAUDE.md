@@ -107,7 +107,7 @@ Codex は別ツール(OpenAI)であり、あなたのネイティブなサブエ
 
 - `main` へ直接コミットしない。1タスク1ブランチ。PR は**ドラフトで作成**。
 - コミットメッセージは日本語可、簡潔に「何を・なぜ」。設計改訂を含む場合は §番号を引く。
-- テスト956本(基準線)を1本でも壊した状態でコミットしない。
+- テスト961本(基準線)を1本でも壊した状態でコミットしない。
 - プッシュ失敗はネットワーク要因のみ指数バックオフで最大4回再試行。
 
 ---
@@ -116,7 +116,7 @@ Codex は別ツール(OpenAI)であり、あなたのネイティブなサブエ
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/unit -q            # 基準線 956 passed。減らさない
+python -m pytest tests/unit -q            # 基準線 961 passed。減らさない
 python azctl check-config --config-dir config   # メモリ算術 OK を確認
 ```
 
@@ -133,7 +133,7 @@ python azctl check-config --config-dir config   # メモリ算術 OK を確認
   scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii
 - `worker.py`(単一ライタ・P0〜P3 スケジューラ) / `azctl`(運用CLI)
 - `tools/`(bundle_build / ttl_sweep / export_research_dataset) / `ops/`(compose・nftables・Pi4 profile)
-- `tests/unit/`(956)/ `docs/`(設計・ADR・operations)
+- `tests/unit/`(961)/ `docs/`(設計・ADR・operations)
 
 ### 現在の残タスク(`docs/development-guide.md` §4 が唯一の正)
 

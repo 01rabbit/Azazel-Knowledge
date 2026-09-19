@@ -104,6 +104,10 @@ SIGNING_SEED_HEX = "11" * 32
 #: pass on an empty dataset.
 FRESH = "2026-09-18T00:00:00Z"
 
+#: Far outside the 30-day window of `AS_OF`. Exactly one `ioc` row carries this,
+#: so a build that stopped applying the window would show up as a fourth row.
+STALE = "2025-01-01T00:00:00Z"
+
 #: What the default policy must export, per dataset. Written out rather than
 #: read back from the policy so that a field silently added to the policy shows
 #: up here as a failure instead of being mirrored into the expectation.
@@ -155,6 +159,18 @@ def _write_source_db(path: Path, scratch: Path) -> None:
                  "2027-01-01T00:00:00Z", "2026-09-18T12:00:00Z"),
             )
 
+        # Outside the 30-day window. `ioc` is NOT freshness-exempt, so this row
+        # must be dropped -- and it is what makes
+        # `test_a_windowed_dataset_still_drops_rows_outside_the_window` able to
+        # fail. Without it the control asserts a row count that does not move
+        # whether the window is applied or not.
+        conn.execute(
+            "INSERT INTO ioc (type, value, first_seen, last_seen, tags, agg_raw_confidence, "
+            "agg_next_expiry, agg_computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("ip", "198.51.100.77", "2025-01-01T00:00:00Z", STALE, "[]", 60.0,
+             "2027-01-01T00:00:00Z", "2025-01-01T12:00:00Z"),
+        )
+
         for technique_id, name, tactics in (
             ("T1046", "Network Service Discovery", json.dumps(["discovery"])),
             ("T1110", "Brute Force", json.dumps(["credential-access"])),
@@ -183,6 +199,13 @@ def _write_source_db(path: Path, scratch: Path) -> None:
             "INSERT INTO kev (cve_id, catalog_version, date_added, short_description) "
             "VALUES ('CVE-2026-0001', '2026.09.18', ?, ?)",
             (FRESH, f"observed payload: {CANARY_EVIDENCE}"),
+        )
+        # A catalogue entry added long before the freshness window. It must
+        # still ship: KEV is declared `freshness_exempt`, and an old listing is
+        # exactly as true as a new one.
+        conn.execute(
+            "INSERT INTO kev (cve_id, catalog_version, date_added, short_description) "
+            "VALUES ('CVE-2019-0708', '2026.09.18', '2019-05-14T00:00:00Z', 'BlueKeep')"
         )
         conn.execute(
             "INSERT INTO sigma_rule_corpus (rule_uid, title, raw_yaml, license, source_url, "
@@ -310,7 +333,7 @@ def test_the_repository_ships_a_default_export_policy():
     assert DEFAULT_POLICY_PATH.is_file()
     policy = load_export_policy(DEFAULT_POLICY_PATH)
     assert policy.version == "lite-export-default-v1"
-    assert set(policy.datasets) == {"ioc", "attack_technique"}
+    assert set(policy.datasets) == {"ioc", "attack_technique", "kev"}
 
 
 def test_default_policy_covers_every_provenance_role_exactly_once():
@@ -356,9 +379,8 @@ def test_default_artifact_carries_the_data_it_should(canary_artifact):
     key set of every exported row.
     """
     manifest = canary_artifact["manifest"]
-    assert manifest["tables"] == ["attack_technique", "ioc"]
-    assert manifest["profile"]["counts"]["rows"] == 5
-    assert manifest["profile"]["counts"]["datasets"] == 2
+    assert manifest["tables"] == ["attack_technique", "ioc", "kev"]
+    assert manifest["profile"]["counts"]["datasets"] == 3
 
     ioc_rows = [json.loads(line) for line in _member(canary_artifact, "tables/ioc.jsonl").splitlines()]
     assert len(ioc_rows) == 3
@@ -379,21 +401,22 @@ def test_default_artifact_carries_the_data_it_should(canary_artifact):
 def test_default_artifact_omits_every_eligible_dataset_the_policy_does_not_name(canary_artifact):
     """Deny by default at dataset level, proved on a database that holds those rows.
 
-    `feed_state`, `kev` and `sigma_rule_corpus` are intel-tier, eligible, and
+    `feed_state` and `sigma_rule_corpus` are intel-tier, eligible, and
     populated in the source database. They are absent because they were never
-    included, not because anything excluded them.
+    included, not because anything excluded them. (`kev` was moved out of this
+    list when it joined the default policy; its own coverage is below.)
     """
     source_db = canary_artifact["source_db"]
     conn = sqlite3.connect(f"file:{source_db}?mode=ro", uri=True)
     try:
-        for table in ("feed_state", "kev", "sigma_rule_corpus"):
+        for table in ("feed_state", "sigma_rule_corpus"):
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             assert count > 0, f"{table} is empty, so its exclusion proves nothing"
     finally:
         conn.close()
 
     manifest = canary_artifact["manifest"]
-    for table in ("feed_state", "kev", "sigma_rule_corpus", "ioc_source", "ioc_cidr"):
+    for table in ("feed_state", "sigma_rule_corpus", "ioc_source", "ioc_cidr"):
         assert table not in manifest["tables"]
         assert f"tables/{table}.jsonl" not in manifest["files"]
 
@@ -488,3 +511,64 @@ def test_no_seeded_canary_survives_into_the_default_artifact(canary_artifact):
     """
     leaked = [c for c in ALL_CANARIES if c.encode("utf-8") in canary_artifact["plain"]]
     assert leaked == [], f"canaries reached the artifact: {leaked}"
+
+
+def test_the_kev_catalogue_ships_whole_rather_than_windowed(canary_artifact):
+    """KEV is declared `freshness_exempt`, and this is what that buys.
+
+    `kev`'s only timestamp is `date_added`, which names when an entry joined
+    the catalogue -- not when anything was observed here. `_freshness_fields`
+    would otherwise pick it, and the default artifact would carry only the last
+    30 days of the catalogue while its manifest looked complete. A consumer
+    could then not tell **"this CVE is not in KEV"** from **"this CVE aged out
+    of this bundle"**, and would answer the first when the truth was the
+    second.
+
+    The source database holds one entry inside the window and one from 2019.
+    Both must be present. The 2019 row is the whole assertion: it is the row a
+    windowed dataset would have dropped.
+    """
+    rows = [
+        json.loads(line)
+        for line in _member(canary_artifact, "tables/kev.jsonl").splitlines()
+    ]
+    ids = {row["cve_id"] for row in rows}
+    assert ids == {"CVE-2026-0001", "CVE-2019-0708"}, (
+        "an entry added outside the freshness window was dropped, which is the "
+        "defect `freshness_exempt` exists to prevent"
+    )
+    for row in rows:
+        assert set(row) == {"cve_id", "catalog_version", "date_added", "due_date"}
+        assert "short_description" not in row, "prose columns are not exported"
+        assert "required_action" not in row, "Knowledge advises; it does not instruct"
+
+
+def test_a_windowed_dataset_still_drops_rows_outside_the_window(canary_artifact):
+    """The control for the test above: exemption is per dataset, not global.
+
+    If `freshness_exempt` leaked into the shared selection path, `ioc` would
+    stop being windowed too and the KEV assertion would pass for the wrong
+    reason. `ioc` carries a row aged out of the window in the same build; it
+    must still be absent.
+    """
+    ioc_rows = [
+        json.loads(line)
+        for line in _member(canary_artifact, "tables/ioc.jsonl").splitlines()
+    ]
+    values = {row["value"] for row in ioc_rows}
+    assert len(ioc_rows) == 3, (
+        f"expected the stale ioc row to be dropped, got {len(ioc_rows)} rows; the "
+        "freshness window is no longer applied to datasets that did not ask to be exempt"
+    )
+    # The aliased pseudonym of the stale indicator, computed independently, so
+    # the assertion names the row that must be missing rather than a count.
+    assert (
+        alias_value(
+            "198.51.100.77",
+            alias_key=bytes.fromhex(ALIAS_KEY_HEX),
+            scope=ALIAS_SCOPE,
+            dataset="ioc",
+            field="value",
+        )
+        not in values
+    )

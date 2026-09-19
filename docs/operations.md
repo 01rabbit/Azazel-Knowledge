@@ -211,6 +211,46 @@ Contract and rationale: [ADR-0015](adr/0015-knowledge-lite-bundle.md)
 policy, signer-role/security-epoch gates, ownership boundary) and
 [ADR-0017](adr/0017-lite-is-full-only.md) (full-only, no Lite deltas).
 
+#### When a Lite build aborts on one row
+
+`LITE_PROVENANCE_MISSING` names a single row and stops the whole build. That is
+ADR-0015 D4 working as decided, not a bug to route around: every exported claim
+must carry its provenance, and a row that has not been through aggregation
+carries no expiry and no confidence. Exporting it anyway would ship a claim
+with nothing behind it, and D4 calls that outcome "the intended one, not a
+limitation to work around".
+
+It is operationally sharp all the same — **one un-aggregated indicator stops
+the artifact** — so it is worth recognising quickly:
+
+```sh
+# Which rows are not aggregated yet? (agg_next_expiry is the usual one.)
+sqlite3 intel.db \
+  "SELECT COUNT(*) FROM ioc WHERE agg_next_expiry IS NULL OR agg_raw_confidence IS NULL;"
+```
+
+The fix is to let aggregation finish, not to relax the policy. A row appears
+here because the worker has not reached it yet, or because aggregation failed
+for it; both are worth knowing about on their own terms. Removing the field
+from the export policy would make the build succeed and the artifact weaker,
+which is the trade D4 exists to refuse.
+
+#### Datasets exempt from the freshness window
+
+A dataset may declare `freshness_exempt: true` in the export policy. The
+shipped default uses it for exactly one dataset, `kev`, and the reason
+generalises: KEV's only timestamp is `date_added`, which records when an entry
+joined the catalogue rather than when anything was last seen here. Windowing on
+it would ship the recent tail of the catalogue in an artifact whose manifest
+looks complete, and a consumer could not tell **"not in KEV"** from **"aged out
+of this bundle"**.
+
+Use it only for that shape — a catalogue or reference set whose timestamp is
+about the *entry*, not about *observation here*. It never widens what is
+exported: the field allowlist and every capacity ceiling still apply, and the
+dataset still carries its full D4 provenance. Adding or removing it changes
+`export_policy_digest`, so an artifact always states which rules produced it.
+
 ## 3. Connect an Edge
 
 Mint a scoped token for the Edge node (`ingest+query`, never `admin` --

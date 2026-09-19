@@ -185,3 +185,53 @@ datasets:
       #   parent_technique_id  derivable from technique_id (T1059.001 is a
       #                      sub-technique of T1059); exporting them spends
       #                      bytes to restate the key.
+
+  # -------------------------------------------------------------------------
+  # kev -- CISA Known Exploited Vulnerabilities
+  #
+  # Public, small, and directly useful to a field node: it answers "is this CVE
+  # known to be exploited in the wild", which changes what an operator does.
+  # Nothing in it is local to this deployment.
+  #
+  # `freshness_exempt: true` is the load-bearing line. KEV's only timestamp is
+  # `date_added`, which names when an entry joined the catalogue -- not when
+  # anything was last observed here. Windowing on it would ship the last 30
+  # days of the catalogue in an artifact that looks complete, and a consumer
+  # could not tell "not in KEV" from "aged out of this bundle". A catalogue
+  # that is wrong by omission is worse than one that is absent, because the
+  # absence is at least visible. The whole catalogue ships, or none of it.
+  #
+  # The exemption does not widen anything: the field allowlist below and every
+  # capacity ceiling still apply, and the D4 provenance still states what the
+  # dataset's freshness actually means.
+  kev:
+    freshness_exempt: true
+    provenance:
+      row:
+        freshness: date_added
+      dataset:
+        citation: "CISA Known Exploited Vulnerabilities catalogue, as ingested into azazel-knowledge intel.kev"
+        source: "CISA KEV, pinned to the catalog_version carried on each row"
+        generation: "carried by the intel_generation of the artifact; the catalogue is replaced wholesale, never patched"
+        expiry: "entries are not withdrawn on a clock; a row is superseded when this node ingests a later catalog_version"
+        decay: "a KEV listing does not decay: an exploited vulnerability does not become less exploited with time"
+        confidence_ceiling: "a catalogue membership statement, not a scored claim; presence is binary and carries no confidence"
+        limitations: "says a CVE is known-exploited somewhere, not that it is present or exploitable here (ADR-0015 D7)"
+    fields:
+      - name: cve_id
+      - name: catalog_version
+      - name: date_added
+      - name: due_date
+      #
+      # Left out on purpose:
+      #   vendor_project,
+      #   product,
+      #   vulnerability_name,
+      #   short_description   human-facing prose. A consumer that needs them can
+      #                       resolve the CVE; shipping them spends most of the
+      #                       dataset's bytes to restate what cve_id already
+      #                       identifies.
+      #   required_action     a remediation instruction. Knowledge advises and
+      #                       never instructs; carrying an action string into a
+      #                       field node's cache is the wrong shape for an
+      #                       advisory artifact (ADR-0015 D7).

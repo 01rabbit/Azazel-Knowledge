@@ -258,7 +258,23 @@ def cmd_build_lite(args: argparse.Namespace) -> int:
                 f"database: {missing}"
             )
         rows_by_dataset = {table: _dump_table(conn, table, None) for table in named}
-        freshness_fields = _freshness_fields(conn, named)
+        # A dataset the policy declares exempt is withheld from the freshness
+        # map, which is the same mechanism that already exempts a table with no
+        # candidate timestamp column (see `_freshness_fields`). The difference
+        # is that the judgement is now declared and reviewable rather than an
+        # accident of whether a schema happens to carry a column.
+        #
+        # KEV is the case this exists for: its only timestamp is `date_added`,
+        # naming when an entry joined the catalogue, so windowing on it yields
+        # an artifact that looks complete while carrying only the recent tail.
+        # A consumer cannot then distinguish "not in the catalogue" from "aged
+        # out of this bundle".
+        exempt = {name for name, ds in policy.datasets.items() if ds.freshness_exempt}
+        freshness_fields = {
+            table: column
+            for table, column in _freshness_fields(conn, named).items()
+            if table not in exempt
+        }
     finally:
         conn.close()
 

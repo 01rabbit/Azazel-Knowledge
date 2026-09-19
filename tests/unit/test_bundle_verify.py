@@ -1760,3 +1760,78 @@ def test_the_two_member_shape_caps_are_independent(bundle_env, tmp_path):
     with pytest.raises(BundleVerifyError) as exc:
         verify_bundle(forged, bundle_env["anchors_path"], bundle_env["state_path"], tmp_path / "s2")
     assert exc.value.code == "BUNDLE_MEMBER_NAME_TOO_LONG"
+
+
+# --- F-1 covers both halves of the manifest ---------------------------------
+
+
+def test_a_local_tier_table_declared_only_in_files_is_refused(bundle_env, tmp_path):
+    """`manifest.files` was outside the F-1 abort; `manifest.tables` alone was checked.
+
+    Nothing tied the two halves together, so a manifest could omit `reaction`
+    from `tables` -- clearing the local-tier check -- while declaring
+    `tables/reaction.jsonl` in `files`. Local-tier-named content was then
+    written to staging and handed back in `file_paths`.
+
+    Absolute Constraint 5 still held, because `import_full` iterates
+    `manifest["tables"]` and never inserted the rows. What did not hold was the
+    promise this module makes in its own docstring: that a manifest naming a
+    local-tier table aborts *before a single content byte is written to disk*.
+    Local-tier-named bytes were written.
+    """
+    local_member = "tables/reaction.jsonl"
+    payload = b'{"reaction_id":1,"edge_id":"edge-1"}\n'
+
+    members = _read_all_members(bundle_env["bundle_path"])
+    manifest = _decode_manifest(members)
+    assert "reaction" not in manifest.get("tables", []), (
+        "the premise is that `tables` stays clean; if it already names reaction "
+        "the old check would have caught this and the test proves nothing"
+    )
+    manifest["files"][local_member] = hashlib.sha256(payload).hexdigest()
+    forged = _resign(bundle_env, tmp_path, members, manifest)
+
+    body = _read_all_members(forged)
+    with tarfile.open(forged, "w:gz") as tar:
+        for info, data in body:
+            ni = tarfile.TarInfo(name=info.name)
+            ni.size = len(data) if data is not None else 0
+            tar.addfile(ni, io.BytesIO(data) if data is not None else None)
+        ni = tarfile.TarInfo(name=local_member)
+        ni.size = len(payload)
+        tar.addfile(ni, io.BytesIO(payload))
+
+    staging = tmp_path / "staging-local-files"
+    with pytest.raises(BundleVerifyError) as exc:
+        verify_bundle(forged, bundle_env["anchors_path"], bundle_env["state_path"], staging)
+    assert exc.value.code == "BUNDLE_TOUCHES_LOCAL_TIER"
+    assert "reaction" in str(exc.value)
+    assert not staging.exists() or list(staging.rglob("*")) == [], (
+        "the abort must happen before any content byte reaches disk"
+    )
+
+
+def test_a_member_name_that_is_not_a_table_contributes_no_table_name(bundle_env, tmp_path):
+    """The recogniser must not invent table names from arbitrary members.
+
+    If `_table_of_member` parsed loosely, a member like `tables/sub/dir.jsonl`
+    or `notes.txt` could be read as a table and refused for the wrong reason --
+    or, worse, a local-tier name could be hidden from it by a shape it does not
+    recognise. Pinning both directions keeps the F-1 check honest about what it
+    can see.
+    """
+    from azazel_knowledge.bundle.verify import _table_of_member
+
+    assert _table_of_member("tables/ioc.jsonl") == "ioc"
+    assert _table_of_member("deltas/ioc.jsonl") == "ioc"
+    assert _table_of_member("tables/reaction.jsonl") == "reaction"
+    for not_a_table in (
+        "manifest.json",
+        "manifest.sig",
+        "notes.txt",
+        "tables/sub/dir.jsonl",
+        "tables/.jsonl",
+        "tables/ioc.json",
+        "othertables/ioc.jsonl",
+    ):
+        assert _table_of_member(not_a_table) is None, not_a_table
