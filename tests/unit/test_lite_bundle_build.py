@@ -342,3 +342,40 @@ def test_manifest_declares_its_security_epoch(lite_env, tmp_path):
     out = tmp_path / "lite.tar.gz"
     _build_lite(lite_env, out)
     assert peek_manifest(out)["security_epoch"] == 3
+
+
+def test_build_lite_is_structurally_full_only(lite_env, tmp_path):
+    """ADR-0017: a Lite artifact is always `kind: full`.
+
+    Pinned as a property rather than left to the absence of a flag: a later
+    change that added `--base` to `build-lite` would silently reintroduce the
+    base-chain this ADR declines, and nothing else would notice.
+    """
+    out = tmp_path / "lite.tar.gz"
+    _build_lite(lite_env, out)
+    manifest = peek_manifest(out)
+    assert manifest["kind"] == "full"
+    assert manifest["base_version"] is None
+
+    # A complete, otherwise-valid invocation plus the extra flag. Supplying only
+    # the flag would fail on the *missing required arguments* instead -- argparse
+    # reports those first and never reaches "unrecognized arguments" -- so the
+    # test would pass whether or not the flag was accepted.
+    for rejected in ("--base", "--kind", "--since"):
+        result = _build_lite(
+            lite_env, tmp_path / f"x{rejected}.tar.gz", **{rejected: "1", "_expect_success": False}
+        )
+        assert result.returncode != 0, f"build-lite unexpectedly accepted {rejected}"
+        assert "unrecognized arguments" in result.stderr and rejected in result.stderr, (
+            f"build-lite accepted {rejected} as a known flag; stderr was:\n{result.stderr}"
+        )
+
+
+def test_lite_bundle_contains_no_delta_members(lite_env, tmp_path):
+    """Content lives under `tables/`; a `deltas/` member would mean a delta slipped in."""
+    out = tmp_path / "lite.tar.gz"
+    _build_lite(lite_env, out)
+    with tarfile.open(out, "r:gz") as tar:
+        names = [i.name for i in tar.getmembers()]
+    assert not any(n.startswith("deltas/") for n in names), names
+    assert any(n.startswith("tables/") for n in names), names
