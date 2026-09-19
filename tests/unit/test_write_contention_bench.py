@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -73,9 +74,14 @@ def test_a_batch_the_worker_never_committed_is_counted_not_imputed():
 
 
 def test_a_commit_before_its_accept_is_refused_not_reported():
-    """A negative wait means the instrumentation is wrong. Reporting it as a
-    very fast commit would turn an instrumentation bug into evidence."""
-    with pytest.raises(ValueError, match="committed before it was accepted"):
+    """A commit before the accept *began* is impossible, so it means the
+    instrumentation is wrong. Reporting it as a very fast commit would turn an
+    instrumentation bug into evidence.
+
+    A commit before the accept *returned* is a different thing entirely: the
+    drainer can see a batch while `write_batch` is still running, so that
+    ordering is real and is not an error. Only the impossible one raises."""
+    with pytest.raises(ValueError, match="committed before its accept began"):
         wc.spool_to_commit_latencies([_accept("b1", 1, 2.0)], {"b1": 1.0})
 
 
@@ -289,11 +295,14 @@ def test_a_sweep_config_measures_the_real_spool_to_worker_round_trip(tmp_path: P
 
 def test_accept_cost_population_is_settled_backlog_not_a_pending_queue(tmp_path: Path):
     """`write_batch`'s quota scan reads every batch file in the endpoint
-    directory, and P3 leaves drained batches there for a week. The cost that
-    matters is therefore the one a *healthy* node pays, so the population the
-    harness builds must be fully drained -- a pending backlog would be a node
-    already in trouble and a different measurement."""
-    from azazel_knowledge.ingest.spool import SpoolWriter
+    directory. The cost that matters is the one a *healthy* node pays, so the
+    population the harness builds must be fully drained -- a pending backlog
+    would be a node already in trouble and a different measurement.
+
+    Since the drained-directory change, a settled backlog no longer sits in the
+    endpoint directory at all, which is the whole point: the harness must still
+    build a real one, and the accept scan must no longer see it."""
+    from azazel_knowledge.ingest.spool import DRAINED_DIRNAME, SpoolWriter
 
     spool = SpoolWriter(tmp_path / "ingest")
     wc.populate_drained_spool(
@@ -301,11 +310,16 @@ def test_accept_cost_population_is_settled_backlog_not_a_pending_queue(tmp_path:
     )
 
     endpoint_dir = tmp_path / "ingest" / "events"
+    drained_dir = endpoint_dir / DRAINED_DIRNAME
     assert spool.pending_batches("events") == []
-    assert len(list(endpoint_dir.glob("*.jsonl"))) == 5
-    # The scan attributes a batch to a client through its `.client` sidecar;
-    # without one every batch is skipped and the accept looks free.
-    assert sorted(p.read_text() for p in endpoint_dir.glob("*.client")) == [
+    # The backlog is real: five drained batches exist...
+    assert len(list(drained_dir.glob("*.jsonl"))) == 5
+    # ...and none of them is in the directory an accept scans.
+    assert list(endpoint_dir.glob("*.jsonl")) == []
+    # The scan attributes a batch to a client through its `.client` sidecar,
+    # which travels with the batch; without one a pending batch would be
+    # skipped and the accept would look free.
+    assert sorted(p.read_text() for p in drained_dir.glob("*.client")) == [
         "bench-edge-0000"
     ] * 5
 
@@ -324,3 +338,53 @@ def test_queue_growth_is_fitted_over_the_offered_load_not_the_drain_tail():
     assert wc.depth_slope_records_per_s(during) == pytest.approx(1000.0)
     # A window that selects nothing must not be reported as a flat queue.
     assert wc.samples_during_load(samples, offer_window_s=-1.0) == list(samples)
+
+
+def test_accept_instant_precedes_the_batch_becoming_drainable(tmp_path: Path):
+    """A batch is drainable before `write_batch` returns, so the accept instant
+    must be taken before the call, not after it.
+
+    `SpoolWriter.write_batch` writes the payload, then the `.client` sidecar,
+    then returns; the drainer's scan picks the batch up as soon as the payload
+    lands. Timestamping the accept at the return instant therefore lets a fast
+    drain stamp a commit *earlier* than the accept, which the latency guard
+    correctly refuses to average -- so the harness aborted the whole run.
+    That ordering is real, not an instrumentation error; what was wrong was
+    measuring from the return.
+
+    Reproduced at ~13% of runs before the fix, so this asserts the ordering
+    directly rather than by repetition.
+    """
+    from azazel_knowledge.ingest.spool import SpoolWriter
+
+    visible_at: dict[str, float] = {}
+
+    class _VisibilityRecordingSpool(SpoolWriter):
+        """Stamps the instant each batch's payload becomes drainable."""
+
+        def write_batch(self, endpoint, client_key_id, raw_lines):
+            batch_id = super().write_batch(endpoint, client_key_id, raw_lines)
+            # The payload is on disk by now; a drain cycle racing this call
+            # could already have committed it. Recording after the call is an
+            # upper bound on when it became visible, which is all the
+            # assertion below needs.
+            visible_at[batch_id] = time.perf_counter()
+            return batch_id
+
+    spool = _VisibilityRecordingSpool(tmp_path / "ingest")
+    accepts = [
+        wc.accept_one_batch(
+            spool, "events", "edge-1", [json.dumps({"n": n}) for n in range(2)]
+        )
+        for _ in range(5)
+    ]
+
+    assert len(accepts) == 5
+    for accept in accepts:
+        assert accept.accepted_s <= visible_at[accept.batch_id], (
+            f"batch {accept.batch_id} was drainable at "
+            f"{visible_at[accept.batch_id]} but its accept instant is "
+            f"{accept.accepted_s}; a commit in between would read as a "
+            f"negative wait"
+        )
+        assert accept.accept_ms >= 0.0
