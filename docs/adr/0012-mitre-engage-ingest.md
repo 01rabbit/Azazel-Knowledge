@@ -1,6 +1,33 @@
-# ADR-0012: MITRE Engage ingest (design spike)
+# ADR-0012: MITRE Engage ingest
 
-Status: proposed (design spike — Azazel-Knowledge#60)
+Status: **accepted — implemented** (spike proposed 2026-08; shipped and
+verified against the code 2026-09-19 — Azazel-Knowledge#60)
+
+## Implementation status (verified 2026-09-19)
+
+This spike is no longer a proposal: the ingest, the schema, and the
+`/v1/context` usage seam it deliberately deferred have all shipped. Recorded
+here so a reader does not have to infer it from the absence of a later ADR.
+
+| What the spike fixed | Where it lives now |
+|---|---|
+| Adapter (`full_replace`, `parse`/`validate`/`apply_batch` in the `attack.py` shape) | `src/azazel_knowledge/feeds/adapters/engage.py` (`EngageAdapter`) |
+| Schema: `engage_activity`, `engage_attack_map`, `feed_state.license` | `src/azazel_knowledge/db/migrations/intel/0002_engage.sql` |
+| Feed configuration (`kind`, `group`, `pin_spki_sha256`) | `config/feeds.yaml`, `engage:` block |
+| The deferred usage seam — `engage_refs` on `POST /v1/context` | `correlate/engage_rule_refs.py` (`lookup_engage_refs`), `api/models.py` (`EngageRef`), `api/routers/context.py`; contract in [`docs/api.md`](../api.md) §`engage_refs` / `rule_refs` |
+| Tests | `tests/unit/test_adapter_engage.py`, `tests/unit/test_context_engage_rule_refs.py` |
+
+The usage seam was shipped in a separate PR from the ingest, exactly as
+"Alternatives considered" required, and it resolved the open question this ADR
+left in its Non-goals: `engage_refs` is an always-present, possibly-empty,
+top-level array, match-gated on the advisory's own `attack_mapping`, computed
+after scoring, outside the 7-element replay tuple and the `content_hash`.
+`docs/api.md` is the binding statement of that shape; this ADR does not restate
+it.
+
+The constraints held: `pyproject.toml` gained no dependency, `config/scoring.yaml`
+has no `engage` weight, and `tests/unit/test_api_static.py`'s write-SQL scan
+still passes — Engage reaches the query path read-only.
 
 ## Context
 
@@ -15,7 +42,7 @@ leg: given a technique the node has already attributed to an event (via
 `attack_mapping` in `/v1/context`), which Engage activities exist for
 *countering* that technique — as reference material, not as a directive.
 
-This is a **design spike**: it fixes the shape (schema, adapter contract,
+This began as a **design spike**: it fixed the shape (schema, adapter contract,
 determinism boundary, dependency stance) before implementation splits into
 separate PRs, per the discipline used for the EPSS as-of-pin spike
 (Azazel-Knowledge#55) and mirroring ADR-0011's format. The exact
@@ -226,33 +253,36 @@ frozen `QUERY_PATH_FILES` set completely untouched by this feature landing.
 
 ## Acceptance criteria
 
-- [ ] `feeds/adapters/engage.py` exists, `full_replace = True`, subclassing
+- [x] `feeds/adapters/engage.py` exists, `full_replace = True`, subclassing
       `FeedAdapter`; `parse`/`validate`/`apply_batch` follow the
       `attack.py`/`kev.py` shape exactly (no bespoke writer path).
-- [ ] `db/migrations/intel/000N_engage.sql` creates `engage_activity` and
+- [x] `db/migrations/intel/000N_engage.sql` creates `engage_activity` and
       `engage_attack_map` as specified and adds `feed_state.license`, applied
       in the same migration.
-- [ ] `config/feeds.yaml` gains an `engage:` block (`kind`, `group`,
+- [x] `config/feeds.yaml` gains an `engage:` block (`kind`, `group`,
       `pin_spki_sha256`) matching the shape of `attack:`/`cisa_kev:`.
-- [ ] `apply_batch` performs `DELETE`+`INSERT` for both tables inside one
+- [x] `apply_batch` performs `DELETE`+`INSERT` for both tables inside one
       `intel_writer` transaction; a killed process before commit leaves the
       prior generation's rows untouched, verified the same way as
       `attack.py`'s existing test.
-- [ ] `feed_state` row for `feed_id = "engage"` records `engage_version` (via
+- [x] `feed_state` row for `feed_id = "engage"` records `engage_version` (via
       `cursor`/`checksum` as today) and the resolved `license` string.
-- [ ] `tests/unit/test_api_static.py`'s write-SQL scan passes unchanged — no
+- [x] `tests/unit/test_api_static.py`'s write-SQL scan passes unchanged — no
       write SQL introduced under `api/`.
-- [ ] No `engage`/`engage_*` entry appears in `config/scoring.yaml`'s
+- [x] No `engage`/`engage_*` entry appears in `config/scoring.yaml`'s
       `weights`, and no `reason[]` component references Engage; the 7-element
       replay tuple and existing scoring replay tests are unaffected.
-- [ ] With the `engage` feed never run, every existing `/v1/context` test
+- [x] With the `engage` feed never run, every existing `/v1/context` test
       still passes byte-for-byte — no new required field, no response-shape
       change.
-- [ ] `pyproject.toml` is unchanged by this spike (or a later PR needing a
+- [x] `pyproject.toml` is unchanged by this spike (or a later PR needing a
       new dependency carries both the `pyproject.toml` diff and an ADR
       update, never a silent import) — Absolute Constraint 7.
-- [ ] `python -m pytest tests/unit -q` stays fully green with no reduction in
-      test count (CLAUDE.md's 487-baseline discipline).
+- [x] `python -m pytest tests/unit -q` stays fully green with no reduction in
+      test count (CLAUDE.md's baseline discipline; CLAUDE.md is the single
+      source for the number, and `tests/unit/test_claude_md_baseline.py`
+      enforces it — no raw count is copied here, to keep this ADR from going
+      stale the way the copies in `AGENTS.md` and the development guide did).
 
 ## Non-goals
 

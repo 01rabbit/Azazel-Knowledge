@@ -128,6 +128,69 @@ azctl feed inspect urlhaus     # feed_state + open feed_quarantine rows
 azctl feed approve urlhaus     # re-enable + resolve open quarantine entries
 ```
 
+### Knowledge Lite: build a bounded artifact for Nexus / Boot
+
+Azazel-Nexus and Azazel-Boot embed a read-only cache of a **Knowledge Lite**
+artifact: a bounded capacity profile of the same signed bundle, always full,
+never differential. This node produces and signs it; the consumer owns trust,
+caching, and promotion, and keeps working without it.
+
+```sh
+# Profiles: knowledge-lite-16g | knowledge-lite-32g
+# --as-of pins the whole selection; the builder never reads the clock.
+# The generation/version/hash values below must be the ones the artifact
+# claims to have been built from -- they are recorded in its manifest.
+ROOT=/srv/azazel-knowledge
+python tools/bundle_build.py build-lite \
+    --source-db "$ROOT/data/db/current/intel.db" \
+    --out lite.tar.gz \
+    --version 7 \
+    --profile knowledge-lite-16g \
+    --export-policy lite-export-policy.yaml \
+    --alias-key-file "$ROOT/secrets/lite-alias.hex" \
+    --alias-scope mission-alpha \
+    --as-of 2026-09-19T00:00:00Z \
+    --intel-generation 7 \
+    --stats-generation 3 \
+    --attack-version v15.1 \
+    --config-hash "$CONFIG_HASH" \
+    --security-epoch 1 \
+    --sign-key "$ROOT/secrets/keys/offline-signing.hex"
+```
+
+What to expect when running it:
+
+- **The same flags rebuild the same bytes.** Selection is a pure function of
+  that tuple, so an artifact is reproducible by someone who was not there when
+  it was built. `--as-of` is the pin — the builder never reads the clock.
+- **A ceiling fails the build; it never truncates.** `LITE_CEILING_EXCEEDED`
+  names which limit was passed (datasets, rows per dataset, bytes per dataset,
+  rows total, bytes total). Make it fit on purpose — export fewer datasets or
+  fields, or build the larger profile — because a truncated bundle would lie
+  about its coverage, and a consumer cannot tell "this is all there was" from
+  "this is all that fit". The freshness window is a property of the profile
+  (30 days at 16g, 90 at 32g), not a flag; the ceilings themselves are measured
+  values fixed in ADR-0015 D3 and are not tuned per build.
+- **A row without provenance is refused,** including an indicator that has not
+  been through aggregation yet (it has no expiry or confidence). Export is
+  deny-by-default: fields the policy does not name never leave this node.
+- **It is a full-node operation.** Peak builder memory is roughly 0.9 GB at the
+  16g row ceiling and 3.4 GB at 32g, so a 4 GB Pi 4 cannot build a 32g
+  artifact. The build reads a snapshot outside the query path and never writes
+  `local.db` or swaps a generation.
+
+To hand consumers something to test their reader against:
+
+```sh
+python tools/lite_fixture.py emit --out /tmp/lite-fixture
+# lite.tar.gz + anchors.toml + expected.json (rebuilt, not a committed blob)
+```
+
+Contract and rationale: [ADR-0015](adr/0015-knowledge-lite-bundle.md)
+(profile, deterministic selection, measured ceilings, provenance, export
+policy, signer-role/security-epoch gates, ownership boundary) and
+[ADR-0017](adr/0017-lite-is-full-only.md) (full-only, no Lite deltas).
+
 ## 3. Connect an Edge
 
 Mint a scoped token for the Edge node (`ingest+query`, never `admin` --

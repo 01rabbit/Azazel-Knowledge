@@ -22,7 +22,8 @@ CTIノードが不在・低速・誤答でも Edge は完全に機能し続け�
 ## 必読(タスク着手前に必ず参照)
 
 - `docs/design/phase1-implementation.md` — 最終設計。F-1〜F-20 は既決。§番号で引用する
-- `docs/adr/0001`〜`0008` — 既決の設計判断。覆すには新 ADR が要る
+- `docs/adr/README.md` — **全 ADR の索引(ここを見る。番号範囲を直書きしない)**。
+  ADR は既決の設計判断であり、覆すには新 ADR が要る
 - `README.md` / `docs/architecture.md` — 助言専用の教義と失敗モデル
 - `docs/scoring.md` / `docs/api.md` / `docs/data-model.md` — 契約(数値例まで拘束力を持つ)
 
@@ -118,6 +119,11 @@ source .venv/bin/activate
 python -m pytest tests/unit -q            # 基準線 859 passed。減らさない
 python azctl check-config --config-dir config   # メモリ算術 OK を確認
 ```
+
+> **テスト基準線の単一情報源は本書**(「git 規律」「検証コマンド」「リポジトリ地図」の3箇所)。
+> `docs/development-guide.md` §0 と `AGENTS.md` はこれを再掲するだけで、正を名乗らない。
+> 基準線が動いたら**3文書すべてを同じ差分で更新する**。一致と実測テスト数との整合は
+> `tests/unit/test_claude_md_baseline.py` が機械的に強制し、1箇所でも古ければ赤になる。
 
 ---
 

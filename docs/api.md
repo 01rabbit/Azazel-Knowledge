@@ -4,8 +4,9 @@ REST + JSON over the management segment (ADR-0005). Bearer token required on
 every endpoint; mTLS optional. All requests and responses are logged as JSONL.
 
 Since [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md) this boundary is also
-**type-enforced by `azazel_fabric.cti_contracts` v0.3.0** (tag-pinned,
-`api`-extra only). The enforcement is additive and the wire **shapes below are
+**type-enforced by `azazel_fabric.cti_contracts`** (tag-pinned,
+`api`-extra only; the pin in force is `v0.8.0` per
+[ADR-0016](adr/0016-fabric-pin-v0-8-0.md), carried in `pyproject.toml`). The enforcement is additive and the wire **shapes below are
 unchanged**: ingest callers may opt into the canonical `Cti<Kind>Batch`
 envelope and have it validated (see *Ingest*), and every `/v1/context` response
 is checked against Fabric's `BANNED_DIRECTIVE_FIELDS` before it is emitted —
