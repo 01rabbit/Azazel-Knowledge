@@ -119,6 +119,16 @@ class ReportedDefensiveStateFact(BaseModel):
     observed_at: str
     observation_ref: str
     authority_class: Literal["producer_reported_state"] = "producer_reported_state"
+    #: Whether `reported_state` is in the canonical Azazel-Fabric vocabulary
+    #: (Fabric#14). Knowledge#65 AC-6.
+    is_canonical: bool = False
+    #: The canonical value when `is_canonical`; `None` otherwise.
+    #:
+    #: Never the coercion fallback. An unrecognized report stays unrecognized
+    #: here rather than becoming `OBSERVE`: "Edge said something this
+    #: vocabulary does not know" and "Edge said OBSERVE" are different facts,
+    #: and only a consumer deciding what to *do* may collapse them.
+    canonical_state: str | None = None
 
 
 class ContextResponse(BaseModel):

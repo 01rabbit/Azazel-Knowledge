@@ -62,12 +62,14 @@ from azazel_fabric.deception_contracts import (
     assert_no_runtime_directives,
 )
 from azazel_fabric.engagement_contracts import EngagementAdvisory
+from azazel_fabric.schema.defensive_state import coerce_defensive_state
 
 __all__ = [
     "BANNED_DIRECTIVE_FIELDS",
     "IngestBatchInvalid",
     "AdvisoryInvariantViolation",
     "build_engagement_advisory",
+    "classify_reported_defensive_state",
     "maybe_fabric_batch_lines",
     "maybe_fabric_observation_lines",
     "build_effectiveness_advisory",
@@ -217,6 +219,31 @@ def build_effectiveness_advisory(advisory_fields: Mapping[str, Any]) -> dict[str
     except (ValidationError, ValueError) as exc:
         raise AdvisoryInvariantViolation(str(exc)) from exc
     return model.model_dump(mode="json")
+
+
+def classify_reported_defensive_state(reported_state: object) -> tuple[str | None, bool]:
+    """Say whether a reported state is in the canonical vocabulary (Knowledge#65 AC-6).
+
+    Returns ``(canonical_state, recognized)``. ``canonical_state`` is the
+    Fabric ``DefensiveState`` value when the report is one, and ``None``
+    otherwise.
+
+    **It is never the coercion fallback.** `coerce_defensive_state` lands an
+    unrecognized value on ``OBSERVE`` so that a *consumer deciding what to do*
+    fails safe. Knowledge is not that consumer: it is reporting what a producer
+    said. Emitting ``OBSERVE`` here would turn "Edge said something this
+    vocabulary does not know" into "Edge said OBSERVE", which is Knowledge
+    asserting another product's posture -- the one thing this lane must not do.
+    So the fallback is discarded and only the ``recognized`` flag is kept.
+
+    The stored value is never rewritten. `db/defensive_state_memory.py` carries
+    `reported_state` exactly as it arrived and enumerates nothing; this
+    function lives here because `azazel_fabric` is an `api`-extra dependency
+    and must not leak into `db/` (Absolute Constraint 7).
+    """
+
+    coerced, recognized = coerce_defensive_state(reported_state)
+    return (coerced.value if recognized else None), recognized
 
 
 def build_engagement_advisory(
