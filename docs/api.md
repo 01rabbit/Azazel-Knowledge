@@ -576,9 +576,26 @@ and is advisory-only — a consumer has to be able to tell "Edge says it is in
 - **Knowledge does not enumerate the values.** `reported_state` is carried
   exactly as it arrived and `state_vocabulary` names the vocabulary it arrived
   in. The canonical vocabulary is Azazel-Fabric's (Fabric#14); a second copy
-  here would drift from it. Validation against the canonical enum lands at the
-  ingest boundary once a Fabric release carries it — this repository pins
-  `v0.8.0` and no tag carries `DefensiveState` yet.
+  in the storage layer would drift from it, so `db/` enumerates nothing and a
+  test asserts it stays that way.
+- **The canonical reading is added beside the stored value, never over it**
+  (Knowledge#65 AC-6, available since the `v0.9.0rc2` pin). `is_canonical`
+  says whether the report is in Fabric's vocabulary, and `canonical_state`
+  carries the value when it is, `null` when it is not.
+
+  `canonical_state` is **never the coercion fallback.**
+  `coerce_defensive_state` lands an unrecognized value on `OBSERVE` so that a
+  consumer *deciding what to do* fails safe. Knowledge is not that consumer —
+  it is reporting what a producer said, and emitting `OBSERVE` would turn
+  "Edge said something this vocabulary does not know" into "Edge said
+  `OBSERVE`". A non-canonical report is served verbatim and flagged, never
+  rejected, normalized, or replaced: a producer speaking an unknown vocabulary
+  is a fact worth keeping.
+
+  Recognition is **exact**. `THROTTLE` is recognized; `throttle` and
+  `THROTTLE ` are not. That is what makes "beside, never over" safe — a
+  recognized report's stored spelling already is the canonical spelling, so
+  there is no value the classification could rewrite.
 - **Nothing here is a request.** The storage lane refuses a payload carrying
   `set_state`, `target_state`, `requested_state`, `next_state`,
   `transition_to`, `apply`, `execute`, `enforce`, `command`, `override`, or an

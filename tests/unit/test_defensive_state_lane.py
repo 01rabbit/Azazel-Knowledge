@@ -440,97 +440,158 @@ def test_the_api_surface_uses_no_ambiguous_mode_field(tmp_path):
     assert ambiguous == [], f"ambiguous mode field on the wire: {ambiguous}"
 
 
-# -- AC-6 is open, and says so ----------------------------------------------
+# -- AC-6: the canonical vocabulary is consumed, now that a tag carries it ---
+#
+# The test that used to sit here failed the moment a pin carrying
+# `DefensiveState` landed, which is what made this section possible. It has
+# done its job and is replaced by what it pointed at.
 
 
-def test_the_fabric_pin_does_not_yet_carry_the_canonical_vocabulary():
-    """AC-6 is "consume Fabric#14 semantics **when available**". It is not.
-
-    This repository pins `v0.8.0`; `DefensiveState` shipped to no tag. The
-    assertion is written so that it fails once a pin that carries the
-    vocabulary lands -- which is the moment AC-6 becomes actionable, and a
-    louder signal than a comment nobody re-reads.
-    """
-
+def test_the_pinned_fabric_carries_the_canonical_vocabulary():
+    """The precondition AC-6 waited on. Pinned so a re-pin backwards is loud."""
     import tomllib
+
+    from azazel_fabric.schema.defensive_state import DefensiveState
 
     manifest = tomllib.loads(
         (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text("utf-8")
     )
-    # Absolute Constraint 7: Fabric is an `api`-extra dependency, never a core
-    # one, so the pin lives there rather than in `project.dependencies`.
-    extras = manifest["project"]["optional-dependencies"]["api"]
-    pins = [d for d in extras if "azazel-fabric" in d]
-    assert len(pins) == 1, f"expected exactly one Fabric pin in the api extra, got {pins}"
-    assert "@v" in pins[0], f"Fabric must be pinned to an exact tag, got {pins[0]!r}"
+    pins = [d for d in manifest["project"]["optional-dependencies"]["api"] if "azazel-fabric" in d]
+    assert len(pins) == 1 and "@v" in pins[0], f"Fabric must be pinned to an exact tag: {pins}"
 
-    try:
-        from azazel_fabric.schema.defensive_state import DefensiveState  # noqa: F401
-    except ImportError:
-        return
-    pytest.fail(
-        f"the pinned Fabric ({pins[0]}) now carries DefensiveState; Knowledge#65 AC-6 is "
-        "actionable -- validate reported_state against the canonical enum at the ingest "
-        "boundary and delete this test"
-    )
+    assert {member.value for member in DefensiveState} == {
+        "OBSERVE",
+        "NOTIFY",
+        "THROTTLE",
+        "REDIRECT",
+        "ISOLATE",
+    }
 
 
-# -- the two pins the tests above did not exercise ---------------------------
+@pytest.mark.parametrize("state", ["OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"])
+def test_a_canonical_report_is_recognized(state):
+    from azazel_knowledge.api.contracts import classify_reported_defensive_state
+
+    assert classify_reported_defensive_state(state) == (state, True)
 
 
 @pytest.mark.parametrize(
-    "field,bad",
-    [
-        ("authority_class", "producer_decision_ref"),
-        ("authority_class", "advisory_only"),
-        ("schema_version", "defensive-state-observation/v0.2"),
-    ],
+    "hostile",
+    ["portal", "shield", "scapegoat", "throttle", "THROTTLE ", "", "QUARANTINE", None, 7, []],
 )
-def test_the_lane_holds_exactly_one_kind_of_claim(local_conn, field, bad):
-    """A row here is a producer's report about itself and can be nothing else.
+def test_an_unrecognized_report_never_becomes_a_canonical_value(hostile):
+    """The coercion fallback is discarded here, deliberately.
 
-    Without this, relaxing the pin would let a differently-classed claim into
-    the same table, and a consumer reading `authority_class` to decide how much
-    to trust a row would be reading a value nobody checked.
+    `coerce_defensive_state` lands an unknown value on `OBSERVE` so a consumer
+    *deciding what to do* fails safe. Knowledge is not that consumer -- it is
+    reporting what a producer said, and emitting `OBSERVE` would turn "Edge
+    said something this vocabulary does not know" into "Edge said OBSERVE".
     """
 
-    with pytest.raises(DefensiveStateMemoryError, match=field):
-        record_defensive_state_observation(
-            local_conn, observation(**{field: bad}), received_at=AS_OF
-        )
+    from azazel_knowledge.api.contracts import classify_reported_defensive_state
+
+    canonical, recognized = classify_reported_defensive_state(hostile)
+
+    assert recognized is False
+    assert canonical is None, f"an unrecognized report was reported as {canonical!r}"
 
 
-def test_the_fact_lane_passes_through_the_advisory_only_assertion(tmp_path, monkeypatch):
-    """Pin the wiring, not just the outcome.
-
-    The router asserts the advisory-only invariant over a copy it assembles by
-    hand. Dropping the fact lane from that copy would leave every response test
-    green while the new field stopped being checked at all -- so what the
-    assertion actually receives is what gets pinned.
-    """
-
-    import azazel_knowledge.api.routers.context as context_router
-
-    seen: list[dict] = []
-    original = context_router.assert_response_advisory_only
-
-    def _capture(view):
-        seen.append(view)
-        return original(view)
-
-    monkeypatch.setattr(context_router, "assert_response_advisory_only", _capture)
-
+def test_the_stored_value_is_served_unchanged_beside_its_classification(tmp_path):
+    """Classification is added *beside* the stored value, never over it."""
     client, _settings, local_db_path, _ = make_client(tmp_path)
-    _seed(local_db_path, observation())
+    _seed(local_db_path, observation(reported_state="THROTTLE"))
     token = add_api_client(local_db_path, "edge1", ["query"])
 
     resp = client.post(
         "/v1/context", json=_context_body(trace_id="trace-1"), headers=auth_header(token)
     )
 
-    assert resp.status_code == 200
-    assert seen, "the advisory-only assertion was never called"
-    assert "reported_defensive_state" in seen[0], (
-        "the fact lane is not part of what the advisory-only invariant checks"
+    fact = resp.json()["reported_defensive_state"]
+    assert fact["reported_state"] == "THROTTLE"
+    assert fact["is_canonical"] is True
+    assert fact["canonical_state"] == "THROTTLE"
+
+
+def test_a_non_canonical_report_is_served_verbatim_and_flagged(tmp_path):
+    """Knowledge does not reject, normalize, or replace what it was told.
+
+    A producer speaking a vocabulary Knowledge does not know is a fact worth
+    keeping -- discarding it would lose the only evidence that it happened.
+    """
+
+    client, _settings, local_db_path, _ = make_client(tmp_path)
+    _seed(
+        local_db_path,
+        observation(reported_state="portal", state_vocabulary="azazel-edge/legacy-mode"),
     )
-    assert seen[0]["reported_defensive_state"]["reported_state"] == "THROTTLE"
+    token = add_api_client(local_db_path, "edge1", ["query"])
+
+    resp = client.post(
+        "/v1/context", json=_context_body(trace_id="trace-1"), headers=auth_header(token)
+    )
+
+    fact = resp.json()["reported_defensive_state"]
+    assert fact["reported_state"] == "portal"
+    assert fact["state_vocabulary"] == "azazel-edge/legacy-mode"
+    assert fact["is_canonical"] is False
+    assert fact["canonical_state"] is None
+
+
+def test_the_storage_layer_still_enumerates_nothing():
+    """AC-6 consumes the vocabulary at the boundary, not in the store.
+
+    `azazel_fabric` is an `api`-extra dependency (Absolute Constraint 7), and
+    a second definition of the five values in `db/` would drift from Fabric's.
+    """
+
+    import ast
+
+    import azazel_knowledge.db.defensive_state_memory as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "azazel_fabric" not in source, "Fabric leaked into the core storage layer"
+
+    tree = ast.parse(source)
+    docstrings = {
+        ast.get_docstring(node, clean=False)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+        and ast.get_docstring(node, clean=False) is not None
+    }
+    canonical = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in docstrings:
+                continue
+            assert node.value not in canonical, (
+                f"{node.value!r} is a string literal in the storage layer"
+            )
+
+
+def test_recognition_requires_exact_equality_so_nothing_is_ever_normalized():
+    """The property that makes "add beside, never over" safe.
+
+    Recognition is exact: `THROTTLE` is recognized, `throttle` and `THROTTLE `
+    are not. So a recognized report's stored spelling already *is* the
+    canonical spelling, and there is no value the classifier could rewrite.
+
+    Pinned because that is what a mutation test cannot show. Overwriting
+    `reported_state` with `canonical_state` is a no-op today, and would stop
+    being one the moment recognition became case- or whitespace-insensitive --
+    at which point Knowledge would silently start editing what a producer said.
+    """
+
+    from azazel_knowledge.api.contracts import classify_reported_defensive_state
+
+    for state in ("OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"):
+        canonical, recognized = classify_reported_defensive_state(state)
+        assert recognized is True
+        assert canonical == state, "recognition normalized a value it should have matched exactly"
+
+        for variant in (state.lower(), state.title(), f" {state}", f"{state} "):
+            variant_canonical, variant_recognized = classify_reported_defensive_state(variant)
+            assert variant_recognized is False, (
+                f"{variant!r} was recognized; recognition is no longer exact, and "
+                "the classification can now rewrite what a producer sent"
+            )
+            assert variant_canonical is None

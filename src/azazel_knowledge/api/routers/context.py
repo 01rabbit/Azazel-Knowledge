@@ -31,6 +31,7 @@ from azazel_knowledge.api.contracts import (
     AdvisoryInvariantViolation,
     assert_response_advisory_only,
     build_engagement_advisory,
+    classify_reported_defensive_state,
 )
 from azazel_knowledge.api.models import ContextApiRequest, ContextResponse
 from azazel_knowledge.audit.logger import AuditUnavailable
@@ -61,6 +62,23 @@ def new_advisory_ulid(now_ms: int | None = None) -> str:
     value = ((ts & ((1 << 48) - 1)) << 80) | rand
     chars = [_CROCKFORD32[(value >> (5 * i)) & 0x1F] for i in range(26)]
     return "".join(reversed(chars))
+
+
+def _reported_state_fact(reported_state) -> dict | None:
+    """Serve the stored fact plus whether it is canonical (Knowledge#65 AC-6).
+
+    The classification is added beside the stored value, never over it: the
+    fact keeps `reported_state` exactly as the producer sent it, and the
+    canonical reading is a separate, clearly-named field a consumer may ignore.
+    """
+
+    if reported_state is None:
+        return None
+    fact = reported_state.as_fact()
+    canonical, recognized = classify_reported_defensive_state(fact["reported_state"])
+    fact["is_canonical"] = recognized
+    fact["canonical_state"] = canonical
+    return fact
 
 
 @router.post("/context", response_model=ContextResponse)
@@ -253,9 +271,7 @@ def post_context(
         "advisory_notice": result.advisory_notice,
         "engage_refs": engage_refs,
         "rule_refs": rule_refs,
-        "reported_defensive_state": (
-            reported_state.as_fact() if reported_state is not None else None
-        ),
+        "reported_defensive_state": _reported_state_fact(reported_state),
         "engagement_advisory": engagement_advisory,
     }
     try:
@@ -278,9 +294,7 @@ def post_context(
         multi_ioc_scope=result.multi_ioc_scope,
         engage_refs=engage_refs,
         rule_refs=rule_refs,
-        reported_defensive_state=(
-            reported_state.as_fact() if reported_state is not None else None
-        ),
+        reported_defensive_state=_reported_state_fact(reported_state),
         engagement_advisory=engagement_advisory,
         engagement_repeatability_score=engagement_repeatability,
     )
