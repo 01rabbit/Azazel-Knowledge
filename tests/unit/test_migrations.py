@@ -81,6 +81,7 @@ def test_local_migrations_apply_cleanly(tmp_path):
         "0004_deception_observation",
         "0005_outcome_evidence_v0",
         "0006_defensive_state_observation",
+        "0007_engagement_event",
     ]
     tables = _table_names(conn)
     assert LOCAL_TABLES <= tables
