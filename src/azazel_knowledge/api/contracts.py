@@ -61,7 +61,7 @@ from azazel_fabric.deception_contracts import (
     assert_no_effectiveness_verdict,
     assert_no_runtime_directives,
 )
-from azazel_fabric.engagement_contracts import EngagementAdvisory
+from azazel_fabric.engagement_contracts import EngagementAdvisory, EngagementEvent
 from azazel_fabric.schema.defensive_state import coerce_defensive_state
 
 __all__ = [
@@ -71,6 +71,7 @@ __all__ = [
     "build_engagement_advisory",
     "classify_reported_defensive_state",
     "maybe_fabric_batch_lines",
+    "maybe_fabric_engagement_lines",
     "maybe_fabric_observation_lines",
     "build_effectiveness_advisory",
     "assert_response_advisory_only",
@@ -201,6 +202,95 @@ def maybe_fabric_observation_lines(
             raise IngestBatchInvalid(str(exc)) from exc
 
     return [json.dumps(item, sort_keys=True) for item in items]
+
+
+# An `EngagementEvent` records what a product selected and the reaction it
+# observed. It carries no actor and no edge identity -- it says what was done,
+# not to whom -- so the envelope supplies both. Their joint presence with
+# `items` is the opt-in signal, and is a shape no legacy per-line caller
+# produces.
+_ENGAGEMENT_ENVELOPE_MARKERS = ("items", "edge_id", "actor_key")
+
+
+def _looks_like_engagement_envelope(obj: object) -> bool:
+    return isinstance(obj, dict) and all(
+        k in obj for k in _ENGAGEMENT_ENVELOPE_MARKERS
+    )
+
+
+def maybe_fabric_engagement_lines(raw_body: bytes, endpoint: str) -> list[str] | None:
+    """Return JSONL lines for an engagement-event batch envelope, else None.
+
+    Azazel-Edge builds a Fabric `EngagementEvent` "for audit / Knowledge
+    ingest" (its own words); this is the boundary that reads one. Every item is
+    type-enforced against the canonical model and fails closed
+    (`IngestBatchInvalid` -> `422`) on a contract violation, mirroring
+    `maybe_fabric_observation_lines`.
+
+    An `EngagementEvent` is descriptive by contract — "the product records what
+    it selected and the reaction it observed; this contract never re-runs the
+    action" — and Knowledge reading one changes nothing about that. Knowledge
+    advises; a record of somebody else's selection is not Knowledge's.
+
+    The envelope's `edge_id`/`actor_key` are folded onto each emitted line
+    because the contract models neither, and a row that could not be attributed
+    to an actor would be unusable for the correlation this lane exists to feed.
+    They are written under `_envelope_` names so a reader can tell a field the
+    producer sent from one the envelope supplied — and so an item that carried
+    those names itself could not be mistaken for the envelope's answer.
+    """
+
+    if endpoint != "engagement-events":
+        return None
+
+    text = raw_body.decode("utf-8", errors="replace").strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not _looks_like_engagement_envelope(obj):
+        return None
+
+    items = obj["items"]
+    if not isinstance(items, list):
+        raise IngestBatchInvalid("envelope 'items' must be a list")
+
+    edge_id = obj["edge_id"]
+    actor_key = obj["actor_key"]
+    for name, value in (("edge_id", edge_id), ("actor_key", actor_key)):
+        if not isinstance(value, str) or not value.strip():
+            raise IngestBatchInvalid(f"envelope {name!r} must be a non-empty string")
+
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise IngestBatchInvalid("envelope item must be an object")
+        try:
+            # A directive has no business on a record of something already
+            # done.
+            #
+            # Today this is unreachable: every model in the `EngagementEvent`
+            # tree sets `extra="forbid"` and none has a free-form mapping
+            # field, so a directive key is rejected by the model before this
+            # sees it -- unlike `EngagementAdvisory`, whose `prior_outcomes`
+            # has free-form keys and where the same walk is load-bearing. It
+            # is kept as a backstop for this contract gaining such a field,
+            # and `test_the_contract_has_no_free_form_field_yet` fails on the
+            # day it does, so the backstop cannot be promoted to the only
+            # thing standing without anyone noticing.
+            assert_no_runtime_directives(item)
+            event = EngagementEvent.model_validate(item)
+        except (ValidationError, ValueError) as exc:
+            raise IngestBatchInvalid(str(exc)) from exc
+
+        line = event.model_dump(mode="json")
+        line["_envelope_edge_id"] = edge_id
+        line["_envelope_actor_key"] = actor_key
+        lines.append(json.dumps(line, sort_keys=True))
+
+    return lines
 
 
 def build_effectiveness_advisory(advisory_fields: Mapping[str, Any]) -> dict[str, Any]:

@@ -112,6 +112,7 @@ def test_local_migration_chain_includes_0005_and_is_idempotent(tmp_path):
         "0004_deception_observation",
         "0005_outcome_evidence_v0",
         "0006_defensive_state_observation",
+        "0007_engagement_event",
     ]
     assert apply_migrations(conn, "local") == []
 

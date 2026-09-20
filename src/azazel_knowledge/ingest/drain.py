@@ -34,6 +34,7 @@ from azazel_knowledge.ingest.spool import BatchStatus, SpoolWriter
 from azazel_knowledge.ingest.validators import (
     Result,
     validate_deception_observation_line,
+    validate_engagement_event_line,
     validate_event_line,
     validate_flow_line,
     validate_reaction_line,
@@ -44,6 +45,7 @@ _VALIDATORS: dict[str, Callable[..., Result]] = {
     "events": validate_event_line,
     "flows": validate_flow_line,
     "reactions": validate_reaction_line,
+    "engagement-events": validate_engagement_event_line,
     "deception-observations": validate_deception_observation_line,
 }
 
@@ -241,6 +243,69 @@ def _insert_deception_observations(
     return duplicates
 
 
+def _insert_engagement_events(
+    conn: sqlite3.Connection, rows: list[dict[str, Any]], now: datetime
+) -> int:
+    """INSERT-only store of Azazel-Edge engagement events (Fabric#23 R1c).
+
+    Idempotent via `event_ref UNIQUE` + INSERT OR IGNORE: transport is
+    at-least-once, and counting one engagement twice would distort every
+    summary built over this table. Returns the number of dedupe no-ops.
+
+    The Engage vocabulary is written through unchanged. Knowledge stores what
+    the producer selected; mapping it onto Knowledge's own action vocabulary
+    would invent a correspondence that does not exist for five of the eight
+    values.
+    """
+
+    duplicates = 0
+    for r in rows:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO engagement_event_v0 "
+            "(event_ref, product, edge_id, actor_key, objective, approach, activity, "
+            "attacker_reaction, reaction_window_s, started_at, ended_at, "
+            "termination_reason, evidence_refs, schema_version, raw, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                r["event_ref"],
+                r["product"],
+                r["edge_id"],
+                r["actor_key"],
+                r["objective"],
+                r["approach"],
+                r["activity"],
+                r["attacker_reaction"],
+                r["reaction_window_s"],
+                r["started_at"],
+                r["ended_at"],
+                r["termination_reason"],
+                json.dumps(r["evidence_refs"], sort_keys=True),
+                r["schema_version"],
+                json.dumps(r["raw"], sort_keys=True),
+                to_rfc3339(now),
+            ),
+        )
+        if cursor.rowcount == 0:
+            duplicates += 1
+    return duplicates
+
+
+def _drain_engagement_event_rows(
+    writer_queue: PrioritySingleWriterQueue,
+    rows: list[dict[str, Any]],
+    now: datetime,
+) -> int:
+    duplicates = {"count": 0}
+
+    def _txn(conn: sqlite3.Connection) -> None:
+        duplicates["count"] = _insert_engagement_events(conn, rows, now)
+
+    if rows:
+        writer_queue.submit(P1, _txn)
+        writer_queue.process_pending()
+    return duplicates["count"]
+
+
 def _drain_deception_observation_rows(
     writer_queue: PrioritySingleWriterQueue,
     rows: list[dict[str, Any]],
@@ -291,6 +356,8 @@ def drain_endpoint(
             duplicates = _drain_reaction_rows(writer_queue, valid_rows, now)
         elif endpoint == "deception-observations":
             duplicates = _drain_deception_observation_rows(writer_queue, valid_rows, now)
+        elif endpoint == "engagement-events":
+            duplicates = _drain_engagement_event_rows(writer_queue, valid_rows, now)
         else:
             duplicates = 0
             if valid_rows:

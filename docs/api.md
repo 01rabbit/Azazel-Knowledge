@@ -172,6 +172,7 @@ identified", or "autonomous intrusion proven"; preferred wording is
 | `POST /v1/flows` | JSONL batch: flow records |
 | `POST /v1/reactions` | delay history: action applied + observed attacker reaction |
 | `POST /v1/deception-observations` | AZ-06 fact-only deception observations (Fabric `InteractionObservation`; ADR-0011) |
+| `POST /v1/engagement-events` | AZ-01 engagement records (Fabric `EngagementEvent`; Azazel-Fabric#23 R1c) |
 | TAXII 2.1 inbox | STIX bundles from the existing Azazel-Edge push client (#248) |
 
 Responses are `202 Accepted` with a batch id; validation problems are
@@ -241,6 +242,51 @@ excluded from behavioral-pattern generation until resolvable — they are never
 a reason to reject the record. A malformed line is **quarantined** into the
 batch's `invalid[]` status (`GET /v1/ingest/{batch_id}`), never causing the
 whole batch to be rejected. All timestamps are normalized to UTC on ingest.
+
+### `POST /v1/engagement-events` (AZ-01, Azazel-Fabric#23 R1c)
+
+Ingest of Azazel-Edge `EngagementEvent` records: what Edge selected and the
+reaction it observed. Edge builds them "for audit / Knowledge ingest" (its own
+docstring); this is the boundary that reads one.
+
+Same accept discipline as every other ingest endpoint — `202` with a
+`batch_id`, `413` on the byte cap, `503` on quota, and `422` only for a body
+that declared the Fabric envelope and violated the contract. INGEST scope.
+
+**The envelope carries the attribution the contract does not.** An
+`EngagementEvent` says what was done, not to whom — it models no actor and no
+edge identity — so the batch supplies both:
+
+```json
+{
+  "edge_id": "edge-1",
+  "actor_key": "ip:198.51.100.7",
+  "items": [ { "schema_version": "engagement-event/v0.1", "...": "..." } ]
+}
+```
+
+Each item is type-enforced against the canonical model and fails closed on a
+violation. A row that could not be attributed to an actor would be unusable
+for correlation, so an empty `edge_id` or `actor_key` is refused.
+
+**The Engage vocabulary is stored verbatim and mapped to nothing.** Three of
+the eight `activity` values coincide with `reaction.action_applied`
+(`throttle`, `redirect`, `isolate`) and five do not (`observe`, `notify`,
+`redirect_to_decoy`, `expose_decoy_surface`, `collect_credentials`). Deciding
+that `redirect_to_decoy` "is" `deception` would invent a correspondence
+between two product vocabularies, which is how a product-local word becomes
+canonical by the back door — `correlate/engagement_advisory.py` already
+refuses the same invention in the other direction. An engagement event is
+therefore its own lane (`engagement_event_v0`), not a reaction in disguise.
+
+Rows are append-only (Absolute Constraint 5) and idempotent on `event_ref`:
+transport is at-least-once, and counting one engagement twice would distort
+every summary built over the table.
+
+Reading an event gives Knowledge nothing it can run. The contract is
+descriptive ("this contract never re-runs the action"), the lane has no
+executable-shaped column, and a directive-shaped field anywhere in a record is
+refused.
 
 ### `POST /v1/deception-observations` (AZ-06, ADR-0011)
 

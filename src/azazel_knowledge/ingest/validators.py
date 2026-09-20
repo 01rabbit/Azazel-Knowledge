@@ -720,3 +720,198 @@ def _contains_banned_verdict(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_contains_banned_verdict(item) for item in value)
     return False
+
+
+# Mirror of azazel_fabric.deception_contracts BANNED_RUNTIME_DIRECTIVE_FIELDS.
+# Same reason as BANNED_OBS_VERDICT_FIELDS above: Fabric is import-confined to
+# api/contracts.py (ADR-0010/0011), so this framework-free drain validator
+# mirrors the closed set structurally. A record of a completed action must
+# never carry an instruction to perform one.
+BANNED_RECORD_DIRECTIVE_FIELDS = frozenset(
+    {
+        "command",
+        "cmd",
+        "shell",
+        "shell_command",
+        "exec",
+        "execute",
+        "execute_now",
+        "run",
+        "script",
+        "nft_rule",
+        "iptables_rule",
+        "firewall_rule",
+        "route",
+        "handler",
+        "callback",
+        "bypass_arbiter",
+        "override",
+        "must_execute",
+        "required_action",
+        "directive",
+    }
+)
+
+
+def _contains_banned_directive(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if str(key) in BANNED_RECORD_DIRECTIVE_FIELDS:
+                return True
+            if _contains_banned_directive(nested):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_contains_banned_directive(item) for item in value)
+    return False
+
+
+# Engage vocabulary, mirrored structurally rather than imported.
+#
+# Fabric is import-confined to `api/contracts.py` (ADR-0010/0011), so this
+# framework-free drain validator mirrors the closed sets the same way
+# `validate_reaction_line` mirrors the Cti* shapes. The envelope at the API
+# boundary already type-enforced every item against the canonical model; this
+# is the second line, for a line that reached the spool by another route.
+#
+# These are deliberately NOT mapped onto `ACTION_APPLIED_ENUM`. Three values
+# coincide (`throttle`, `redirect`, `isolate`) and five do not; deciding that
+# `redirect_to_decoy` "is" `deception` would invent a mapping between two
+# product vocabularies, which `correlate/engagement_advisory.py` already
+# refuses in the other direction.
+ENGAGEMENT_OBJECTIVE_ENUM = frozenset(
+    {"collect", "detect", "prevent", "direct", "disrupt", "reassure"}
+)
+ENGAGEMENT_APPROACH_ENUM = frozenset(
+    {"channel", "collect", "detect", "prevent", "disrupt", "reassure"}
+)
+ENGAGEMENT_ACTIVITY_ENUM = frozenset(
+    {
+        "observe",
+        "notify",
+        "throttle",
+        "redirect",
+        "isolate",
+        "redirect_to_decoy",
+        "expose_decoy_surface",
+        "collect_credentials",
+    }
+)
+ENGAGEMENT_REACTION_ENUM = frozenset(
+    {
+        "decoy_engaged",
+        "followed_decoy",
+        "continued_scanning",
+        "continued_slowed",
+        "shifted_port",
+        "shifted_protocol",
+        "shifted_target",
+        "auth_pattern_changed",
+        "escalated",
+        "disengaged",
+        "unknown",
+    }
+)
+
+
+def validate_engagement_event_line(line: str, *, now: datetime) -> Result:
+    """Validate one Azazel-Edge `EngagementEvent` JSONL line (Fabric#23 R1c).
+
+    An engagement event is a *record of something already done*: what the
+    producer selected and the reaction it observed. Knowledge stores it as a
+    fact and reaches its own conclusions elsewhere -- reading somebody else's
+    selection is not selecting.
+
+    Two fields the Fabric contract does not model, `_envelope_edge_id` and
+    `_envelope_actor_key`, are required here because they are what makes a row
+    attributable. The API boundary folds them on from the batch envelope; the
+    underscore prefix keeps them distinguishable from anything the producer
+    sent under those names.
+    """
+
+    size_error = _check_size(line)
+    if size_error:
+        return False, size_error
+    try:
+        obj = _parse_object(line)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return False, f"invalid json: {exc}"
+
+    # A record of a completed action has no business carrying an instruction.
+    if _contains_banned_directive(obj):
+        return False, "runtime-directive field not permitted on an engagement event"
+
+    required = (
+        "schema_version",
+        "event_id",
+        "product",
+        "objective",
+        "approach",
+        "activity",
+        "_envelope_edge_id",
+        "_envelope_actor_key",
+    )
+    error = _require_fields(obj, required)
+    if error:
+        return False, error
+
+    if obj["schema_version"] != "engagement-event/v0.1":
+        return False, f"unknown schema_version: {obj['schema_version']!r}"
+
+    for name in ("event_id", "product", "_envelope_edge_id", "_envelope_actor_key"):
+        error = _require_nonempty_str(obj, name)
+        if error:
+            return False, error
+
+    for name, allowed in (
+        ("objective", ENGAGEMENT_OBJECTIVE_ENUM),
+        ("approach", ENGAGEMENT_APPROACH_ENUM),
+        ("activity", ENGAGEMENT_ACTIVITY_ENUM),
+    ):
+        if obj[name] not in allowed:
+            return False, f"unknown {name}: {obj[name]!r}"
+
+    outcome = obj.get("outcome")
+    if outcome is not None:
+        if not isinstance(outcome, Mapping):
+            return False, "outcome must be an object when present"
+        reaction = outcome.get("attacker_reaction")
+        if reaction is not None and reaction not in ENGAGEMENT_REACTION_ENUM:
+            return False, f"unknown attacker_reaction: {reaction!r}"
+        window = outcome.get("reaction_window_s")
+        if window is not None and (not isinstance(window, int) or isinstance(window, bool)):
+            return False, "reaction_window_s must be an integer when present"
+        for stamp in ("started_at", "ended_at"):
+            value = outcome.get(stamp)
+            if value is None:
+                continue
+            try:
+                parse_rfc3339(value)
+            except (ValueError, TypeError) as exc:
+                return False, f"invalid {stamp}: {exc}"
+
+    refs = obj.get("evidence_refs", [])
+    if not isinstance(refs, list):
+        return False, "evidence_refs must be a list"
+
+    outcome = outcome if isinstance(outcome, Mapping) else {}
+    return True, {
+        "event_ref": obj["event_id"],
+        "product": obj["product"],
+        "edge_id": obj["_envelope_edge_id"],
+        "actor_key": obj["_envelope_actor_key"],
+        "objective": obj["objective"],
+        "approach": obj["approach"],
+        "activity": obj["activity"],
+        # Absent stays absent. An engagement whose outcome is not yet known is
+        # a real state, and a placeholder would be indistinguishable from an
+        # observation that the attacker did nothing.
+        "attacker_reaction": outcome.get("attacker_reaction"),
+        "reaction_window_s": outcome.get("reaction_window_s"),
+        "started_at": outcome.get("started_at"),
+        "ended_at": outcome.get("ended_at"),
+        "termination_reason": outcome.get("termination_reason"),
+        "evidence_refs": refs,
+        "schema_version": obj["schema_version"],
+        "raw": dict(obj),
+    }
