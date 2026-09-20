@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from azazel_knowledge.core.clock import Clock, parse_rfc3339, to_rfc3339
+from azazel_knowledge.db.outcome_memory import OutcomeMemoryError, ingest_outcome_fact
 from azazel_knowledge.db.writer import P1, PrioritySingleWriterQueue
 from azazel_knowledge.ingest.burst_guard import BurstGuard
 from azazel_knowledge.ingest.spool import BatchStatus, SpoolWriter
@@ -36,6 +37,7 @@ from azazel_knowledge.ingest.validators import (
     validate_deception_observation_line,
     validate_engagement_event_line,
     validate_event_line,
+    validate_outcome_evidence_line,
     validate_flow_line,
     validate_reaction_line,
 )
@@ -46,6 +48,7 @@ _VALIDATORS: dict[str, Callable[..., Result]] = {
     "flows": validate_flow_line,
     "reactions": validate_reaction_line,
     "engagement-events": validate_engagement_event_line,
+    "outcome-evidence": validate_outcome_evidence_line,
     "deception-observations": validate_deception_observation_line,
 }
 
@@ -306,6 +309,75 @@ def _drain_engagement_event_rows(
     return duplicates["count"]
 
 
+# Dependency order of the four Outcome-as-Evidence records. A mechanism,
+# outcome or assessment fact is refused by `ingest_outcome_fact` until the
+# execution it names is stored, so a batch carrying a whole chain must be
+# inserted in this order.
+#
+# The facts themselves are an order-independent set joined by reference, so
+# sorting is not rewriting the producer's meaning -- it is satisfying a
+# storage precondition that has nothing to do with the order bytes happened
+# to arrive in. The sort is stable, so facts of equal rank keep their arrival
+# order and the insert sequence stays deterministic for a given batch.
+_OUTCOME_CHAIN_ORDER: dict[str, int] = {
+    "outcome-execution/v0.1": 0,
+    "outcome-mechanism/v0.1": 1,
+    "outcome-observation/v0.1": 2,
+    "tactical-effect-assessment/v0.1": 3,
+}
+
+
+def _insert_outcome_facts(
+    conn: sqlite3.Connection, rows: list[tuple[int, dict[str, Any]]], now: datetime
+) -> tuple[int, list[tuple[int, str]]]:
+    """Store Outcome-as-Evidence facts, quarantining the ones the chain refuses.
+
+    Takes `(line_no, fact)` pairs and returns `(duplicates, rejected)` where
+    `rejected` is `(line_no, error)` for each fact `ingest_outcome_fact`
+    refused. Those refusals are chain-level, not shape-level -- a dangling
+    `execution_ref`, a cross-trace join, an identity reused with different
+    canonical bytes -- so they cannot be decided by the line validator, which
+    has no database.
+
+    A refused fact is quarantined like any other bad line and the rest of the
+    batch is still stored (design S4: a line error never fails the batch).
+    Every refusal is raised before its INSERT runs, so nothing partial is left
+    behind in the transaction.
+    """
+
+    duplicates = 0
+    rejected: list[tuple[int, str]] = []
+    ordered = sorted(
+        rows, key=lambda item: _OUTCOME_CHAIN_ORDER[str(item[1]["schema_version"])]
+    )
+    for line_no, fact in ordered:
+        try:
+            if not ingest_outcome_fact(conn, fact, received_at=to_rfc3339(now)):
+                duplicates += 1
+        except OutcomeMemoryError as exc:
+            rejected.append((line_no, str(exc)))
+    rejected.sort()
+    return duplicates, rejected
+
+
+def _drain_outcome_evidence_rows(
+    writer_queue: PrioritySingleWriterQueue,
+    rows: list[tuple[int, dict[str, Any]]],
+    now: datetime,
+) -> tuple[int, list[tuple[int, str]]]:
+    outcome: dict[str, Any] = {"duplicates": 0, "rejected": []}
+
+    def _txn(conn: sqlite3.Connection) -> None:
+        duplicates, rejected = _insert_outcome_facts(conn, rows, now)
+        outcome["duplicates"] = duplicates
+        outcome["rejected"] = rejected
+
+    if rows:
+        writer_queue.submit(P1, _txn)
+        writer_queue.process_pending()
+    return int(outcome["duplicates"]), list(outcome["rejected"])
+
+
 def _drain_deception_observation_rows(
     writer_queue: PrioritySingleWriterQueue,
     rows: list[dict[str, Any]],
@@ -342,6 +414,11 @@ def drain_endpoint(
         lines = _split_lines(raw_text)
 
         valid_rows: list[dict[str, Any]] = []
+        # Kept alongside `valid_rows` so a row rejected at *write* time can be
+        # reported against the line it came from. Only the outcome-evidence
+        # lane has such rejections today (its chain checks need stored rows),
+        # but the bookkeeping is cheap and endpoint-agnostic.
+        valid_line_numbers: list[int] = []
         invalid: list[dict[str, Any]] = []
         for line_no, line in enumerate(lines, start=1):
             if not line.strip():
@@ -349,6 +426,7 @@ def drain_endpoint(
             ok, result = validator(line, now=now)
             if ok:
                 valid_rows.append(result)  # type: ignore[arg-type]
+                valid_line_numbers.append(line_no)
             else:
                 invalid.append({"line_no": line_no, "error": str(result)})
 
@@ -358,6 +436,24 @@ def drain_endpoint(
             duplicates = _drain_deception_observation_rows(writer_queue, valid_rows, now)
         elif endpoint == "engagement-events":
             duplicates = _drain_engagement_event_rows(writer_queue, valid_rows, now)
+        elif endpoint == "outcome-evidence":
+            duplicates, rejected = _drain_outcome_evidence_rows(
+                writer_queue, list(zip(valid_line_numbers, valid_rows)), now
+            )
+            if rejected:
+                rejected_lines = {line_no for line_no, _ in rejected}
+                invalid.extend(
+                    {"line_no": line_no, "error": error} for line_no, error in rejected
+                )
+                invalid.sort(key=lambda item: int(item["line_no"]))
+                # `valid` must count what was stored, not what parsed. A batch
+                # reporting a chain-refused fact as valid would tell the
+                # producer its evidence is in memory when it is not.
+                valid_rows = [
+                    row
+                    for line_no, row in zip(valid_line_numbers, valid_rows)
+                    if line_no not in rejected_lines
+                ]
         else:
             duplicates = 0
             if valid_rows:

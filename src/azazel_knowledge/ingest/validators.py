@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from azazel_knowledge.core.clock import parse_rfc3339, to_rfc3339
+from azazel_knowledge.db.outcome_memory import OutcomeMemoryError, validate_outcome_fact
 from azazel_knowledge.db.repository import entity_key
 from azazel_knowledge.normalize.ioc import NormalizationError, normalize
 
@@ -915,3 +916,44 @@ def validate_engagement_event_line(line: str, *, now: datetime) -> Result:
         "schema_version": obj["schema_version"],
         "raw": dict(obj),
     }
+
+
+def validate_outcome_evidence_line(line: str, *, now: datetime) -> Result:
+    """Validate one Outcome-as-Evidence fact (Fabric `outcome_contracts`, R1c).
+
+    The shape rules live in `db/outcome_memory.validate_outcome_fact`, not
+    here. Writing a second copy of them in this file is precisely the drift
+    this lane exists to avoid: `outcome_memory` already states the four
+    records field-for-field because it has to build the INSERTs, and
+    `tests/unit/test_outcome_contract_drift.py` pins *that* statement against
+    Fabric's models. A mirror in this module would be a third statement, and
+    the guard pins only two.
+
+    `now` is accepted for signature parity with the other validators and is
+    deliberately unused: an outcome fact's `observed_at` is a producer fact
+    about a window that has already closed, and rejecting one for arriving
+    outside a skew bound would silently drop late evidence -- the batches most
+    worth keeping, since they are the ones a degraded or reconnecting node
+    sent. The chain checks that *do* constrain a fact (does the referenced
+    execution exist, does it share the trace) need stored rows and run in
+    `ingest_outcome_fact` at write time.
+
+    Returns the fact itself as the normalized row: `ingest_outcome_fact`
+    consumes the canonical payload, so re-keying it here would mean unpacking
+    and repacking the very bytes whose identity is being preserved.
+    """
+
+    del now  # see docstring: not a skew-bounded lane
+    if len(line.encode("utf-8")) > MAX_LINE_BYTES:
+        return False, "line exceeds maximum size"
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError as exc:
+        return False, f"invalid json: {exc}"
+    if not isinstance(obj, dict):
+        return False, "line must be a JSON object"
+    try:
+        validate_outcome_fact(obj)
+    except OutcomeMemoryError as exc:
+        return False, str(exc)
+    return True, obj

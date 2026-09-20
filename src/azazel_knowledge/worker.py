@@ -75,10 +75,22 @@ from azazel_knowledge.reactions import linkage
 from azazel_knowledge.scoring.confidence import noisy_or
 
 ADVISORY_ENDPOINT = "advisory"
+#: Every spool endpoint the P1 drain visits. An endpoint missing from this
+#: tuple is accepted by the API, written durably to the spool, and then never
+#: drained -- the batch reports `drained=False` forever and the rows never
+#: reach local.db. `engagement-events` was in exactly that state between its
+#: introduction and this change: it had a validator and a drain branch, and
+#: nothing that called them.
+#:
+#: `tests/unit/test_ingest_endpoint_registry.py` now ties this tuple to
+#: `drain._VALIDATORS` and to the API's own ingest routes, so a lane can no
+#: longer be half-registered without a red test.
 INGEST_ENDPOINTS: tuple[str, ...] = (
     "events",
     "flows",
     "reactions",
+    "engagement-events",
+    "outcome-evidence",
     "deception-observations",
 )
 

@@ -1,11 +1,18 @@
-"""Ingest endpoints (design S4, F-4): fire-and-forget spooling only.
+"""Ingest endpoints (design S4, F-4): fire-and-forget spooling.
 
 `POST /v1/events|flows|reactions` never parses or validates a line's
 content -- that happens later, at drain time, in
 `ingest/validators.py` + `ingest/drain.py` on the worker side. The only
-reasons a call here is rejected are a client's spool quota (`503`) or
+reasons a call there is rejected are a client's spool quota (`503`) or
 the whole-request byte cap (`413`); a single malformed JSONL line never
 fails the surrounding batch (design S4).
+
+Two lanes narrow that. A caller that opts into a Fabric envelope has its
+items type-enforced here and gets a `422` for a contract violation
+(ADR-0010/0011), and `/v1/outcome-evidence` accepts *only* that envelope --
+it has no per-line callers predating Fabric to fall through for, so there is
+no unvalidated way into it. Neither changes the fire-and-forget contract for
+the lanes that have one.
 
 Handlers are plain `def`s dispatched to FastAPI's bounded threadpool
 (design F-4): the durable spool write does an fsync + atomic rename per
@@ -22,6 +29,7 @@ from azazel_knowledge.api import limits
 from azazel_knowledge.api.app import AuthContext, read_raw_body, require_scope_dep
 from azazel_knowledge.api.contracts import (
     IngestBatchInvalid,
+    fabric_outcome_evidence_lines,
     maybe_fabric_batch_lines,
     maybe_fabric_engagement_lines,
 )
@@ -58,6 +66,12 @@ def _accept(
         batch_lines = maybe_fabric_batch_lines(raw_body, endpoint)
         if batch_lines is None:
             batch_lines = maybe_fabric_engagement_lines(raw_body, endpoint)
+        if batch_lines is None:
+            # Returns `None` only off its own endpoint -- `/v1/outcome-evidence`
+            # has no legacy per-line path to fall through to, so a body that is
+            # not a valid Fabric envelope raises instead of being spooled
+            # unvalidated.
+            batch_lines = fabric_outcome_evidence_lines(raw_body, endpoint)
     except IngestBatchInvalid:
         raise HTTPException(
             status_code=422, detail={"error": "ingest_batch_invalid"}
@@ -111,6 +125,30 @@ def post_engagement_events(
     """
 
     return _accept(request, auth, raw_body, "engagement-events")
+
+
+@router.post(
+    "/outcome-evidence", status_code=202, response_model=IngestAcceptedResponse
+)
+def post_outcome_evidence(
+    request: Request, raw_body: bytes = _RAW_BODY, auth: AuthContext = _INGEST_SCOPE
+) -> IngestAcceptedResponse:
+    """Ingest Outcome-as-Evidence facts (Azazel-Fabric `outcome_contracts`, R1c).
+
+    Azazel-Edge exports the four Fabric records with "deliberately no
+    fallback"; this is the reader. The body is a
+    `{"items": [...]}` envelope whose every item is type-enforced against the
+    Fabric model its own `schema_version` names, and there is no unvalidated
+    path in: `422` for anything the contract rejects, `413` on the byte cap,
+    `503` on quota, as with every other ingest endpoint.
+
+    Storing these facts is memory. The four records are kept separate on
+    purpose -- execution, mechanism, observation and assessment -- so that
+    nothing here can be read as a verdict that the action worked. Knowledge
+    does not supply one, and the contract has nowhere to put one.
+    """
+
+    return _accept(request, auth, raw_body, "outcome-evidence")
 
 
 @router.post("/reactions", status_code=202, response_model=IngestAcceptedResponse)

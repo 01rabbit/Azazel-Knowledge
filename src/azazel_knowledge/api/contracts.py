@@ -62,6 +62,19 @@ from azazel_fabric.deception_contracts import (
     assert_no_runtime_directives,
 )
 from azazel_fabric.engagement_contracts import EngagementAdvisory, EngagementEvent
+from azazel_fabric.outcome_contracts import (
+    ExecutionRefV0,
+    MechanismObservationV0,
+    OutcomeObservationV0,
+    TacticalEffectAssessmentRefV0,
+)
+# Aliased, and deliberately not reusing the `assert_no_runtime_directives`
+# already imported above from `deception_contracts`: the two are *different
+# functions* over different banned sets, and the outcome contracts' own walk
+# is the one that defines what a directive is on an outcome record.
+from azazel_fabric.outcome_contracts import (
+    assert_no_runtime_directives as assert_no_outcome_runtime_directives,
+)
 from azazel_fabric.schema.defensive_state import coerce_defensive_state
 
 __all__ = [
@@ -72,6 +85,7 @@ __all__ = [
     "classify_reported_defensive_state",
     "maybe_fabric_batch_lines",
     "maybe_fabric_engagement_lines",
+    "fabric_outcome_evidence_lines",
     "maybe_fabric_observation_lines",
     "build_effectiveness_advisory",
     "assert_response_advisory_only",
@@ -289,6 +303,99 @@ def maybe_fabric_engagement_lines(raw_body: bytes, endpoint: str) -> list[str] |
         line["_envelope_edge_id"] = edge_id
         line["_envelope_actor_key"] = actor_key
         lines.append(json.dumps(line, sort_keys=True))
+
+    return lines
+
+
+# Azazel-Fabric's four Outcome-as-Evidence records, keyed by the
+# `schema_version` each one pins as a `Literal`. The key is read off the item
+# rather than declared by the envelope: a batch is a mixed chain (execution,
+# then the mechanism/outcome/assessment facts that reference it), so one
+# envelope-level type would either split the chain across four requests or
+# force the envelope to lie about three quarters of its contents.
+_OUTCOME_MODELS: dict[str, type[BaseModel]] = {
+    "outcome-execution/v0.1": ExecutionRefV0,
+    "outcome-mechanism/v0.1": MechanismObservationV0,
+    "outcome-observation/v0.1": OutcomeObservationV0,
+    "tactical-effect-assessment/v0.1": TacticalEffectAssessmentRefV0,
+}
+
+
+def fabric_outcome_evidence_lines(raw_body: bytes, endpoint: str) -> list[str] | None:
+    """Return JSONL lines for an outcome-evidence batch, or `None` off-endpoint.
+
+    Azazel-Edge's `outcome/shared_export.py` builds these four Fabric models
+    and dumps them, with "deliberately no fallback" -- a record Fabric did not
+    validate must not travel as one that it did. This is the reader that holds
+    up the other end of that statement.
+
+    **Unlike every other ingest lane, this one has no legacy path.** The
+    `Cti<Kind>Batch` and deception endpoints predate Fabric and carry
+    documented per-line JSONL callers, so there `None` means "fall through to
+    the line splitter". `/v1/outcome-evidence` is new and has no such caller,
+    so admitting a non-envelope body would be manufacturing a legacy on
+    purpose -- and a lane where the contract is optional is a lane where the
+    consumption is optional. A body that is not a valid envelope of
+    Fabric-valid items fails closed (`IngestBatchInvalid` -> `422`).
+
+    `None` is returned only for a different endpoint, so the caller's
+    fall-through never applies to this one.
+
+    What travels onward is `model_dump(mode="json")`, not the caller's bytes:
+    the fields Fabric defaults (`evidence_refs`, `limitations`, the fact maps,
+    and the pinned `schema_version`/`authority_class` literals) are then
+    present explicitly, which is what the drain's storage rules require.
+    """
+
+    if endpoint != "outcome-evidence":
+        return None
+
+    text = raw_body.decode("utf-8", errors="replace").strip()
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise IngestBatchInvalid(f"body must be a JSON object: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise IngestBatchInvalid("body must be a JSON object")
+    items = obj.get("items")
+    if not isinstance(items, list):
+        raise IngestBatchInvalid("envelope 'items' must be a list")
+
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise IngestBatchInvalid("envelope item must be an object")
+        schema_version = item.get("schema_version")
+        model = _OUTCOME_MODELS.get(schema_version) if isinstance(schema_version, str) else None
+        if model is None:
+            # Not "unknown, so pass it through and let the drain judge": an
+            # item whose `schema_version` this boundary does not recognize is
+            # an item no Fabric model validated, and the whole point of this
+            # lane is that nothing else gets in.
+            raise IngestBatchInvalid(
+                f"unsupported outcome evidence schema_version: {schema_version!r}"
+            )
+        try:
+            # A backstop, and today an unreachable one: every model in this
+            # contract runs `assert_no_runtime_directives` over its own dumped
+            # payload in a `model_validator`, so a directive is refused below
+            # whether or not this line is here -- including one buried in the
+            # free-form `dict[str, Any]` fact maps (`observed_parameters`,
+            # `observation_values`, `telemetry_coverage`, `resource_impact`)
+            # that `extra="forbid"` does not look inside.
+            #
+            # It is kept because what makes it unreachable is Fabric's
+            # decision to walk its own payload, not anything this boundary
+            # controls, and a contract that dropped that validator would
+            # otherwise start admitting directives here silently.
+            # `test_the_contract_walks_its_own_payload_for_directives` fails
+            # on the day that changes, so the backstop cannot become the only
+            # thing standing without anyone noticing.
+            assert_no_outcome_runtime_directives(item)
+            record = model.model_validate(item)
+        except (ValidationError, ValueError) as exc:
+            raise IngestBatchInvalid(str(exc)) from exc
+        lines.append(json.dumps(record.model_dump(mode="json"), sort_keys=True))
 
     return lines
 

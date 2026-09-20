@@ -173,6 +173,7 @@ identified", or "autonomous intrusion proven"; preferred wording is
 | `POST /v1/reactions` | delay history: action applied + observed attacker reaction |
 | `POST /v1/deception-observations` | AZ-06 fact-only deception observations (Fabric `InteractionObservation`; ADR-0011) |
 | `POST /v1/engagement-events` | AZ-01 engagement records (Fabric `EngagementEvent`; Azazel-Fabric#23 R1c) |
+| `POST /v1/outcome-evidence` | Outcome-as-Evidence facts (Fabric `outcome_contracts`; R1c). **Envelope only — no legacy JSONL path** |
 | TAXII 2.1 inbox | STIX bundles from the existing Azazel-Edge push client (#248) |
 
 Responses are `202 Accepted` with a batch id; validation problems are
@@ -287,6 +288,59 @@ Reading an event gives Knowledge nothing it can run. The contract is
 descriptive ("this contract never re-runs the action"), the lane has no
 executable-shaped column, and a directive-shaped field anywhere in a record is
 refused.
+
+### `POST /v1/outcome-evidence` (Fabric `outcome_contracts`, R1c)
+
+Ingest of the four Outcome-as-Evidence records. Azazel-Edge's
+`outcome/shared_export.py` builds them from Fabric's models and dumps them
+with, in its own words, "deliberately no fallback" — a record Fabric did not
+validate must never travel as one that it did. This is the boundary that holds
+up the other end.
+
+`202` with a `batch_id`, `413` on the byte cap, `503` on quota, `422` for
+anything the contract rejects. INGEST scope.
+
+**This endpoint has no legacy JSONL path.** Every other ingest endpoint falls
+through to the per-line splitter for a body it does not recognize, because
+each has callers older than Fabric. This one has none, so a non-envelope body
+is a `422` rather than a quietly spooled line — a lane where the contract is
+optional is a lane where the consumption is optional.
+
+```json
+{
+  "items": [
+    { "schema_version": "outcome-execution/v0.1", "...": "..." },
+    { "schema_version": "outcome-mechanism/v0.1", "...": "..." },
+    { "schema_version": "outcome-observation/v0.1", "...": "..." },
+    { "schema_version": "tactical-effect-assessment/v0.1", "...": "..." }
+  ]
+}
+```
+
+Each item is type-enforced against the Fabric model its own `schema_version`
+names; an unrecognized `schema_version` is refused rather than passed on for
+the drain to judge. What travels onward is `model_dump(mode="json")`, so the
+fields Fabric defaults (`evidence_refs`, `limitations`, the fact maps, the
+pinned `schema_version`/`authority_class` literals) are explicit by the time
+storage dereferences them.
+
+**Four separate records, so that none of them is a verdict.** Execution,
+mechanism, observation and assessment are stored apart on purpose: no row in
+this lane answers "did it work". A tactical conclusion is legal in exactly one
+place — the assessment record, pinned non-executable — and `effect_class`,
+`tactical_effect`, `effectiveness` or `initiative_score` inside a descriptive
+fact map is refused at the boundary and again at the drain.
+
+**A batch is a chain, and its facts are a set joined by reference.** A
+mechanism, outcome or assessment fact is refused until the execution it names
+is stored, so facts are inserted in dependency order regardless of the order
+they arrived in. A fact whose `execution_ref` is dangling, or that joins
+across traces, is quarantined alone (`GET /v1/ingest/{batch_id}` `invalid[]`)
+and the rest of the batch is still stored.
+
+Rows are append-only (Absolute Constraint 5). Redelivery of the same fact is a
+no-op; reusing an identity with *different* canonical bytes is refused rather
+than ignored, so a rewrite cannot pass as a replay.
 
 ### `POST /v1/deception-observations` (AZ-06, ADR-0011)
 
