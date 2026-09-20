@@ -1,9 +1,30 @@
 """Strict append-only Outcome-as-Evidence v0 storage helpers.
 
-This module intentionally does not depend on a live Fabric package version.
-It validates the ratification candidate wire shapes byte-for-byte, stores facts,
-and can export a deterministic trajectory bundle. It never creates authority or
-turns observations into success/causal claims.
+This module does not import `azazel_fabric`, and must not: the dependency
+lives in the `api` optional extra and never leaks into `db/`, `core/`,
+`scoring/`, or `correlate/` (Absolute Constraint 7). The worker drains this
+lane, and the worker runs without the api extra installed.
+
+So the wire shapes below are a **second statement** of what Azazel-Fabric's
+`outcome_contracts` say. That is a drift hazard, not a design preference --
+the same one Azazel-Edge#413 removed on the producer side, where the shapes
+had been "byte-for-byte identical to Fabric's models by coincidence of
+maintenance rather than by construction". The coincidence is no longer left
+to maintenance here either: `tests/unit/test_outcome_contract_drift.py` pins
+`_SPECS` field-for-field against `ExecutionRefV0`, `MechanismObservationV0`,
+`OutcomeObservationV0` and `TacticalEffectAssessmentRefV0`, pins every closed
+vocabulary against the corresponding `Literal`, and requires this module's
+refusals to be a superset of Fabric's. A divergence is a red test, not a
+slow drift.
+
+Where the two differ deliberately, this module is **stricter, never looser**:
+Fabric defaults `evidence_refs`, `limitations` and the fact maps, while a row
+reaching storage must carry them explicitly. The drift guard enforces the
+direction, not equality, so "Knowledge is stricter" cannot quietly become
+"Knowledge is looser".
+
+It stores facts and can export a deterministic trajectory bundle. It never
+creates authority or turns observations into success/causal claims.
 """
 
 from __future__ import annotations
@@ -23,7 +44,14 @@ _BANNED_KEYS = {
     "select_action", "selected_action", "model_recommendation", "attacker_belief",
     "success", "successful",
 }
-_TACTICAL_CLAIM_KEYS = {"effect_class", "tactical_effect"}
+# Kept a superset of Fabric's `_TACTICAL_CLAIM_KEYS`, pinned by the drift
+# guard. `effectiveness` and `initiative_score` are here because Fabric added
+# them: a producer that cannot say `tactical_effect` in a descriptive fact map
+# must not be able to say `effectiveness: 0.9` instead and mean the same
+# thing.
+_TACTICAL_CLAIM_KEYS = {
+    "effect_class", "tactical_effect", "effectiveness", "initiative_score",
+}
 _ALLOWED_MECHANISMS = {
     "traffic_shaping", "redirection", "isolation", "notification",
     "observation_only", "unknown",
@@ -31,6 +59,19 @@ _ALLOWED_MECHANISMS = {
 _ALLOWED_TACTICAL_EFFECTS = {
     "delay", "divert", "containment", "isolation", "observe", "restore",
 }
+# Lifted out of `_validate_shape` so the drift guard can compare them against
+# Fabric's `Literal`s directly. Inline as set literals they were checkable
+# only by feeding values through, which catches a value Fabric has and this
+# module lost -- but not a value this module *gained*, and a vocabulary that
+# has quietly grown an extra member is the looser of the two failures.
+_ALLOWED_EXECUTION_STATUSES = {
+    "applied", "partial", "failed", "rejected", "unverified", "released",
+}
+_ALLOWED_MECHANISM_STATUSES = {
+    "observed", "not_observed", "unverified", "released", "stale", "disputed",
+}
+_ALLOWED_PHASES = {"before", "during", "after"}
+_ALLOWED_ASSESSMENTS = {"supported", "unsupported", "inconclusive"}
 _MAX_DEPTH = 6
 _MAX_MAP = 64
 _MAX_LIST = 128
@@ -158,17 +199,36 @@ def _walk(value: Any, depth: int = 0) -> None:
     raise OutcomeMemoryError(f"unsupported fact type: {type(value).__name__}")
 
 
+def _is_tactical_claim_key(raw: str) -> bool:
+    """Mirror of Fabric's `_is_tactical_claim_key` (pinned by the drift guard).
+
+    Exact-match alone is not enough: `observed_tactical_effect` and
+    `redirect_effectiveness` are the same claim wearing a prefix, and a guard
+    that only compares whole keys reads them as ordinary descriptive fields.
+    """
+
+    key = _normalized_key(raw)
+    return (
+        key in _TACTICAL_CLAIM_KEYS
+        or "effect_class" in key
+        or "tactical_effect" in key
+        or key.startswith("initiative_score")
+        or key.endswith("_effectiveness")
+    )
+
+
 def _assert_no_tactical_claim_fields(value: Any) -> None:
     """Reject tactical conclusions inside mechanism/outcome free-form fact maps.
 
     Tactical effect is legal only in the dedicated assessment contract.  A
-    producer must not smuggle ``effect_class`` / ``tactical_effect`` (including
-    punctuation/case variants) into descriptive mechanism or outcome payloads.
+    producer must not smuggle ``effect_class`` / ``tactical_effect`` /
+    ``effectiveness`` / ``initiative_score`` (including punctuation/case and
+    affix variants) into descriptive mechanism or outcome payloads.
     """
 
     if isinstance(value, Mapping):
         for raw_key, child in value.items():
-            if isinstance(raw_key, str) and _normalized_key(raw_key) in _TACTICAL_CLAIM_KEYS:
+            if isinstance(raw_key, str) and _is_tactical_claim_key(raw_key):
                 raise OutcomeMemoryError(f"tactical claim field is forbidden in fact map: {raw_key}")
             _assert_no_tactical_claim_fields(child)
     elif isinstance(value, (list, tuple)):
@@ -259,7 +319,7 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
     if schema == "outcome-execution/v0.1":
         _non_empty_str(payload, "action")
         _optional_str(payload, "release_ref")
-        if payload["status"] not in {"applied", "partial", "failed", "rejected", "unverified", "released"}:
+        if payload["status"] not in _ALLOWED_EXECUTION_STATUSES:
             raise OutcomeMemoryError("invalid execution status")
         if payload["authority_class"] != "producer_execution_fact":
             raise OutcomeMemoryError("invalid execution authority class")
@@ -269,7 +329,7 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
         _list_of_strings(payload, "limitations")
         if payload["mechanism_kind"] not in _ALLOWED_MECHANISMS:
             raise OutcomeMemoryError("invalid mechanism kind")
-        if payload["status"] not in {"observed", "not_observed", "unverified", "released", "stale", "disputed"}:
+        if payload["status"] not in _ALLOWED_MECHANISM_STATUSES:
             raise OutcomeMemoryError("invalid mechanism status")
         if payload["authority_class"] != "producer_mechanism_fact":
             raise OutcomeMemoryError("invalid mechanism authority class")
@@ -283,7 +343,7 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
             fact_map = _mapping(payload, field)
             _assert_no_tactical_claim_fields(fact_map)
         _list_of_strings(payload, "confounders")
-        if payload["phase"] not in {"before", "during", "after"}:
+        if payload["phase"] not in _ALLOWED_PHASES:
             raise OutcomeMemoryError("invalid outcome phase")
         if payload["authority_class"] != "producer_outcome_fact":
             raise OutcomeMemoryError("invalid outcome authority class")
@@ -295,13 +355,32 @@ def _validate_shape(payload: Mapping[str, Any]) -> dict[str, Any]:
         _list_of_strings(payload, "limitations")
         if payload["tactical_effect"] not in _ALLOWED_TACTICAL_EFFECTS:
             raise OutcomeMemoryError("invalid tactical effect")
-        if payload["assessment"] not in {"supported", "unsupported", "inconclusive"}:
+        if payload["assessment"] not in _ALLOWED_ASSESSMENTS:
             raise OutcomeMemoryError("invalid tactical assessment")
         if payload["executable"] is not False:
             raise OutcomeMemoryError("tactical assessment must be non-executable")
         if payload["authority_class"] != "producer_assessment_fact":
             raise OutcomeMemoryError("invalid assessment authority class")
     return spec
+
+
+def validate_outcome_fact(payload: Mapping[str, Any]) -> str:
+    """Validate one fact's shape and vocabulary without a database.
+
+    This is the half of `ingest_outcome_fact` that needs no connection: field
+    set, required fields, bounded payload, closed vocabularies and the
+    authority-class pins. The evidence-chain checks (does the referenced
+    execution exist, does it belong to the same trace) need stored rows and
+    stay in `ingest_outcome_fact`.
+
+    The split exists so the spool drain can quarantine a structurally bad
+    *line* before opening a write transaction, without a second
+    implementation of the shape rules living in `ingest/`. Returns the fact's
+    `schema_version`; raises `OutcomeMemoryError` on any violation.
+    """
+
+    _validate_shape(payload)
+    return str(payload["schema_version"])
 
 
 def _chain_tuple(payload: Mapping[str, Any]) -> tuple[str, str, str]:
