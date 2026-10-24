@@ -358,14 +358,13 @@ def test_corrupt_payload_fixture_raises_a_confidence(fixture_dir):
 
 
 def test_corrupt_truncated_fixture_fails_at_the_archive_gate(fixture_dir, tmp_path):
-    """The container gate, which produces no BUNDLE_* code at all.
+    """The container gate, refused as `BUNDLE_ARCHIVE_UNREADABLE`.
 
-    This is the fact the fixture exists to hand a consumer: a reader that
-    catches only `BundleVerifyError` lets a truncated artifact through as an
-    unhandled error. Asserted as "not a BundleVerifyError, and a
-    tarfile.ReadError" rather than as "it raised something", because "it
-    raised" would stay true if the failure moved to an entirely different
-    cause.
+    The tar decoder gives up first; the verifier wraps that as a
+    `BundleVerifyError` with its own code and keeps the decoder error as the
+    cause. Asserted as "this code, with a tarfile.TarError cause" rather than
+    as "it raised something", because "it raised" would stay true if the
+    failure moved to an entirely different cause.
     """
     corrupt = fixture_dir / "negative/corrupt-truncated.tar.gz"
     assert len(gzip.decompress(corrupt.read_bytes())) < len(
