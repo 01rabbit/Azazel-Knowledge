@@ -49,8 +49,11 @@ gates, and which gate a consumer hit is the whole of the information:
   precisely what ADR-0015 D4 forbids ("bounding the data must not sharpen
   it").
 * `corrupt-truncated` fails at the **container** gate, in the tar decoder,
-  before the reader has an opinion about anything. It is the one that does not
-  produce a `BUNDLE_*` code at all -- see `negative.json`.
+  before the reader has an opinion about anything. The verifier wraps the
+  decoder error as `BundleVerifyError` with code `BUNDLE_ARCHIVE_UNREADABLE`
+  (the decoder error is kept as `__cause__`) -- see `negative.json`. A reader
+  should still treat ANY exception from verification as a refusal, not only
+  the verifier's own exception type.
 
 **"Expired" is not a corruption.** It is a perfectly valid, correctly signed
 artifact that passes every verification gate, and whose indicators have all
@@ -421,11 +424,13 @@ def _write_negative_index(out_dir: Path, paths: dict[str, Path], truncated_membe
                 "itself is intact, so the cut shows up at the tar layer. manifest.json and "
                 "manifest.sig are complete and verify, and every earlier content member is "
                 "complete, staged, and digest-checked before the decoder gives up -- a reader can "
-                "be holding fully verified content and must still promote none of it. NOTE FOR "
-                "READERS: this one does NOT produce a BUNDLE_* error code; the tar decoder raises "
-                "first. A reader that catches only the verifier's own exception type will let this "
-                "through as an unhandled error, so treat ANY exception from verification as a "
-                "refusal."
+                "be holding fully verified content and must still promote none of it. The "
+                "verifier wraps the tar decoder's error as BundleVerifyError with code "
+                "BUNDLE_ARCHIVE_UNREADABLE (the decoder error is kept as the cause). NOTE FOR "
+                "READERS: do not rely on that wrapping alone. A reader that catches only the "
+                "verifier's own exception type is one decoder change away from letting a "
+                "truncated artifact through as an unhandled error, so treat ANY exception from "
+                "verification as a refusal."
             ),
         },
         {

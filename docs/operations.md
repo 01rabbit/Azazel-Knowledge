@@ -200,8 +200,9 @@ against artifacts this node actually emits rather than against broken files
 they forged themselves: `corrupt-signature` (refused on trust, nothing
 staged), `corrupt-payload` (a raised confidence; every trust gate passes and
 only the per-member digest catches it, with bytes already in staging),
-`corrupt-truncated` (fails in the tar decoder, with **no** `BUNDLE_*` code —
-a reader must treat any exception as a refusal), `expired` (verifies cleanly;
+`corrupt-truncated` (fails in the tar decoder, refused as
+`BUNDLE_ARCHIVE_UNREADABLE` — a reader should still treat any exception as a
+refusal), `expired` (verifies cleanly;
 every indicator in it has passed its `agg_next_expiry`), and `absent` (a path
 the emitter guarantees stays empty). `negative.json` states, per fixture,
 which gate it hits and what a conforming reader should see.
