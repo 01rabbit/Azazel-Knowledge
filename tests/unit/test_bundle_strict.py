@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -267,6 +268,21 @@ def _azctl(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _resign_with_version(bundle: Path, key: SigningKey, version: int) -> None:
+    """The builder now refuses such a version, so the manifest is edited and re-signed."""
+    with tarfile.open(bundle, "r:gz") as archive:
+        members = [(m.name, archive.extractfile(m).read()) for m in archive.getmembers()]
+    manifest = json.loads(members[0][1])
+    manifest["bundle_version"] = version
+    raw = canonical_manifest_bytes(manifest)
+    line = f"{key.verify_key.encode().hex()[:8]}:{key.sign(raw).signature.hex()}\n".encode()
+    with tarfile.open(bundle, "w:gz") as archive:
+        for name, payload in (("manifest.json", raw), ("manifest.sig", line), *members[2:]):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+
 @pytest.mark.parametrize(
     "threshold, version, code",
     (
@@ -294,9 +310,11 @@ def test_azctl_bundle_import_refuses_with_the_verifier_code(
     bundle = tmp_path / "bundle.tar.gz"
     built = _azctl(
         "bundle", "build", "--source-db", str(source), "--out", str(bundle),
-        "--version", str(version), "--sign-key", str(key_file),
+        "--version", "1", "--sign-key", str(key_file),
     )
     assert built.returncode == 0, built.stderr
+    if version != 1:
+        _resign_with_version(bundle, key, version)
     verify_hex = key.verify_key.encode().hex()
     anchors = root / "secrets" / "trust" / "anchors.toml"
     anchors.write_text(
@@ -313,3 +331,100 @@ def test_azctl_bundle_import_refuses_with_the_verifier_code(
     assert code in result.stderr
     assert state.read_bytes() == state_before
     assert sorted(p.name for p in (root / "data" / "db").glob("gen-*")) == gens_before
+
+
+@pytest.mark.parametrize("base", (True, False, "1", 1.0, 0, -1, [], {}))
+def test_base_version_requires_null_or_a_positive_non_boolean_integer(
+    case: BundleCase, base: object
+) -> None:
+    case.assert_refused(case.bundle(extra={"base_version": base}), "BUNDLE_BASE_VERSION_INVALID")
+
+
+def test_null_base_is_a_mismatch_only_for_a_differential(case: BundleCase) -> None:
+    bundle = case.bundle(extra={"base_version": None})
+    if case.entrypoint == "differential":
+        case.assert_refused(bundle, "BUNDLE_BASE_MISMATCH")
+    else:
+        case.run(bundle)
+
+
+@pytest.mark.parametrize("flag, value", (("--version", "0"), ("--version", "-1"), ("--version", "x"),
+                                          ("--base", "0"), ("--base", "true")))
+def test_bundle_build_refuses_a_version_below_one(tmp_path: Path, flag: str, value: str) -> None:
+    key_file = tmp_path / "key.hex"
+    key_file.write_text(SigningKey.generate().encode().hex() + "\n", encoding="utf-8")
+    out = tmp_path / "bundle.tar.gz"
+    args = ["--version", "2", "--base", "1"]
+    args[args.index(flag) + 1] = value
+    for command in ("build", "build-lite"):
+        if command == "build-lite" and flag == "--base":
+            continue
+        result = subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "tools" / "bundle_build.py"), command,
+             "--source-db", str(tmp_path / "absent.db"), "--out", str(out),
+             "--sign-key", str(key_file), *(args if command == "build" else args[:2])],
+            capture_output=True, text=True, check=False,
+            env={**os.environ, "PYTHONPATH": str(_REPO_ROOT / "src")},
+        )
+        assert result.returncode == 2, (command, result.stderr)
+        assert flag in result.stderr
+        assert not out.exists()
+
+
+def _anchors_root(tmp_path: Path, body: str) -> tuple[Path, Path]:
+    root = tmp_path / "node"
+    assert _azctl("provision", "--root", str(root)).returncode == 0
+    anchors = root / "secrets" / "trust" / "anchors.toml"
+    anchors.write_text(body, encoding="utf-8")
+    return root, anchors
+
+
+def _hex() -> str:
+    return SigningKey.generate().verify_key.encode().hex()
+
+
+_TWO_KEYS = f'threshold = 1\nrevoked = []\n\n[keys]\nk1 = "{_hex()}"\nk2 = "{_hex()}"\n'
+_ROLE_KEYS = (
+    'threshold = 1\nrevoked = []\nrequired_signer_role = "lite"\nminimum_security_epoch = 3\n'
+    'accepted_export_policy_digests = ["p1"]\n\n'
+    f'[keys]\nk1 = "{_hex()}"\nk2 = "{_hex()}"\n\n[key_roles]\nk1 = "lite"\nk2 = "full"\n'
+)
+
+
+@pytest.mark.parametrize(
+    "body, command",
+    (
+        (_TWO_KEYS, ("keys", "set-threshold", "0")),
+        (_TWO_KEYS, ("keys", "set-threshold", "-1")),
+        (_TWO_KEYS, ("keys", "set-threshold", "3")),
+        (_ROLE_KEYS, ("keys", "set-threshold", "2")),
+        (_ROLE_KEYS, ("keys", "remove", "k1")),
+        (_ROLE_KEYS, ("keys", "remove", "k1", "--revoke")),
+        (f'threshold = 2\nrevoked = []\n\n[keys]\nk1 = "{_hex()}"\nk2 = "{_hex()}"\n',
+         ("keys", "remove", "k2", "--revoke")),
+        (f'threshold = 1.5\nrevoked = []\n\n[keys]\nk1 = "{_hex()}"\n', ("keys", "add", "k2", _hex())),
+    ),
+)
+def test_azctl_keys_refuses_to_write_an_unsatisfiable_anchor(
+    tmp_path: Path, body: str, command: tuple[str, ...]
+) -> None:
+    root, anchors = _anchors_root(tmp_path, body)
+    result = _azctl(*command[:2], "--root", str(root), *command[2:])
+    assert result.returncode != 0
+    assert "BUNDLE_ANCHORS_THRESHOLD_INVALID" in result.stderr
+    assert anchors.read_text(encoding="utf-8") == body
+
+
+def test_azctl_keys_keeps_the_consumer_policy_across_a_rewrite(tmp_path: Path) -> None:
+    root, anchors = _anchors_root(tmp_path, _ROLE_KEYS)
+    before = tomllib.loads(_ROLE_KEYS)
+    new_hex = _hex()
+    assert _azctl("keys", "add", "--root", str(root), "k3", new_hex).returncode == 0
+    assert _azctl("keys", "remove", "--root", str(root), "k2", "--revoke").returncode == 0
+    after = tomllib.loads(anchors.read_text(encoding="utf-8"))
+    for name in ("required_signer_role", "minimum_security_epoch",
+                 "accepted_export_policy_digests", "key_roles"):
+        assert after[name] == before[name]
+    assert after["keys"] == {"k1": before["keys"]["k1"], "k3": new_hex}
+    assert after["revoked"] == ["k2"]
+    assert _load_anchors(anchors).required_signer_role == "lite"

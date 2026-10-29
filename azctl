@@ -37,7 +37,7 @@ from azazel_knowledge.bundle.rollback_anchor import (  # noqa: E402
     mark_needs_full_rebaseline,
     read_state,
 )
-from azazel_knowledge.bundle.verify import peek_manifest  # noqa: E402
+from azazel_knowledge.bundle.verify import BundleVerifyError, anchors_from_document, peek_manifest  # noqa: E402
 from azazel_knowledge.audit.logger import MerkleAnchor, verify_anchors, verify_chain  # noqa: E402
 from azazel_knowledge.core.config import ConfigError, TrackedConfigLoader  # noqa: E402
 from azazel_knowledge.db import generations  # noqa: E402
@@ -129,11 +129,31 @@ def _audit_event(paths: WorkerPaths, stream: str, event: dict[str, Any]) -> None
 # --------------------------------------------------------------------------
 
 
-def _dump_anchors(threshold: int, keys: dict[str, str], revoked: list[str]) -> str:
-    lines = [f"threshold = {int(threshold)}", f"revoked = [{', '.join(json.dumps(r) for r in revoked)}]", ""]
+#: Consumer policy fields `azctl keys` does not edit but must carry across a
+#: rewrite: dropping `required_signer_role` would silently widen who may sign.
+_ANCHOR_POLICY_FIELDS = ("required_signer_role", "minimum_security_epoch", "accepted_export_policy_digests")
+
+
+def _dump_anchors(
+    threshold: int,
+    keys: dict[str, str],
+    revoked: list[str],
+    policy: dict[str, Any] | None = None,
+) -> str:
+    policy = policy or {}
+    lines = [f"threshold = {json.dumps(threshold)}", f"revoked = [{', '.join(json.dumps(r) for r in revoked)}]"]
+    for name in _ANCHOR_POLICY_FIELDS:
+        if name in policy:
+            lines.append(f"{name} = {json.dumps(policy[name])}")
+    lines.append("")
     lines.append("[keys]")
     for key_id, hex_key in keys.items():
         lines.append(f"{key_id} = {json.dumps(hex_key)}")
+    if policy.get("key_roles"):
+        lines.append("")
+        lines.append("[key_roles]")
+        for key_id, role in policy["key_roles"].items():
+            lines.append(f"{json.dumps(key_id)} = {json.dumps(role)}")
     return "\n".join(lines) + "\n"
 
 
@@ -599,25 +619,44 @@ def cmd_behavior_report(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
-def _read_anchors(anchors_path: Path) -> tuple[int, dict[str, str], list[str]]:
+def _read_anchors(anchors_path: Path) -> tuple[int, dict[str, str], list[str], dict[str, Any]]:
     import tomllib
 
     if not anchors_path.is_file():
-        return 1, {}, []
+        return 1, {}, [], {}
     with anchors_path.open("rb") as fh:
         doc = tomllib.load(fh)
-    return int(doc.get("threshold", 1)), dict(doc.get("keys", {})), list(doc.get("revoked", []))
+    policy = {name: doc[name] for name in (*_ANCHOR_POLICY_FIELDS, "key_roles") if name in doc}
+    threshold = doc.get("threshold", 1)
+    return threshold, dict(doc.get("keys", {})), list(doc.get("revoked", [])), policy
 
 
-def _write_anchors(anchors_path: Path, threshold: int, keys: dict[str, str], revoked: list[str]) -> None:
+def _write_anchors(
+    anchors_path: Path,
+    threshold: int,
+    keys: dict[str, str],
+    revoked: list[str],
+    policy: dict[str, Any] | None = None,
+) -> None:
+    import tomllib
+
+    text = _dump_anchors(threshold, keys, revoked, policy)
+    # The import path refuses an anchor no signature set can satisfy; refusing
+    # it here as well, before the file changes, keeps the node importable.
+    try:
+        anchors_from_document(tomllib.loads(text))
+    except BundleVerifyError as exc:
+        raise SystemExit(f"refusing to write {anchors_path}: {exc}") from None
+    except ValueError as exc:
+        raise SystemExit(f"refusing to write {anchors_path}: BUNDLE_ANCHORS_INVALID: {exc}") from None
     anchors_path.parent.mkdir(parents=True, exist_ok=True)
-    anchors_path.write_text(_dump_anchors(threshold, keys, revoked), encoding="utf-8")
+    anchors_path.write_text(text, encoding="utf-8")
     anchors_path.chmod(0o600)
 
 
 def cmd_keys_list(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    threshold, keys, revoked, _policy = _read_anchors(paths.anchors_path)
     print(f"threshold: {threshold}")
     print(f"keys ({len(keys)}):")
     for key_id, hex_key in keys.items():
@@ -628,9 +667,9 @@ def cmd_keys_list(args: argparse.Namespace) -> int:
 
 def cmd_keys_add(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    threshold, keys, revoked, policy = _read_anchors(paths.anchors_path)
     keys[args.key_id] = args.verify_key_hex
-    _write_anchors(paths.anchors_path, threshold, keys, revoked)
+    _write_anchors(paths.anchors_path, threshold, keys, revoked, policy)
     _audit_event(paths, "azctl", {"action": "keys_add", "key_id": args.key_id})
     print(f"added key {args.key_id!r}")
     return 0
@@ -638,11 +677,11 @@ def cmd_keys_add(args: argparse.Namespace) -> int:
 
 def cmd_keys_remove(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    threshold, keys, revoked = _read_anchors(paths.anchors_path)
+    threshold, keys, revoked, policy = _read_anchors(paths.anchors_path)
     keys.pop(args.key_id, None)
     if args.revoke and args.key_id not in revoked:
         revoked.append(args.key_id)
-    _write_anchors(paths.anchors_path, threshold, keys, revoked)
+    _write_anchors(paths.anchors_path, threshold, keys, revoked, policy)
     _audit_event(paths, "azctl", {"action": "keys_remove", "key_id": args.key_id, "revoked": args.revoke})
     print(f"removed key {args.key_id!r}" + (" (revoked)" if args.revoke else ""))
     return 0
@@ -650,8 +689,8 @@ def cmd_keys_remove(args: argparse.Namespace) -> int:
 
 def cmd_keys_set_threshold(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    _threshold, keys, revoked = _read_anchors(paths.anchors_path)
-    _write_anchors(paths.anchors_path, args.threshold, keys, revoked)
+    _threshold, keys, revoked, policy = _read_anchors(paths.anchors_path)
+    _write_anchors(paths.anchors_path, args.threshold, keys, revoked, policy)
     _audit_event(paths, "azctl", {"action": "keys_set_threshold", "threshold": args.threshold})
     print(f"threshold set to {args.threshold}")
     return 0

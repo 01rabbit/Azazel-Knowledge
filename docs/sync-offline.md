@@ -73,6 +73,24 @@ checks. Rejection precedes changes to the live generation or rollback state.
   advance it. A valid integer at or below the watermark still reports
   `BUNDLE_VERSION_REGRESSION`. This counter is separate from
   `bundle_format_version` and does not change the differential base contract.
+- **Base version.** `manifest.base_version` must be `null` (or absent) or a
+  JSON integer, excluding booleans, and at least `1`; otherwise verification
+  reports `BUNDLE_BASE_VERSION_INVALID`, for full bundles as well. The bound
+  is the same as `bundle_version`: a base names a version that was imported,
+  and no imported version is below `1`. A differential still needs a base
+  equal to the watermark (`BUNDLE_BASE_MISMATCH`, also when it is `null`);
+  the comparison no longer coerces with `int()`.
+- **Builder and operator CLI.** `tools/bundle_build.py` (and `azctl bundle
+  build`) accept `--version` and `--base` only as integers `>= 1`.
+  `azctl keys add`, `keys remove` and `keys set-threshold` validate the
+  resulting anchor with the verifier's own rules before writing it and leave
+  the file unchanged on refusal (`BUNDLE_ANCHORS_THRESHOLD_INVALID` or
+  `BUNDLE_ANCHORS_INVALID`). To revoke the last eligible key, add its
+  replacement first. These commands carry `required_signer_role`,
+  `minimum_security_epoch`, `accepted_export_policy_digests` and
+  `[key_roles]` across a rewrite instead of dropping them. The template
+  `azctl provision` writes (`threshold = 1`, no keys) is not importable until
+  a key is added.
 - **Member paths.** The existing defaults remain: at most `256` members
   including the two metadata members, at most `8` path components, and at
   most `1024` UTF-8 bytes for a complete name. Additionally, **each component

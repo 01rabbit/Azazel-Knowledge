@@ -378,8 +378,8 @@ def test_import_full_wrong_kind_raises(env):
     _build(env["tmp_path"], env["source_db"], bundle_path, version=1, sign_keys=[env["key_path"]], kind="full")
     state_path = env["state_path"]
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text("last_imported_version = 0\n", encoding="utf-8")
+    state_path.write_text("last_imported_version = 1\n", encoding="utf-8")
     diff_bundle = env["tmp_path"] / "actually_diff.tar.gz"
-    _build(env["tmp_path"], env["source_db"], diff_bundle, version=2, sign_keys=[env["key_path"]], base=0, kind="differential")
+    _build(env["tmp_path"], env["source_db"], diff_bundle, version=2, sign_keys=[env["key_path"]], base=1, kind="differential")
     with pytest.raises(BundleImportError):
         import_full(diff_bundle, env["anchors_path"], env["state_path"], env["data_db_dir"])

@@ -257,8 +257,10 @@ def test_keys_add_list_remove_set_threshold(tmp_path):
     sk = SigningKey.generate()
     verify_hex = sk.verify_key.encode().hex()
     key_id = verify_hex[:8]
+    second_hex = SigningKey.generate().verify_key.encode().hex()
 
     _run("keys", "add", "--root", str(root), key_id, verify_hex)
+    _run("keys", "add", "--root", str(root), second_hex[:8], second_hex)
     list_result = _run("keys", "list", "--root", str(root))
     assert key_id in list_result.stdout
 
@@ -266,6 +268,7 @@ def test_keys_add_list_remove_set_threshold(tmp_path):
     list_result = _run("keys", "list", "--root", str(root))
     assert "threshold: 2" in list_result.stdout
 
+    _run("keys", "set-threshold", "--root", str(root), "1")
     _run("keys", "remove", "--root", str(root), key_id, "--revoke")
     list_result = _run("keys", "list", "--root", str(root))
     assert key_id not in list_result.stdout.split("revoked:")[0]

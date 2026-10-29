@@ -337,6 +337,17 @@ def cmd_build_lite(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_int(text: str) -> int:
+    """A bundle or base version: the verifier refuses anything below 1."""
+    try:
+        value = int(text, 10)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be an integer >= 1, got {value}")
+    return value
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     manifest = peek_manifest(args.bundle)
     print(json.dumps(manifest, indent=2, sort_keys=True))
@@ -350,8 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build", help="build and sign a bundle from a source intel.db")
     build.add_argument("--source-db", required=True)
     build.add_argument("--out", required=True)
-    build.add_argument("--version", type=int, required=True, dest="version")
-    build.add_argument("--base", type=int, default=None)
+    build.add_argument("--version", type=_positive_int, required=True, dest="version")
+    build.add_argument("--base", type=_positive_int, default=None)
     build.add_argument("--kind", choices=("full", "differential"), default=None)
     build.add_argument("--since", default=None)
     build.add_argument("--attack-version", default=None)
@@ -362,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
     lite = sub.add_parser("build-lite", help="build and sign a bounded Knowledge Lite bundle (ADR-0015)")
     lite.add_argument("--source-db", required=True)
     lite.add_argument("--out", required=True)
-    lite.add_argument("--version", type=int, required=True, dest="version")
+    lite.add_argument("--version", type=_positive_int, required=True, dest="version")
     lite.add_argument("--profile", required=True, choices=sorted(PROFILES))
     lite.add_argument("--export-policy", required=True, help="path to the YAML export policy")
     lite.add_argument("--alias-key-file", required=True, help="file holding the hex alias key")

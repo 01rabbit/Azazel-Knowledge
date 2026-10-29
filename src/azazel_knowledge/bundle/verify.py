@@ -228,6 +228,11 @@ def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
     path = Path(anchors_path)
     with path.open("rb") as fh:
         doc = tomllib.load(fh)
+    return anchors_from_document(doc)
+
+
+def anchors_from_document(doc: dict) -> TrustAnchors:
+    """Validate a parsed `anchors.toml`; `azctl keys` runs this before every write."""
     threshold = doc.get("threshold", 1)
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
         raise BundleVerifyError(
@@ -594,14 +599,20 @@ def _check_anti_rollback(manifest: dict, last_imported_version: int) -> None:
         raise BundleVerifyError(
             "BUNDLE_VERSION_INVALID", "bundle_version must be an integer >= 1 (not bool)"
         )
+    base_version = manifest.get("base_version")
+    if base_version is not None and (
+        not isinstance(base_version, int) or isinstance(base_version, bool) or base_version < 1
+    ):
+        raise BundleVerifyError(
+            "BUNDLE_BASE_VERSION_INVALID", "base_version must be null or an integer >= 1 (not bool)"
+        )
     if bundle_version <= last_imported_version:
         raise BundleVerifyError(
             "BUNDLE_VERSION_REGRESSION",
             f"bundle_version {bundle_version} <= last_imported_version {last_imported_version}",
         )
     if manifest["kind"] == "differential":
-        base_version = manifest.get("base_version")
-        if base_version is None or int(base_version) != last_imported_version:
+        if base_version is None or base_version != last_imported_version:
             raise BundleVerifyError(
                 "BUNDLE_BASE_MISMATCH",
                 f"differential base_version {base_version!r} != last_imported_version {last_imported_version}",
