@@ -50,6 +50,54 @@ remains deferred in S13 pending the dependency-minimality tradeoff noted in
   (anti-rollback), consistent with the signed-bundle rule in
   [architecture.md](architecture.md#security-boundary).
 
+### Verification limits and trust policy
+
+`verify_bundle`, the full importer (`import_full`, used by `azctl bundle
+import`), and the differential importer (`apply_differential`) share these
+checks. Rejection precedes changes to the live generation or rollback state.
+
+- **Anchor threshold.** `anchors.toml` may omit `threshold` (default `1`).
+  A declared value must be a TOML integer, excluding booleans, and at least
+  `1`; numeric strings and floats are refused. It must not exceed the number
+  of keys in `[keys]` whose IDs are absent from `revoked`. If
+  `required_signer_role` is set, it must also not exceed the number of those
+  non-revoked keys whose `[key_roles]` entry equals that role. A role entry
+  without a corresponding key does not count. Invalid or unsatisfiable
+  thresholds fail when the anchors are loaded with
+  `BUNDLE_ANCHORS_THRESHOLD_INVALID`, before signature verification.
+- **Content version.** `manifest.bundle_version` must be a JSON integer,
+  excluding booleans, and at least `1`; otherwise verification reports
+  `BUNDLE_VERSION_INVALID`. Numeric strings and floats are refused rather
+  than coerced. The lower bound follows the existing anti-rollback contract:
+  an unprovisioned node has watermark `0`, and every import must strictly
+  advance it. A valid integer at or below the watermark still reports
+  `BUNDLE_VERSION_REGRESSION`. This counter is separate from
+  `bundle_format_version` and does not change the differential base contract.
+- **Member paths.** The existing defaults remain: at most `256` members
+  including the two metadata members, at most `8` path components, and at
+  most `1024` UTF-8 bytes for a complete name. Additionally, **each component
+  is limited to `255` UTF-8 bytes**, for both directory names and filenames,
+  with `BUNDLE_MEMBER_COMPONENT_TOO_LONG` on overflow. This matches common
+  POSIX filesystem component limits and prevents a name shorter than the
+  overall cap from failing later as a filesystem error. All `manifest.files`
+  keys are checked before any content is extracted, even if the tar never
+  delivers that file; physical tar member names are checked too.
+  Nexus's Lite reader (`src/azazel_nexus/lite_bundle.py`) caps the *whole*
+  name at `200` characters and depth at `8`; it has no separate component
+  cap. Knowledge retains its existing whole-name limit for compatibility
+  with general bundles. Real builders emit `tables/<table>.jsonl` or
+  `deltas/<table>.jsonl`, well below both readers' limits.
+- **Manifest trust shadowing.** In addition to `threshold`, `keys`, `revoked`,
+  `anchors`, `trust`, `last_imported_version`, `last_import_at`,
+  `last_bundle_sha256`, and `needs_full_rebaseline`, the top-level fields
+  `key_roles`, `required_signer_role`, `minimum_security_epoch`, and
+  `accepted_export_policy_digests` are forbidden. These four align with
+  Nexus's trust-shadowing list and report the existing
+  `BUNDLE_SHADOWS_TRUST_ANCHOR` code, regardless of their values. Builders do
+  not emit these consumer policy fields. Artifact claims such as
+  `security_epoch` and `profile.selection_inputs.export_policy_digest`
+  remain permitted; only the external anchors decide whether to accept them.
+
 Transport is whatever the field allows: USB, SSD, or LAN copy from a
 better-connected site. The bundle builder runs on any online Azazel-Knowledge (formerly Azazel-CTI) node
 (or a plain workstation with the toolchain) — this is also the Phase 4

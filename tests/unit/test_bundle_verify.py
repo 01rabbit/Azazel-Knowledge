@@ -213,9 +213,10 @@ def test_all_invalid_signatures_rejected_even_with_threshold_key_ids_present(bun
 
 
 def test_revoked_signer_rejected(bundle_env):
+    _, spare_id, spare_hex = _keygen(bundle_env["tmp_path"], "spare")
     anchors_path = _anchors_toml(
         bundle_env["tmp_path"],
-        {bundle_env["key_id"]: bundle_env["verify_hex"]},
+        {bundle_env["key_id"]: bundle_env["verify_hex"], spare_id: spare_hex},
         threshold=1,
         revoked=(bundle_env["key_id"],),
     )
@@ -510,6 +511,7 @@ def _anchors_epoch(tmp_path: Path, bundle_env, *, minimum: int) -> Path:
 
 
 def _anchors_with_role(tmp_path: Path, key_id: str, verify_hex: str, *, key_role: str, required: str) -> Path:
+    spare = SigningKey.generate().verify_key.encode().hex()
     path = tmp_path / "anchors_role.toml"
     path.write_text(
         "threshold = 1\n"
@@ -517,8 +519,10 @@ def _anchors_with_role(tmp_path: Path, key_id: str, verify_hex: str, *, key_role
         f'required_signer_role = "{required}"\n'
         "\n[keys]\n"
         f'{key_id} = "{verify_hex}"\n'
+        f'spare = "{spare}"\n'
         "\n[key_roles]\n"
-        f'{key_id} = "{key_role}"\n',
+        f'{key_id} = "{key_role}"\n'
+        f'spare = "{required}"\n',
         encoding="utf-8",
     )
     return path
@@ -556,10 +560,13 @@ def test_valid_signature_from_the_wrong_role_is_refused(bundle_env, tmp_path):
 def test_key_with_no_declared_role_never_satisfies_a_required_role(bundle_env, tmp_path):
     """Silence is not permission: an unroled key cannot stand in for a role."""
     path = tmp_path / "anchors_noroles.toml"
+    spare = SigningKey.generate().verify_key.encode().hex()
     path.write_text(
         "threshold = 1\nrevoked = []\n"
         'required_signer_role = "knowledge-lite"\n'
-        f'\n[keys]\n{bundle_env["key_id"]} = "{bundle_env["verify_hex"]}"\n',
+        f'\n[keys]\n{bundle_env["key_id"]} = "{bundle_env["verify_hex"]}"\n'
+        f'spare = "{spare}"\n'
+        '\n[key_roles]\nspare = "knowledge-lite"\n',
         encoding="utf-8",
     )
     with pytest.raises(BundleVerifyError) as exc:
@@ -623,19 +630,18 @@ def test_epoch_gate_is_independent_of_anti_rollback(bundle_env, tmp_path):
 def test_manifest_cannot_supply_its_own_minimum_epoch(bundle_env, tmp_path):
     """The bundle may claim an epoch; it may not decide which epoch suffices.
 
-    Trust comes only from anchors (F-7). A manifest carrying its own minimum is
-    simply ignored, so a correctly signed artifact cannot lower the bar for
-    itself.
+    Trust comes only from anchors (F-7). A manifest carrying its own minimum
+    is refused as trust shadowing, even when correctly signed.
     """
     members = _read_all_members(bundle_env["bundle_path"])
     manifest = _decode_manifest(members)
     manifest["security_epoch"] = 1
-    manifest["minimum_security_epoch"] = 1  # must have no effect
+    manifest["minimum_security_epoch"] = 1
     _resign(bundle_env, tmp_path, members, manifest)
     anchors = _anchors_epoch(tmp_path, bundle_env, minimum=9)
     with pytest.raises(BundleVerifyError) as exc:
         verify_bundle(tmp_path / "resigned.tar.gz", anchors, bundle_env["state_path"], tmp_path / "staging")
-    assert exc.value.code == "BUNDLE_SECURITY_EPOCH_TOO_LOW"
+    assert exc.value.code == "BUNDLE_SHADOWS_TRUST_ANCHOR"
 
 
 # --- archive shapes a verifier must refuse ---------------------------------
@@ -1250,9 +1256,8 @@ def test_manifest_cannot_widen_the_set_of_accepted_policies(bundle_env, tmp_path
     """The bundle records which policy it used; it does not decide which are acceptable.
 
     Trust comes only from anchors (F-7). A manifest carrying its own
-    `accepted_export_policy_digests` is ignored, so a correctly signed artifact
-    cannot approve its own privacy rules -- otherwise any holder of a valid key
-    could export under any policy at all.
+    `accepted_export_policy_digests` is refused as trust shadowing, so a
+    correctly signed artifact cannot approve its own privacy rules.
     """
     bundle = _custom_bundle(
         bundle_env,
@@ -1267,7 +1272,7 @@ def test_manifest_cannot_widen_the_set_of_accepted_policies(bundle_env, tmp_path
     )
     with pytest.raises(BundleVerifyError) as exc:
         verify_bundle(bundle, anchors, bundle_env["state_path"], tmp_path / "staging")
-    assert exc.value.code == "BUNDLE_EXPORT_POLICY_NOT_ACCEPTED"
+    assert exc.value.code == "BUNDLE_SHADOWS_TRUST_ANCHOR"
 
 
 def test_anchors_may_accept_more_than_one_policy_digest(bundle_env, tmp_path):
