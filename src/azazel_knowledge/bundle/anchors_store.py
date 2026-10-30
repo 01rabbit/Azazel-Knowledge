@@ -100,10 +100,8 @@ def write_anchors_atomic(lock: AnchorsLock, text: str) -> None:
     if not (lock.held and lock.exclusive):
         raise AnchorsStoreError("anchors may only be written while holding the exclusive anchors lock")
     path = lock.anchors_path
-    if path.is_symlink():
-        raise AnchorsPathUnsafe(f"refusing to write through a symlink: {path}")
-    if path.exists():
-        _check_regular_single_link(path.lstat(), path)
+    if os.path.lexists(path):  # also a dangling symlink, which lstat reports as not regular
+        _check_regular_single_link(os.lstat(path), path)
     data = text.encode("utf-8")
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
