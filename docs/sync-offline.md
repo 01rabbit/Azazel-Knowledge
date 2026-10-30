@@ -80,17 +80,13 @@ checks. Rejection precedes changes to the live generation or rollback state.
   and no imported version is below `1`. A differential still needs a base
   equal to the watermark (`BUNDLE_BASE_MISMATCH`, also when it is `null`);
   the comparison no longer coerces with `int()`.
-- **Builder and operator CLI.** `tools/bundle_build.py` (and `azctl bundle
-  build`) accept `--version` and `--base` only as integers `>= 1`.
-  `azctl keys add`, `keys remove` and `keys set-threshold` validate the
-  resulting anchor with the verifier's own rules before writing it and leave
-  the file unchanged on refusal (`BUNDLE_ANCHORS_THRESHOLD_INVALID` or
-  `BUNDLE_ANCHORS_INVALID`). To revoke the last eligible key, add its
-  replacement first. These commands carry `required_signer_role`,
-  `minimum_security_epoch`, `accepted_export_policy_digests` and
-  `[key_roles]` across a rewrite instead of dropping them. The template
-  `azctl provision` writes (`threshold = 1`, no keys) is not importable until
-  a key is added.
+- **Builder.** `tools/bundle_build.py` (and `azctl bundle build`) accept
+  `--version` and `--base` only as integers `>= 1`.
+- **Anchor sealing.** `anchors.toml` may carry `sealed = true` (a boolean;
+  anything else is `BUNDLE_ANCHORS_INVALID`). A sealed anchor refuses every
+  bundle at load with `BUNDLE_ANCHORS_SEALED`, whatever its threshold and
+  keys say, so it is never wider than any unsealed anchor.
+
 - **Member paths.** The existing defaults remain: at most `256` members
   including the two metadata members, at most `8` path components, and at
   most `1024` UTF-8 bytes for a complete name. Additionally, **each component
@@ -120,6 +116,61 @@ Transport is whatever the field allows: USB, SSD, or LAN copy from a
 better-connected site. The bundle builder runs on any online Azazel-Knowledge (formerly Azazel-CTI) node
 (or a plain workstation with the toolchain) — this is also the Phase 4
 Regional CTI distribution mechanism.
+
+### Operator key management (`azctl keys`)
+
+`azctl keys` is the only writer of `anchors.toml`. Every subcommand validates
+the resulting document with the verifier's own rules before writing it and
+leaves the file unchanged on refusal (`BUNDLE_ANCHORS_THRESHOLD_INVALID` or
+`BUNDLE_ANCHORS_INVALID`). It carries `required_signer_role`,
+`minimum_security_epoch`, `accepted_export_policy_digests` and `[key_roles]`
+across every rewrite; removing a key also drops its role.
+
+| Command | Effect |
+|---|---|
+| `keys add <id> <hex> [--role R]` | add a key, optionally with its signer role |
+| `keys set-role <id> <R>` / `keys set-role <id> --clear` | give, change or clear a key's role (key must exist) |
+| `keys set-threshold <n>` | refused unless `n` is satisfiable |
+| `keys remove <id> [--revoke]` | never refused for leaving too few keys: seals instead (below) |
+| `keys unseal` | refused unless the anchor is satisfiable without the seal |
+| `keys list` | threshold, keys, revoked, required role, roles, seal |
+
+**Rotating a role-holding key** (no window without an eligible signer):
+
+```bash
+azctl keys add <new-id> <new-hex> --role <role>   # or: keys add, then keys set-role
+azctl keys remove <old-id> --revoke
+```
+
+**Emergency revocation with no replacement ready.** Revoke at once; if no
+eligible key set remains, the command writes the anchor sealed (threshold
+unchanged, still a positive integer), prints `anchors SEALED` and records
+`sealed: true` in the audit event. Every import now fails with
+`BUNDLE_ANCHORS_SEALED`. To reopen:
+
+```bash
+azctl keys remove <old-id> --revoke               # -> sealed
+azctl keys add <new-id> <new-hex> --role <role>   # still sealed
+azctl keys unseal                                 # refused until satisfiable
+```
+
+Adding keys never unseals implicitly; `keys unseal` is the explicit step.
+
+**Concurrency and durability.** Every `azctl keys` command holds an exclusive
+`flock` on `anchors.toml.lock` (a sibling file that is never replaced) from
+reading the anchors to writing them, so concurrent commands are serialised
+and none writes back a document read before another's revocation. Bundle
+import (`import_full`, `apply_differential`) holds the same lock shared from
+reading the anchors until the import is recorded in `state.toml`. The trust
+an import uses is therefore the anchors as of the moment it starts: an import
+already running when a revocation is issued completes under the old anchors
+and the revocation waits for it; every import that starts after the
+revocation command returns sees it. The anchors are written to a 0600 file
+created exclusively in the same directory, fsynced, renamed over
+`anchors.toml`, and the directory fsynced, so a crash leaves the old or the
+complete new document. A symlinked `anchors.toml` is refused, not followed.
+The template `azctl provision` writes (`threshold = 1`, no keys) is not
+importable until a key is added.
 
 ### Knowledge Lite — a bounded profile of the same bundle
 

@@ -537,3 +537,25 @@ def test_a_32g_artifact_builds_verifies_and_carries_its_own_ceilings(lite_env, t
     assert counts["rows"] > 0, "a 32g artifact with no rows would satisfy every ceiling vacuously"
     assert counts["rows"] <= declared.max_rows_total
     assert counts["datasets"] <= declared.max_datasets
+
+
+@pytest.mark.parametrize(
+    "version, message",
+    (
+        ("0", "argument --version: must be an integer >= 1, got 0"),
+        ("-1", "argument --version: must be an integer >= 1, got -1"),
+        ("x", "argument --version: not an integer: 'x'"),
+        ("1", None),
+    ),
+)
+def test_build_lite_takes_only_a_version_of_at_least_one(lite_env, tmp_path, version, message):
+    """Every other argument is valid, so only the version decides the outcome."""
+    out = tmp_path / "lite.tar.gz"
+    result = _build_lite(lite_env, out, **{"--version": version, "_expect_success": message is None})
+    if message is None:
+        assert result.returncode == 0, result.stderr
+        assert peek_manifest(out)["bundle_version"] == 1
+    else:
+        assert result.returncode == 2
+        assert message in result.stderr
+        assert not out.exists()

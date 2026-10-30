@@ -348,27 +348,34 @@ def test_null_base_is_a_mismatch_only_for_a_differential(case: BundleCase) -> No
         case.run(bundle)
 
 
-@pytest.mark.parametrize("flag, value", (("--version", "0"), ("--version", "-1"), ("--version", "x"),
-                                          ("--base", "0"), ("--base", "true")))
-def test_bundle_build_refuses_a_version_below_one(tmp_path: Path, flag: str, value: str) -> None:
+@pytest.mark.parametrize(
+    "flag, value, message",
+    (
+        ("--version", "0", "must be an integer >= 1, got 0"),
+        ("--version", "-1", "must be an integer >= 1, got -1"),
+        ("--version", "x", "not an integer: 'x'"),
+        ("--base", "0", "must be an integer >= 1, got 0"),
+        ("--base", "true", "not an integer: 'true'"),
+    ),
+)
+def test_bundle_build_refuses_a_version_below_one(
+    tmp_path: Path, flag: str, value: str, message: str
+) -> None:
     key_file = tmp_path / "key.hex"
     key_file.write_text(SigningKey.generate().encode().hex() + "\n", encoding="utf-8")
     out = tmp_path / "bundle.tar.gz"
     args = ["--version", "2", "--base", "1"]
     args[args.index(flag) + 1] = value
-    for command in ("build", "build-lite"):
-        if command == "build-lite" and flag == "--base":
-            continue
-        result = subprocess.run(
-            [sys.executable, str(_REPO_ROOT / "tools" / "bundle_build.py"), command,
-             "--source-db", str(tmp_path / "absent.db"), "--out", str(out),
-             "--sign-key", str(key_file), *(args if command == "build" else args[:2])],
-            capture_output=True, text=True, check=False,
-            env={**os.environ, "PYTHONPATH": str(_REPO_ROOT / "src")},
-        )
-        assert result.returncode == 2, (command, result.stderr)
-        assert flag in result.stderr
-        assert not out.exists()
+    result = subprocess.run(
+        [sys.executable, str(_REPO_ROOT / "tools" / "bundle_build.py"), "build",
+         "--source-db", str(tmp_path / "absent.db"), "--out", str(out),
+         "--sign-key", str(key_file), *args],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "PYTHONPATH": str(_REPO_ROOT / "src")},
+    )
+    assert result.returncode == 2, result.stderr
+    assert f"argument {flag}: {message}" in result.stderr
+    assert not out.exists()
 
 
 def _anchors_root(tmp_path: Path, body: str) -> tuple[Path, Path]:
@@ -398,10 +405,8 @@ _ROLE_KEYS = (
         (_TWO_KEYS, ("keys", "set-threshold", "-1")),
         (_TWO_KEYS, ("keys", "set-threshold", "3")),
         (_ROLE_KEYS, ("keys", "set-threshold", "2")),
-        (_ROLE_KEYS, ("keys", "remove", "k1")),
-        (_ROLE_KEYS, ("keys", "remove", "k1", "--revoke")),
-        (f'threshold = 2\nrevoked = []\n\n[keys]\nk1 = "{_hex()}"\nk2 = "{_hex()}"\n',
-         ("keys", "remove", "k2", "--revoke")),
+        (_ROLE_KEYS, ("keys", "set-role", "k1", "--clear")),
+        (_ROLE_KEYS, ("keys", "set-role", "k1", "full")),
         (f'threshold = 1.5\nrevoked = []\n\n[keys]\nk1 = "{_hex()}"\n', ("keys", "add", "k2", _hex())),
     ),
 )
@@ -422,9 +427,9 @@ def test_azctl_keys_keeps_the_consumer_policy_across_a_rewrite(tmp_path: Path) -
     assert _azctl("keys", "add", "--root", str(root), "k3", new_hex).returncode == 0
     assert _azctl("keys", "remove", "--root", str(root), "k2", "--revoke").returncode == 0
     after = tomllib.loads(anchors.read_text(encoding="utf-8"))
-    for name in ("required_signer_role", "minimum_security_epoch",
-                 "accepted_export_policy_digests", "key_roles"):
+    for name in ("required_signer_role", "minimum_security_epoch", "accepted_export_policy_digests"):
         assert after[name] == before[name]
+    assert after["key_roles"] == {"k1": "lite"}
     assert after["keys"] == {"k1": before["keys"]["k1"], "k3": new_hex}
     assert after["revoked"] == ["k2"]
     assert _load_anchors(anchors).required_signer_role == "lite"

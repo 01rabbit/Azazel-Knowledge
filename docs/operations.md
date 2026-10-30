@@ -106,6 +106,10 @@ azctl keys add <key_id> <verify_key_hex>
 azctl keys set-threshold 2   # require 2 of N signatures, once you have N >= 2 keys
 ```
 
+Signer roles, rotation, and emergency revocation (which seals the anchors
+until `azctl keys unseal`) are described in
+[sync-offline.md](sync-offline.md#operator-key-management-azctl-keys).
+
 ### Online: scheduled feed pulls
 
 The worker container's command in `ops/docker-compose.yml` already

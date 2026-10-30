@@ -232,7 +232,30 @@ def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
 
 
 def anchors_from_document(doc: dict) -> TrustAnchors:
-    """Validate a parsed `anchors.toml`; `azctl keys` runs this before every write."""
+    """The trust a bundle is judged under; a sealed anchor admits nothing."""
+    if anchors_sealed(doc):
+        raise BundleVerifyError(
+            "BUNDLE_ANCHORS_SEALED",
+            "anchors are sealed after the last eligible key was removed; every import is "
+            "refused until an operator registers a key and runs 'azctl keys unseal'",
+        )
+    return validate_anchor_document(doc)
+
+
+def anchors_sealed(doc: dict) -> bool:
+    sealed = doc.get("sealed", False)
+    if not isinstance(sealed, bool):
+        raise BundleVerifyError("BUNDLE_ANCHORS_INVALID", "sealed must be a boolean when present")
+    return sealed
+
+
+def validate_anchor_document(doc: dict, *, require_satisfiable: bool = True) -> TrustAnchors:
+    """Validate a parsed `anchors.toml`, ignoring `sealed`; `azctl keys` runs this before every write.
+
+    `require_satisfiable=False` is only for documents that will be written
+    sealed, which no import accepts whatever their threshold says.
+    """
+    anchors_sealed(doc)
     threshold = doc.get("threshold", 1)
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
         raise BundleVerifyError(
@@ -270,12 +293,12 @@ def anchors_from_document(doc: dict) -> TrustAnchors:
     revoked = frozenset(doc.get("revoked", []))
     key_roles = {str(k): str(v) for k, v in dict(doc.get("key_roles", {})).items()}
     active_keys = keys.keys() - revoked
-    if threshold > len(active_keys):
+    if require_satisfiable and threshold > len(active_keys):
         raise BundleVerifyError(
             "BUNDLE_ANCHORS_THRESHOLD_INVALID",
             f"threshold {threshold} exceeds the {len(active_keys)} non-revoked key(s)",
         )
-    if required_role is not None:
+    if require_satisfiable and required_role is not None:
         role_keys = {key_id for key_id in active_keys if key_roles.get(key_id) == required_role}
         if threshold > len(role_keys):
             raise BundleVerifyError(

@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from azazel_knowledge.bundle import rollback_anchor
+from azazel_knowledge.bundle.anchors_store import anchors_lock
 from azazel_knowledge.bundle.verify import VerifiedBundle, verify_bundle
 from azazel_knowledge.db import generations
 from azazel_knowledge.db.repository import apply_migrations
@@ -140,6 +141,21 @@ def import_full(
     *,
     staging_dir: str | Path | None = None,
 ) -> ImportResult:
+    # Shared anchors lock from verification until the import is recorded: a
+    # revocation (exclusive) waits for an import already under way and is
+    # seen by every import that starts after it (see anchors_store).
+    with anchors_lock(anchors_path, shared=True):
+        return _import_full(bundle_path, anchors_path, state_path, data_db_dir, staging_dir=staging_dir)
+
+
+def _import_full(
+    bundle_path: str | Path,
+    anchors_path: str | Path,
+    state_path: str | Path,
+    data_db_dir: str | Path,
+    *,
+    staging_dir: str | Path | None,
+) -> ImportResult:
     bundle_path = Path(bundle_path)
     data_db_dir = Path(data_db_dir)
     _assert_not_local_db(data_db_dir)
@@ -218,8 +234,21 @@ def apply_differential(
 
     `writer_conn` is a connection to the currently-live `intel.db`,
     owned by the caller (worker process); this function issues one
-    transaction per table batch and never touches `local.db`.
+    transaction per table batch and never touches `local.db`. The anchors
+    lock is held shared throughout, as in `import_full`.
     """
+    with anchors_lock(anchors_path, shared=True):
+        return _apply_differential(bundle_path, anchors_path, state_path, writer_conn, staging_dir=staging_dir)
+
+
+def _apply_differential(
+    bundle_path: str | Path,
+    anchors_path: str | Path,
+    state_path: str | Path,
+    writer_conn: sqlite3.Connection,
+    *,
+    staging_dir: str | Path | None,
+) -> ImportResult:
     bundle_path = Path(bundle_path)
     owns_staging = staging_dir is None
     staging_path = Path(staging_dir) if staging_dir is not None else Path(tempfile.mkdtemp(prefix="azazel-bundle-"))
