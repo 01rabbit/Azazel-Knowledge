@@ -156,6 +156,20 @@ azctl keys unseal                                 # refused until satisfiable
 
 Adding keys never unseals implicitly; `keys unseal` is the explicit step.
 
+**Audit.** A change that can widen what the node accepts -- `keys add`,
+`keys set-role <id> <R>`, lowering the threshold, `keys unseal` -- first
+appends an `intent` event (with an `op_id` and the change: key id, verify
+key, previous and new role or threshold) to the `azctl` audit chain and
+fsyncs it. If that record cannot be written durably the command is refused
+and the anchors are left unchanged. After the write a `done` event with the
+same `op_id` follows, or `aborted` if the write failed; an `intent` with
+neither means the command stopped in between, and the anchors show which way
+it went. A change that only narrows acceptance -- `keys remove` (with or
+without `--revoke`, including sealing), `keys set-role <id> --clear`, raising
+the threshold -- is never blocked by the audit sink, so an emergency
+revocation always goes through; its record is best-effort and a failure is
+printed as a warning.
+
 **Concurrency and durability.** Every `azctl keys` command holds an exclusive
 `flock` on `anchors.toml.lock` (a sibling file that is never replaced) from
 reading the anchors to writing them, so concurrent commands are serialised
@@ -168,7 +182,7 @@ and the revocation waits for it; every import that starts after the
 revocation command returns sees it. The anchors are written to a 0600 file
 created exclusively in the same directory, fsynced, renamed over
 `anchors.toml`, and the directory fsynced, so a crash leaves the old or the
-complete new document. A symlinked `anchors.toml` is refused, not followed.
+complete new document. `azctl provision` takes the same exclusive lock and creates the template only if nothing is at the anchors path once it holds it. The lock and the document must be the same file: readers and writers refuse an `anchors.toml` that is a symlink (`BUNDLE_ANCHORS_PATH_UNSAFE` on import, e.g. `azctl bundle import --anchors <alias>`) or has more than one hard link, since an alias would be read under a different lock.
 The template `azctl provision` writes (`threshold = 1`, no keys) is not
 importable until a key is added.
 

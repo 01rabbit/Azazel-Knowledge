@@ -71,6 +71,8 @@ from typing import BinaryIO
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from azazel_knowledge.bundle.anchors_store import AnchorsPathUnsafe, read_anchors_bytes
+
 LOCAL_TIER_TABLES: frozenset[str] = frozenset(
     {
         "reaction",
@@ -225,10 +227,14 @@ class TrustAnchors:
 
 
 def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
-    path = Path(anchors_path)
-    with path.open("rb") as fh:
-        doc = tomllib.load(fh)
-    return anchors_from_document(doc)
+    # Read without following a symlink and only from a single-link regular
+    # file, so the document is the one the anchors lock (keyed on this path)
+    # serialises; an alias would let an import bypass a revocation.
+    try:
+        raw = read_anchors_bytes(anchors_path)
+    except AnchorsPathUnsafe as exc:
+        raise BundleVerifyError("BUNDLE_ANCHORS_PATH_UNSAFE", str(exc)) from None
+    return anchors_from_document(tomllib.loads(raw.decode("utf-8")))
 
 
 def anchors_from_document(doc: dict) -> TrustAnchors:
