@@ -19,6 +19,7 @@ import hashlib
 import io
 import json
 import os
+import secrets
 import sqlite3
 import sys
 import tarfile
@@ -37,7 +38,14 @@ from azazel_knowledge.bundle.rollback_anchor import (  # noqa: E402
     mark_needs_full_rebaseline,
     read_state,
 )
-from azazel_knowledge.bundle.verify import peek_manifest  # noqa: E402
+from azazel_knowledge.bundle.anchors_store import (  # noqa: E402
+    AnchorsLock,
+    AnchorsStoreError,
+    anchors_lock,
+    read_anchors_bytes,
+    write_anchors_atomic,
+)
+from azazel_knowledge.bundle.verify import BundleVerifyError, peek_manifest, validate_anchor_document  # noqa: E402
 from azazel_knowledge.audit.logger import MerkleAnchor, verify_anchors, verify_chain  # noqa: E402
 from azazel_knowledge.core.config import ConfigError, TrackedConfigLoader  # noqa: E402
 from azazel_knowledge.db import generations  # noqa: E402
@@ -129,11 +137,33 @@ def _audit_event(paths: WorkerPaths, stream: str, event: dict[str, Any]) -> None
 # --------------------------------------------------------------------------
 
 
-def _dump_anchors(threshold: int, keys: dict[str, str], revoked: list[str]) -> str:
-    lines = [f"threshold = {int(threshold)}", f"revoked = [{', '.join(json.dumps(r) for r in revoked)}]", ""]
+#: Consumer policy fields `azctl keys` does not edit but must carry across a
+#: rewrite: dropping `required_signer_role` would silently widen who may sign.
+_ANCHOR_POLICY_FIELDS = ("required_signer_role", "minimum_security_epoch", "accepted_export_policy_digests")
+
+
+def _dump_anchors(
+    threshold: int,
+    keys: dict[str, str],
+    revoked: list[str],
+    policy: dict[str, Any] | None = None,
+) -> str:
+    policy = policy or {}
+    lines = [f"threshold = {json.dumps(threshold)}", f"revoked = [{', '.join(json.dumps(r) for r in revoked)}]"]
+    if "sealed" in policy and policy["sealed"] is not False:
+        lines.append(f"sealed = {json.dumps(policy['sealed'])}")
+    for name in _ANCHOR_POLICY_FIELDS:
+        if name in policy:
+            lines.append(f"{name} = {json.dumps(policy[name])}")
+    lines.append("")
     lines.append("[keys]")
     for key_id, hex_key in keys.items():
         lines.append(f"{key_id} = {json.dumps(hex_key)}")
+    if policy.get("key_roles"):
+        lines.append("")
+        lines.append("[key_roles]")
+        for key_id, role in policy["key_roles"].items():
+            lines.append(f"{json.dumps(key_id)} = {json.dumps(role)}")
     return "\n".join(lines) + "\n"
 
 
@@ -154,9 +184,7 @@ def cmd_provision(args: argparse.Namespace) -> int:
     else:
         print(f"node signing key already present: {paths.node_signing_key_path}")
 
-    if not paths.anchors_path.is_file():
-        paths.anchors_path.write_text(_dump_anchors(1, {}, []), encoding="utf-8")
-        paths.anchors_path.chmod(0o600)
+    if _provision_anchors(paths):
         print(f"wrote trust anchor template: {paths.anchors_path} (empty -- run 'azctl keys add')")
     else:
         print(f"trust anchors already present: {paths.anchors_path}")
@@ -595,65 +623,226 @@ def cmd_behavior_report(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
-# keys list|add|remove|set-threshold
+# keys list|add|remove|set-role|set-threshold|unseal
 # --------------------------------------------------------------------------
+#
+# Every writer holds the anchors lock exclusively from read to write, so two
+# commands cannot interleave and write back a document read before the other
+# finished (a lost revocation). Imports hold the same lock shared.
+#
+# Audit: a change that can widen what this node accepts (adding a key, giving
+# a role, lowering the threshold, unsealing) first records a durable (fsynced)
+# `intent` event and is refused, anchors unchanged, if that record cannot be
+# written; `done` or `aborted` with the same `op_id` follows. A change that
+# only narrows acceptance (removing or revoking a key, sealing, clearing a
+# role, raising the threshold) is never blocked by a broken audit sink, so an
+# emergency revocation always goes through; its record is best-effort.
 
 
-def _read_anchors(anchors_path: Path) -> tuple[int, dict[str, str], list[str]]:
+def _provision_anchors(paths: WorkerPaths) -> bool:
+    """Write the empty template only if nothing is there, deciding under the writer lock."""
+    paths.anchors_path.parent.mkdir(parents=True, exist_ok=True)
+    with anchors_lock(paths.anchors_path, shared=False) as lock:
+        if os.path.lexists(paths.anchors_path):
+            return False
+        write_anchors_atomic(lock, _dump_anchors(1, {}, []))
+        return True
+
+
+def _load_anchor_doc(anchors_path: Path) -> dict[str, Any]:
     import tomllib
 
-    if not anchors_path.is_file():
-        return 1, {}, []
-    with anchors_path.open("rb") as fh:
-        doc = tomllib.load(fh)
-    return int(doc.get("threshold", 1)), dict(doc.get("keys", {})), list(doc.get("revoked", []))
+    try:
+        raw = read_anchors_bytes(anchors_path)
+    except FileNotFoundError:
+        return {"threshold": 1, "revoked": [], "keys": {}}
+    except AnchorsStoreError as exc:
+        raise SystemExit(f"refusing to use {anchors_path}: {exc}") from None
+    return tomllib.loads(raw.decode("utf-8"))
 
 
-def _write_anchors(anchors_path: Path, threshold: int, keys: dict[str, str], revoked: list[str]) -> None:
-    anchors_path.parent.mkdir(parents=True, exist_ok=True)
-    anchors_path.write_text(_dump_anchors(threshold, keys, revoked), encoding="utf-8")
-    anchors_path.chmod(0o600)
+def _anchor_text(doc: dict[str, Any]) -> str:
+    policy = {name: doc[name] for name in (*_ANCHOR_POLICY_FIELDS, "key_roles", "sealed") if name in doc}
+    return _dump_anchors(
+        doc.get("threshold", 1), dict(doc.get("keys", {})), list(doc.get("revoked", [])), policy
+    )
+
+
+def _check_anchor_doc(doc: dict[str, Any]) -> str:
+    """Render and validate; a sealed document need not be satisfiable, since nothing imports under it."""
+    import tomllib
+
+    text = _anchor_text(doc)
+    parsed = tomllib.loads(text)
+    validate_anchor_document(parsed, require_satisfiable=parsed.get("sealed") is not True)
+    return text
+
+
+def _audit_intent(paths: WorkerPaths, event: dict[str, Any]) -> str:
+    """Durably record the intent of a trust-widening change, or refuse the change."""
+    from azazel_knowledge.audit.logger import AuditChain, AuditUnavailable
+
+    op_id = secrets.token_hex(8)
+    try:
+        chain = AuditChain(paths.audit_dir / "azctl", f"azctl-{os.getpid()}", "cli", lambda text: text)
+        try:
+            chain.append({**event, "phase": "intent", "op_id": op_id})
+            chain.flush()
+        finally:
+            chain.close()
+    except (AuditUnavailable, OSError) as exc:
+        raise SystemExit(
+            f"refusing to change {paths.anchors_path}: the audit intent could not be recorded "
+            f"durably ({exc}); anchors unchanged"
+        ) from None
+    return op_id
+
+
+def _save_anchor_doc(
+    lock: AnchorsLock,
+    paths: WorkerPaths,
+    doc: dict[str, Any],
+    event: dict[str, Any],
+    *,
+    widening: bool,
+) -> None:
+    try:
+        text = _check_anchor_doc(doc)
+    except BundleVerifyError as exc:
+        raise SystemExit(f"refusing to write {lock.anchors_path}: {exc}") from None
+    except ValueError as exc:
+        raise SystemExit(f"refusing to write {lock.anchors_path}: BUNDLE_ANCHORS_INVALID: {exc}") from None
+    op_id = _audit_intent(paths, event) if widening else None
+    try:
+        write_anchors_atomic(lock, text)
+    except BaseException as exc:
+        _audit_event(paths, "azctl", {**event, "phase": "aborted", "op_id": op_id, "error": str(exc)})
+        if isinstance(exc, AnchorsStoreError):
+            raise SystemExit(f"refusing to write {lock.anchors_path}: {exc}") from None
+        raise
+    _audit_event(paths, "azctl", {**event, "phase": "done", "op_id": op_id})
+
+
+@contextlib.contextmanager
+def _anchors_exclusive(paths: WorkerPaths):
+    paths.anchors_path.parent.mkdir(parents=True, exist_ok=True)
+    with anchors_lock(paths.anchors_path, shared=False) as lock:
+        yield lock
 
 
 def cmd_keys_list(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    threshold, keys, revoked = _read_anchors(paths.anchors_path)
-    print(f"threshold: {threshold}")
+    paths.anchors_path.parent.mkdir(parents=True, exist_ok=True)
+    with anchors_lock(paths.anchors_path, shared=True):
+        doc = _load_anchor_doc(paths.anchors_path)
+    keys = dict(doc.get("keys", {}))
+    print(f"threshold: {doc.get('threshold', 1)}")
     print(f"keys ({len(keys)}):")
     for key_id, hex_key in keys.items():
         print(f"  {key_id}: {hex_key}")
-    print(f"revoked: {revoked}")
+    print(f"revoked: {list(doc.get('revoked', []))}")
+    if doc.get("required_signer_role") is not None:
+        print(f"required_signer_role: {doc['required_signer_role']}")
+    for key_id, role in dict(doc.get("key_roles", {})).items():
+        print(f"role {key_id}: {role}")
+    if doc.get("sealed") is True:
+        print("sealed: true (every import is refused; register a key, then 'azctl keys unseal')")
     return 0
 
 
 def cmd_keys_add(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    threshold, keys, revoked = _read_anchors(paths.anchors_path)
-    keys[args.key_id] = args.verify_key_hex
-    _write_anchors(paths.anchors_path, threshold, keys, revoked)
-    _audit_event(paths, "azctl", {"action": "keys_add", "key_id": args.key_id})
-    print(f"added key {args.key_id!r}")
+    with _anchors_exclusive(paths) as lock:
+        doc = _load_anchor_doc(paths.anchors_path)
+        doc.setdefault("keys", {})[args.key_id] = args.verify_key_hex
+        if args.role is not None:
+            doc.setdefault("key_roles", {})[args.key_id] = args.role
+        event = {"action": "keys_add", "key_id": args.key_id, "verify_key": args.verify_key_hex, "role": args.role}
+        _save_anchor_doc(lock, paths, doc, event, widening=True)
+    print(f"added key {args.key_id!r}" + (f" with role {args.role!r}" if args.role is not None else ""))
+    return 0
+
+
+def cmd_keys_set_role(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    with _anchors_exclusive(paths) as lock:
+        doc = _load_anchor_doc(paths.anchors_path)
+        if args.key_id not in dict(doc.get("keys", {})):
+            raise SystemExit(f"unknown key {args.key_id!r}; add it first with 'azctl keys add'")
+        roles = doc.setdefault("key_roles", {})
+        previous = roles.get(args.key_id)
+        if args.clear:
+            roles.pop(args.key_id, None)
+        else:
+            roles[args.key_id] = args.role
+        event = {
+            "action": "keys_set_role", "key_id": args.key_id,
+            "previous_role": previous, "role": None if args.clear else args.role,
+        }
+        _save_anchor_doc(lock, paths, doc, event, widening=not args.clear)
+    print(f"key {args.key_id!r} " + ("has no role" if args.clear else f"has role {args.role!r}"))
     return 0
 
 
 def cmd_keys_remove(args: argparse.Namespace) -> int:
+    """Removal is never refused for leaving too few keys: it seals the anchors instead.
+
+    Refusing would keep a compromised key trusted. A sealed anchor admits no
+    bundle at all, which is narrower than any threshold.
+    """
     paths = _paths(args)
-    threshold, keys, revoked = _read_anchors(paths.anchors_path)
-    keys.pop(args.key_id, None)
-    if args.revoke and args.key_id not in revoked:
-        revoked.append(args.key_id)
-    _write_anchors(paths.anchors_path, threshold, keys, revoked)
-    _audit_event(paths, "azctl", {"action": "keys_remove", "key_id": args.key_id, "revoked": args.revoke})
+    sealed_now = False
+    with _anchors_exclusive(paths) as lock:
+        doc = _load_anchor_doc(paths.anchors_path)
+        doc.setdefault("keys", {}).pop(args.key_id, None)
+        if "key_roles" in doc:
+            doc["key_roles"].pop(args.key_id, None)
+        revoked = doc.setdefault("revoked", [])
+        if args.revoke and args.key_id not in revoked:
+            revoked.append(args.key_id)
+        if doc.get("sealed") is not True:
+            try:
+                _check_anchor_doc(doc)
+            except BundleVerifyError as exc:
+                if exc.code != "BUNDLE_ANCHORS_THRESHOLD_INVALID":
+                    raise SystemExit(f"refusing to write {paths.anchors_path}: {exc}") from None
+                doc["sealed"] = True
+                sealed_now = True
+        event = {"action": "keys_remove", "key_id": args.key_id, "revoked": args.revoke, "sealed": sealed_now}
+        _save_anchor_doc(lock, paths, doc, event, widening=False)
     print(f"removed key {args.key_id!r}" + (" (revoked)" if args.revoke else ""))
+    if sealed_now:
+        print(
+            "anchors SEALED: no eligible key set remains, so every import is refused "
+            "(BUNDLE_ANCHORS_SEALED). Register a key ('azctl keys add --role ...'), then "
+            "'azctl keys unseal'.",
+            file=sys.stderr,
+        )
     return 0
 
 
 def cmd_keys_set_threshold(args: argparse.Namespace) -> int:
     paths = _paths(args)
-    _threshold, keys, revoked = _read_anchors(paths.anchors_path)
-    _write_anchors(paths.anchors_path, args.threshold, keys, revoked)
-    _audit_event(paths, "azctl", {"action": "keys_set_threshold", "threshold": args.threshold})
+    with _anchors_exclusive(paths) as lock:
+        doc = _load_anchor_doc(paths.anchors_path)
+        previous = doc.get("threshold", 1)
+        doc["threshold"] = args.threshold
+        raising = isinstance(previous, int) and not isinstance(previous, bool) and args.threshold >= previous
+        event = {"action": "keys_set_threshold", "previous_threshold": previous, "threshold": args.threshold}
+        _save_anchor_doc(lock, paths, doc, event, widening=not raising)
     print(f"threshold set to {args.threshold}")
+    return 0
+
+
+def cmd_keys_unseal(args: argparse.Namespace) -> int:
+    paths = _paths(args)
+    with _anchors_exclusive(paths) as lock:
+        doc = _load_anchor_doc(paths.anchors_path)
+        if doc.get("sealed") is not True:
+            raise SystemExit("anchors are not sealed")
+        doc.pop("sealed")
+        _save_anchor_doc(lock, paths, doc, {"action": "keys_unseal"}, widening=True)
+    print("anchors unsealed")
     return 0
 
 
@@ -1007,7 +1196,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default=None)
     p.set_defaults(func=cmd_behavior_report)
 
-    keys = sub.add_parser("keys", help="keys list|add|remove|set-threshold")
+    keys = sub.add_parser("keys", help="keys list|add|remove|set-role|set-threshold|unseal")
     keys_sub = keys.add_subparsers(dest="keys_command", required=True)
 
     p = keys_sub.add_parser("list")
@@ -1018,7 +1207,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root_args(p)
     p.add_argument("key_id")
     p.add_argument("verify_key_hex")
+    p.add_argument("--role", default=None, help="signer role for this key ([key_roles])")
     p.set_defaults(func=cmd_keys_add)
+
+    p = keys_sub.add_parser("set-role")
+    _add_root_args(p)
+    p.add_argument("key_id")
+    role = p.add_mutually_exclusive_group(required=True)
+    role.add_argument("role", nargs="?", default=None)
+    role.add_argument("--clear", action="store_true")
+    p.set_defaults(func=cmd_keys_set_role)
+
+    p = keys_sub.add_parser("unseal")
+    _add_root_args(p)
+    p.set_defaults(func=cmd_keys_unseal)
 
     p = keys_sub.add_parser("remove")
     _add_root_args(p)

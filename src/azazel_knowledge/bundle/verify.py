@@ -71,6 +71,8 @@ from typing import BinaryIO
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from azazel_knowledge.bundle.anchors_store import AnchorsPathUnsafe, read_anchors_bytes
+
 LOCAL_TIER_TABLES: frozenset[str] = frozenset(
     {
         "reaction",
@@ -91,7 +93,10 @@ LOCAL_TIER_TABLES: frozenset[str] = frozenset(
 )
 
 _TRUST_ANCHOR_FIELDS: frozenset[str] = frozenset(
-    {"threshold", "keys", "revoked", "anchors", "trust"}
+    {
+        "threshold", "keys", "revoked", "anchors", "trust", "key_roles",
+        "required_signer_role", "minimum_security_epoch", "accepted_export_policy_digests",
+    }
 )
 _ROLLBACK_STATE_FIELDS: frozenset[str] = frozenset(
     {"last_imported_version", "last_import_at", "last_bundle_sha256", "needs_full_rebaseline"}
@@ -176,6 +181,9 @@ DEFAULT_MAX_MEMBER_DEPTH = 8
 #: around thirty bytes, so 1024 is generous while still bounded.
 DEFAULT_MAX_MEMBER_NAME_BYTES = 1024
 
+#: UTF-8 bytes per path component, matching common POSIX NAME_MAX limits.
+DEFAULT_MAX_MEMBER_COMPONENT_BYTES = 255
+
 _COPY_CHUNK = 256 * 1024
 
 
@@ -219,9 +227,46 @@ class TrustAnchors:
 
 
 def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
-    path = Path(anchors_path)
-    with path.open("rb") as fh:
-        doc = tomllib.load(fh)
+    # Read without following a symlink and only from a single-link regular
+    # file, so the document is the one the anchors lock (keyed on this path)
+    # serialises; an alias would let an import bypass a revocation.
+    try:
+        raw = read_anchors_bytes(anchors_path)
+    except AnchorsPathUnsafe as exc:
+        raise BundleVerifyError("BUNDLE_ANCHORS_PATH_UNSAFE", str(exc)) from None
+    return anchors_from_document(tomllib.loads(raw.decode("utf-8")))
+
+
+def anchors_from_document(doc: dict) -> TrustAnchors:
+    """The trust a bundle is judged under; a sealed anchor admits nothing."""
+    if anchors_sealed(doc):
+        raise BundleVerifyError(
+            "BUNDLE_ANCHORS_SEALED",
+            "anchors are sealed after the last eligible key was removed; every import is "
+            "refused until an operator registers a key and runs 'azctl keys unseal'",
+        )
+    return validate_anchor_document(doc)
+
+
+def anchors_sealed(doc: dict) -> bool:
+    sealed = doc.get("sealed", False)
+    if not isinstance(sealed, bool):
+        raise BundleVerifyError("BUNDLE_ANCHORS_INVALID", "sealed must be a boolean when present")
+    return sealed
+
+
+def validate_anchor_document(doc: dict, *, require_satisfiable: bool = True) -> TrustAnchors:
+    """Validate a parsed `anchors.toml`, ignoring `sealed`; `azctl keys` runs this before every write.
+
+    `require_satisfiable=False` is only for documents that will be written
+    sealed, which no import accepts whatever their threshold says.
+    """
+    anchors_sealed(doc)
+    threshold = doc.get("threshold", 1)
+    if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
+        raise BundleVerifyError(
+            "BUNDLE_ANCHORS_THRESHOLD_INVALID", "threshold must be an integer >= 1 (not bool)"
+        )
     keys: dict[str, VerifyKey] = {}
     for key_id, hex_key in dict(doc.get("keys", {})).items():
         keys[key_id] = VerifyKey(bytes.fromhex(hex_key))
@@ -251,11 +296,28 @@ def _load_anchors(anchors_path: str | Path) -> TrustAnchors:
             )
         accepted_policies = frozenset(accepted_policies)
 
+    revoked = frozenset(doc.get("revoked", []))
+    key_roles = {str(k): str(v) for k, v in dict(doc.get("key_roles", {})).items()}
+    active_keys = keys.keys() - revoked
+    if require_satisfiable and threshold > len(active_keys):
+        raise BundleVerifyError(
+            "BUNDLE_ANCHORS_THRESHOLD_INVALID",
+            f"threshold {threshold} exceeds the {len(active_keys)} non-revoked key(s)",
+        )
+    if require_satisfiable and required_role is not None:
+        role_keys = {key_id for key_id in active_keys if key_roles.get(key_id) == required_role}
+        if threshold > len(role_keys):
+            raise BundleVerifyError(
+                "BUNDLE_ANCHORS_THRESHOLD_INVALID",
+                f"threshold {threshold} exceeds the {len(role_keys)} non-revoked key(s) "
+                f"with required role {required_role!r}",
+            )
+
     return TrustAnchors(
-        threshold=int(doc.get("threshold", 1)),
+        threshold=threshold,
         keys=keys,
-        revoked=frozenset(doc.get("revoked", [])),
-        key_roles={str(k): str(v) for k, v in dict(doc.get("key_roles", {})).items()},
+        revoked=revoked,
+        key_roles=key_roles,
         required_signer_role=required_role,
         minimum_security_epoch=minimum_epoch,
         accepted_export_policy_digests=accepted_policies,
@@ -561,15 +623,25 @@ def _validate_manifest_shape(manifest: dict) -> None:
 
 
 def _check_anti_rollback(manifest: dict, last_imported_version: int) -> None:
-    bundle_version = int(manifest["bundle_version"])
+    bundle_version = manifest["bundle_version"]
+    if not isinstance(bundle_version, int) or isinstance(bundle_version, bool) or bundle_version < 1:
+        raise BundleVerifyError(
+            "BUNDLE_VERSION_INVALID", "bundle_version must be an integer >= 1 (not bool)"
+        )
+    base_version = manifest.get("base_version")
+    if base_version is not None and (
+        not isinstance(base_version, int) or isinstance(base_version, bool) or base_version < 1
+    ):
+        raise BundleVerifyError(
+            "BUNDLE_BASE_VERSION_INVALID", "base_version must be null or an integer >= 1 (not bool)"
+        )
     if bundle_version <= last_imported_version:
         raise BundleVerifyError(
             "BUNDLE_VERSION_REGRESSION",
             f"bundle_version {bundle_version} <= last_imported_version {last_imported_version}",
         )
     if manifest["kind"] == "differential":
-        base_version = manifest.get("base_version")
-        if base_version is None or int(base_version) != last_imported_version:
+        if base_version is None or base_version != last_imported_version:
             raise BundleVerifyError(
                 "BUNDLE_BASE_MISMATCH",
                 f"differential base_version {base_version!r} != last_imported_version {last_imported_version}",
@@ -636,6 +708,14 @@ def _safe_member(
             "BUNDLE_MEMBER_PATH_TOO_DEEP",
             f"member path is {depth} components deep, over the cap of {max_depth}: {name!r}",
         )
+    for component in PurePosixPath(name).parts:
+        component_bytes = len(component.encode("utf-8"))
+        if component_bytes > DEFAULT_MAX_MEMBER_COMPONENT_BYTES:
+            raise BundleVerifyError(
+                "BUNDLE_MEMBER_COMPONENT_TOO_LONG",
+                f"member path component is {component_bytes} bytes, over the cap of "
+                f"{DEFAULT_MAX_MEMBER_COMPONENT_BYTES}",
+            )
     if member.issym() or member.islnk():
         raise BundleVerifyError("BUNDLE_UNSAFE_MEMBER", f"link member not allowed: {name!r}")
     if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
@@ -846,6 +926,8 @@ def verify_bundle(
     # A resource cap, not a trust gate, so it runs after the trust gates have
     # had their say -- but still before extraction opens its first file.
     _check_member_count(manifest, max_members)
+    for name in manifest["files"]:
+        _safe_member(tarfile.TarInfo(name=name))
 
     file_paths = _extract_declared_files(
         bundle_path,
