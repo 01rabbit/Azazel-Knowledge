@@ -14,9 +14,10 @@ copies would drift -- the back-door canonicalization Fabric#14 exists to
 prevent. So Knowledge stores what it was told, records the vocabulary it was
 told in, and leaves the meaning where it belongs.
 
-Validation against the canonical enum lands at the boundary that receives the
-value, once a Fabric release carries it; this repository pins `v0.8.0` and no
-tag carries `DefensiveState` yet (Knowledge#65 AC-6, still open).
+The API boundary classifies against Fabric's canonical enum in
+`api/contracts.py` (Knowledge#65 AC-6). Fabric `v0.9.0rc5` supplies that enum.
+This module remains framework-free: it stores the reported value unchanged
+and does not choose or rewrite a state.
 
 Absence is not a state
 ----------------------

@@ -14,8 +14,8 @@ Every input already exists as an immutable local-tier fact:
 Every output vocabulary already exists too. `behavior_class` is Knowledge's own
 (`simple_scanner` ... `adaptive_probe` ... `disengaged_after_friction`), and
 the posture vocabulary is Azazel-Fabric's MITRE Engage-aligned
-`EngagementObjective` / `EngagementApproach` / `EngagementActivity`, pinned at
-`v0.8.0`.
+`EngagementObjective` / `EngagementApproach` / `EngagementActivity`, provided
+by the current `v0.9.0rc5` API-extra pin (ADR-0019).
 
 Nothing here defines a new vocabulary. A second definition of a shared word
 drifts from the first, and the drift is invisible until a consumer compares

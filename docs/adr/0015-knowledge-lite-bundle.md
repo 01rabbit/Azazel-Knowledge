@@ -476,9 +476,10 @@ points at `docs/adr/README.md` as the index instead of naming a range.)
 
 ### Open questions, deliberately not decided here
 
-- **Fabric baseline — settled.** Moved to `v0.8.0` by
-  [ADR-0016](0016-fabric-pin-v0-8-0.md), with the cross-repository rationale
-  and the test evidence recorded there.
+- **Fabric baseline — settled.** The api-extra pin later moved to `v0.9.0rc5`
+  by [ADR-0019](0019-fabric-pin-v0-9-0rc5.md); this supersedes the `v0.8.0`
+  pin recorded in [ADR-0016](0016-fabric-pin-v0-8-0.md). The dependency remains
+  api-extra-only and is not part of Knowledge Lite core consumers.
 - **Delta bundles and deletes — settled.** Lite is full-only by
   [ADR-0017](0017-lite-is-full-only.md): D4's mandatory expiry already retires
   a stale row without an out-of-band delete, so the problem tombstones would
