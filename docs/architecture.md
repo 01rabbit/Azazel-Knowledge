@@ -181,6 +181,20 @@ trust and caching, and stays fully operational without it. Contract:
 - **Edge absent:** CTI node keeps ingesting feeds and serving operators
   directly (reports, campaign views).
 
+> **External corroboration (2026-11).** This advisory-only, auditable failure
+> model is what the wider field is converging on, not a local peculiarity.
+> MITRE ATT&CK v20 (2026-10-13) now catalogs Direct and Indirect Prompt
+> Injection (T1699 / T1698) as adversary techniques — keeping final authority in
+> a deterministic arbiter that cannot be steered by model-facing prompts, and
+> confining the LLM to explanation, is a direct answer to that attack surface.
+> The academic TRACE-CTI work names the gap this node closes by design: there
+> was "no explicit, auditable boundary between what a model predicted and what
+> the system is prepared to trust." CISA BOD 26-04 requires forensic-ready
+> triage for the highest-risk tier, which our byte-identical replay, complete
+> `reason[]`, and JSONL audit chain already provide. See
+> [`docs/reports/ai-landscape-2026-11.md`](reports/ai-landscape-2026-11.md) §3
+> for sources. This is corroboration of the existing design, not a change to it.
+
 ## Security boundary
 
 - Edge ↔ CTI on a dedicated management segment; bearer-token auth minimum,

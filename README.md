@@ -23,9 +23,11 @@
 ingest, IOC/JA3/JA4 search, deterministic `/v1/context`, reaction recording,
 offline bundles, TAXII) and the Phase 2 **Behavioral CTI** lane
 ([design](docs/design/phase2-implementation.md)) are merged on `main`. The unit
-suite is the baseline gate (currently 583 tests); the advisory-only,
-determinism, and offline-first contracts below are enforced by static and
-replay tests, not just convention.
+suite is the baseline gate; the current count is tracked as a single source of
+truth in `CLAUDE.md` and `docs/development-guide.md` §0 (enforced by
+`tests/unit/test_claude_md_baseline.py`), so it is not restated here. The
+advisory-only, determinism, and offline-first contracts below are enforced by
+static and replay tests, not just convention.
 
 Azazel-Knowledge is an independent, on-premises Cyber Threat Intelligence node built
 on a portable Raspberry Pi 4. It pairs with
