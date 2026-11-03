@@ -172,6 +172,7 @@ identified", or "autonomous intrusion proven"; preferred wording is
 | `POST /v1/flows` | JSONL batch: flow records |
 | `POST /v1/reactions` | delay history: action applied + observed attacker reaction |
 | `POST /v1/deception-observations` | AZ-06 fact-only deception observations (Fabric `InteractionObservation`; ADR-0011) |
+| `POST /v1/deception-outcome-envelopes` | AZ-06 coverage / limitations (Fabric `OutcomeObservationEnvelope` + `EffectObservation`; Knowledge#111 G7). **Envelope only — no legacy JSONL path** |
 | `POST /v1/engagement-events` | AZ-01 engagement records (Fabric `EngagementEvent`; Azazel-Fabric#23 R1c) |
 | `POST /v1/outcome-evidence` | Outcome-as-Evidence facts (Fabric `outcome_contracts`; R1c). **Envelope only — no legacy JSONL path** |
 | TAXII 2.1 inbox | STIX bundles from the existing Azazel-Edge push client (#248) |
@@ -392,6 +393,79 @@ Example item:
   "metadata": {"edge_id": "edge-pi4-07", "actor_key": "ip:203.0.113.9"}
 }
 ```
+
+### `POST /v1/deception-outcome-envelopes` (AZ-06 coverage, Knowledge#111 G7)
+
+`POST /v1/deception-observations` hears what touched a decoy. It cannot hear how
+much of the world the producer could see while it watched, so "no interaction"
+read the same whether the window was fully observed or the telemetry was down.
+This lane carries that: a Fabric `effect_contracts.OutcomeObservationEnvelope`
+(coverage, telemetry gaps, confounders, decision / effect / presentation refs)
+together with the `EffectObservation` it correlates (status and `limitations`).
+Both are needed — the envelope has no `limitations` field and the observation
+has no coverage — and they are exactly the `outcome` and
+`runtime_materialization.effect_observation` of an Azazel-Deception feedback
+bundle, which can be lifted verbatim.
+
+`202` with a `batch_id`, `413` on the byte cap, `503` on quota, `422` for
+anything the contract rejects. INGEST scope. **No legacy per-line path**, for the
+reason `/v1/outcome-evidence` has none.
+
+```json
+{
+  "environment_id": "env-55",
+  "package_id": "municipal-linux-v1",
+  "items": [
+    { "outcome": { "schema_version": "outcome-observation-envelope/v0.1", "...": "..." },
+      "effect_observation": { "schema_version": "effect-observation/v0.1", "...": "..." } }
+  ]
+}
+```
+
+Refused with `422 ingest_batch_invalid`: either record failing its Fabric model
+(typed-ref kinds, `coverage_complete: true` while naming gaps, incomplete
+coverage naming none, a bound above 128 entries, a directive or verdict key
+anywhere); a pair that is not one thing (different effect, trace, producer, or
+an `environment_ref` that is not the batch's `environment_id`); an item with keys
+other than `outcome` and `effect_observation`; more than 64 items. An old
+`observed_at` is **not** refused — late evidence is the batch a reconnecting node
+sends first — and the advisory states the envelope's time without judging it.
+
+Storage is `deception_outcome_envelope_v0` (`local.db`, migration `0008`),
+append-only, with no verdict column. It is idempotent on `envelope_id`: an
+identical re-delivery is a no-op, while a re-used `envelope_id` with different
+content is quarantined in the batch status and the stored row is left as it was.
+Tokens are held at drain to the series grammar, matched with `fullmatch` (a
+trailing newline does not pass): limitations to
+`[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?`, gap and confounder names to
+`[A-Za-z0-9._-]{1,64}` (so `Suricata_eve` is fine). Neither admits `/`, so no URL
+or path fits, and a token containing an imperative segment (`redirect`,
+`activate`, `run`, `override`, `bypass`, ... judged per `_ - . : ~` segment) is
+refused, because they are rendered into an advisory a planner reads. **An invalid
+entry is dropped on its own, not the pair**: the rest is stored and the count is
+kept in `entries_dropped` (`raw` still holds what arrived). If every named gap
+was dropped the window is still incomplete, so a single gap named
+`entries_dropped` is stored. Structural contradictions -- `coverage_complete`
+against the gaps *as sent*, a different trace or effect, a re-used `envelope_id`
+with different content -- still quarantine the whole pair.
+
+**What the advisory does with it** (`GET /v1/deception-effectiveness`): the latest
+envelope (by `observed_at`) speaks for current coverage. Incomplete coverage is
+`counter_evidence` and an `unknown`; every `limitations` token is listed under
+`unknowns` verbatim, and `stale` / `isolation_drift_observed` are also
+`counter_evidence`; `no interaction observed is not evidence of safety` is added
+when nothing was observed, and `outcome_envelope_entries_dropped: N` when entries
+were discarded. `metadata` gains `outcome_envelope_count`,
+`outcome_envelopes_incomplete`, `outcome_envelope_entries_dropped`, `latest_envelope_ref`,
+`latest_envelope_observed_at`, `latest_coverage_complete`, `latest_isolation`
+(`drift_observed` / `not_asserted` / `no_drift_reported` — derived from the
+limitations, never `asserted`), `latest_effect_status`, `latest_effect_ref`,
+`latest_decision_ref` and `latest_advisory_refs` (the `advisory:`, `observation_objective:`,
+`hypothesis:` and `frame:` refs). **`confidence`, `assessment` and the suggested
+posture are unchanged by any of it**: coverage can only make the advisory less
+able to conclude, and `coverage_complete: true` is stated to describe telemetry,
+not the outcome. With no envelope stored the advisory is byte-identical to what
+it was before this lane.
 
 ### `GET /v1/deception-effectiveness` (AZ-06 advisory, ADR-0011)
 

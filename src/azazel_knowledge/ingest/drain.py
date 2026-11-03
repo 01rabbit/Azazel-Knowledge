@@ -35,6 +35,7 @@ from azazel_knowledge.ingest.spool import BatchStatus, SpoolWriter
 from azazel_knowledge.ingest.validators import (
     Result,
     validate_deception_observation_line,
+    validate_deception_outcome_envelope_line,
     validate_engagement_event_line,
     validate_event_line,
     validate_outcome_evidence_line,
@@ -50,6 +51,7 @@ _VALIDATORS: dict[str, Callable[..., Result]] = {
     "engagement-events": validate_engagement_event_line,
     "outcome-evidence": validate_outcome_evidence_line,
     "deception-observations": validate_deception_observation_line,
+    "deception-outcome-envelopes": validate_deception_outcome_envelope_line,
 }
 
 _STATS_WINDOW_S = 3600
@@ -394,6 +396,83 @@ def _drain_deception_observation_rows(
     return duplicates["count"]
 
 
+def _insert_deception_outcome_envelopes(
+    conn: sqlite3.Connection, rows: list[tuple[int, dict[str, Any]]], now: datetime
+) -> tuple[int, list[tuple[int, str]]]:
+    """INSERT-only store of AZ-06 outcome envelopes (Deception#55 / Knowledge#111 G7).
+
+    Returns `(duplicates, rejected)`. A re-delivery of identical bytes is a
+    no-op counted as a duplicate. An `envelope_id` that is already stored with
+    *different* bytes is not a duplicate: it is a second statement under one
+    identity, and silently keeping the first (INSERT OR IGNORE) would report
+    the second as accepted. It is quarantined instead, and the stored row is
+    left as it was.
+    """
+
+    duplicates = 0
+    rejected: list[tuple[int, str]] = []
+    for line_no, r in rows:
+        raw = json.dumps(r["raw"], sort_keys=True)
+        existing = conn.execute(
+            "SELECT raw FROM deception_outcome_envelope_v0 WHERE envelope_ref = ?",
+            (r["envelope_ref"],),
+        ).fetchone()
+        if existing is not None:
+            if existing[0] == raw:
+                duplicates += 1
+            else:
+                rejected.append(
+                    (line_no, "envelope_id already stored with different content")
+                )
+            continue
+        conn.execute(
+            "INSERT INTO deception_outcome_envelope_v0 "
+            "(envelope_ref, environment_id, package_id, producer_product, producer_node, "
+            "trace_id, decision_ref, effect_ref, presentation_ref, window_start, window_end, "
+            "observation_class, coverage_complete, telemetry_coverage, telemetry_gaps, "
+            "confounders, impact_observations, evidence_refs, effect_observation_ref, "
+            "effect_status, termination_reason, limitations, entries_dropped, observed_at, "
+            "authority_class, schema_version, raw, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                r["envelope_ref"], r["environment_id"], r["package_id"],
+                r["producer_product"], r["producer_node"], r["trace_id"],
+                r["decision_ref"], r["effect_ref"], r["presentation_ref"],
+                r["window_start"], r["window_end"], r["observation_class"],
+                1 if r["coverage_complete"] else 0,
+                json.dumps(r["telemetry_coverage"], sort_keys=True),
+                json.dumps(r["telemetry_gaps"]),
+                json.dumps(r["confounders"]),
+                json.dumps(r["impact_observations"], sort_keys=True),
+                json.dumps(r["evidence_refs"]),
+                r["effect_observation_ref"], r["effect_status"], r["termination_reason"],
+                json.dumps(r["limitations"]),
+                r["entries_dropped"],
+                r["observed_at"], r["authority_class"], r["schema_version"],
+                raw, to_rfc3339(now),
+            ),
+        )
+    return duplicates, rejected
+
+
+def _drain_deception_outcome_envelope_rows(
+    writer_queue: PrioritySingleWriterQueue,
+    rows: list[tuple[int, dict[str, Any]]],
+    now: datetime,
+) -> tuple[int, list[tuple[int, str]]]:
+    outcome: dict[str, Any] = {"duplicates": 0, "rejected": []}
+
+    def _txn(conn: sqlite3.Connection) -> None:
+        duplicates, rejected = _insert_deception_outcome_envelopes(conn, rows, now)
+        outcome["duplicates"] = duplicates
+        outcome["rejected"] = rejected
+
+    if rows:
+        writer_queue.submit(P1, _txn)
+        writer_queue.process_pending()
+    return int(outcome["duplicates"]), list(outcome["rejected"])
+
+
 def drain_endpoint(
     endpoint: str,
     spool: SpoolWriter,
@@ -436,6 +515,21 @@ def drain_endpoint(
             duplicates = _drain_deception_observation_rows(writer_queue, valid_rows, now)
         elif endpoint == "engagement-events":
             duplicates = _drain_engagement_event_rows(writer_queue, valid_rows, now)
+        elif endpoint == "deception-outcome-envelopes":
+            duplicates, rejected = _drain_deception_outcome_envelope_rows(
+                writer_queue, list(zip(valid_line_numbers, valid_rows)), now
+            )
+            if rejected:
+                rejected_lines = {line_no for line_no, _ in rejected}
+                invalid.extend(
+                    {"line_no": line_no, "error": error} for line_no, error in rejected
+                )
+                invalid.sort(key=lambda item: int(item["line_no"]))
+                valid_rows = [
+                    row
+                    for line_no, row in zip(valid_line_numbers, valid_rows)
+                    if line_no not in rejected_lines
+                ]
         elif endpoint == "outcome-evidence":
             duplicates, rejected = _drain_outcome_evidence_rows(
                 writer_queue, list(zip(valid_line_numbers, valid_rows)), now

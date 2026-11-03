@@ -11,6 +11,7 @@ line errors").
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
@@ -957,3 +958,287 @@ def validate_outcome_evidence_line(line: str, *, now: datetime) -> Result:
     except OutcomeMemoryError as exc:
         return False, str(exc)
     return True, obj
+
+
+# --------------------------------------------------------------------------
+# AZ-06 outcome envelope (Deception#55 / Knowledge#111 G7)
+# --------------------------------------------------------------------------
+
+# Mirrors of Fabric `effect_contracts` bounds and vocabularies, kept structural
+# for the same reason as the sets above: Fabric is import-confined to the api
+# extra and this validator runs in the worker. `tests/unit/
+# test_deception_outcome_envelopes.py` pins these against the Fabric models.
+OUTCOME_ENVELOPE_SCHEMA = "outcome-observation-envelope/v0.1"
+EFFECT_OBSERVATION_SCHEMA = "effect-observation/v0.1"
+OUTCOME_ENVELOPE_AUTHORITY_ENUM = frozenset({"observed_fact", "active_materialized"})
+EFFECT_OBSERVATION_AUTHORITY_ENUM = frozenset({"observed_fact", "active_materialized"})
+OUTCOME_ENVELOPE_LIST_MAX = 128
+
+# Limitation / gap / confounder tokens are rendered into the effectiveness
+# advisory that a downstream planner reads, so free prose or an instruction in
+# that position is an injection channel. They are held to the series grammar
+# (CONVENTIONS C2: a lowercase identifier with one optional `:parameter`; no
+# `/`, so no URL or path fits) and to the imperative-word set (C3), judged per
+# segment so `redirection_does_not_imply_diversion` passes and `redirect` does
+# not. The set is copied here, not imported: this module runs without Fabric.
+_OUTCOME_TOKEN_MAX = 200
+# Matched with fullmatch: `$` accepts a trailing newline, so `stale\n` would pass.
+_OUTCOME_LIMITATION_RE = re.compile(r"[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?")
+# Gap and confounder names (CONVENTIONS C2'): the parameter half of the above.
+_OUTCOME_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+_OUTCOME_TOKEN_SEGMENT_SPLIT = re.compile(r"[_.:~-]+")
+IMPERATIVE_SEGMENTS = frozenset(
+    "activate activation deactivate execute exec run start stop open allow "
+    "authorize authorized approve approved enable extend terminate withdraw "
+    "block isolate quarantine redirect expose command shell sudo deploy "
+    "install delete kill override enforce grant granted bypass".split()
+)
+_OUTCOME_REF_MAX = 256
+
+_OUTCOME_ENVELOPE_FIELDS = frozenset(
+    {
+        "schema_version", "envelope_id", "producer_product", "producer_node",
+        "producer_version", "trace_id", "decision_ref", "effect_ref",
+        "environment_ref", "presentation_ref", "actor_session_ref",
+        "outcome_observation_refs", "window_start", "window_end",
+        "observation_class", "telemetry_coverage", "coverage_complete",
+        "telemetry_gaps", "confounders", "impact_observations", "evidence_refs",
+        "provenance", "observed_at", "authority_class", "directive",
+    }
+)
+_EFFECT_OBSERVATION_FIELDS = frozenset(
+    {
+        "schema_version", "observation_id", "effect_ref", "trace_id", "status",
+        "observed_at", "materialization_producer", "execution_ref",
+        "termination_reason", "evidence_refs", "limitations", "authority_class",
+        "directive",
+    }
+)
+
+
+def _outcome_str(obj: Mapping[str, Any], name: str, *, optional: bool = False) -> tuple[str | None, str | None]:
+    value = obj.get(name)
+    if value is None and optional:
+        return None, None
+    if not isinstance(value, str) or not value.strip():
+        return None, f"{name} must be a non-empty string"
+    if len(value) > _OUTCOME_REF_MAX:
+        return None, f"{name} exceeds {_OUTCOME_REF_MAX} characters"
+    return value, None
+
+
+def _valid_token(item: Any, pattern: re.Pattern[str]) -> bool:
+    if not isinstance(item, str) or len(item) > _OUTCOME_TOKEN_MAX:
+        return False
+    if pattern.fullmatch(item) is None:
+        return False
+    return not set(_OUTCOME_TOKEN_SEGMENT_SPLIT.split(item.lower())) & IMPERATIVE_SEGMENTS
+
+
+def _outcome_tokens(
+    obj: Mapping[str, Any], name: str, *, pattern: re.Pattern[str]
+) -> tuple[list[str], int, str | None]:
+    """Return `(kept, dropped, error)` for a token list.
+
+    A list that is not a list, or is over the bound, is a structural problem
+    and an error (the whole pair is quarantined). An *entry* that is not a valid
+    token is dropped on its own and counted (CONVENTIONS C6): one bad word must
+    not cost the producer the rest of its coverage statement.
+    """
+
+    value = obj.get(name, [])
+    if not isinstance(value, list):
+        return [], 0, f"{name} must be a list"
+    if len(value) > OUTCOME_ENVELOPE_LIST_MAX:
+        return [], 0, f"{name} exceeds {OUTCOME_ENVELOPE_LIST_MAX} entries"
+    kept = [item for item in value if _valid_token(item, pattern)]
+    return kept, len(value) - len(kept), None
+
+
+def _outcome_refs(obj: Mapping[str, Any], name: str) -> str | None:
+    value = obj.get(name, [])
+    if not isinstance(value, list):
+        return f"{name} must be a list"
+    if len(value) > OUTCOME_ENVELOPE_LIST_MAX:
+        return f"{name} exceeds {OUTCOME_ENVELOPE_LIST_MAX} entries"
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return f"{name} entries must be non-empty strings"
+        if len(item) > _OUTCOME_REF_MAX:
+            return f"{name} entry exceeds {_OUTCOME_REF_MAX} characters"
+    return None
+
+
+def validate_deception_outcome_envelope_line(line: str, *, now: datetime) -> Result:
+    """Validate one `{outcome, effect_observation}` pair (Deception#59 bundle).
+
+    `now` is unused on purpose: an envelope describes a window that has already
+    closed, and refusing one for arriving late would drop exactly the evidence
+    a reconnecting node sends. Freshness is stated by the reader against its
+    own pinned `query_as_of`; it is not decided here.
+
+    The rules a row's CHECKs backstop -- `coverage_complete` agrees with
+    `telemetry_gaps` in both directions -- are enforced here first, so a pair
+    that contradicts itself is quarantined with a reason rather than failing an
+    INSERT.
+    """
+
+    del now
+    size_error = _check_size(line)
+    if size_error:
+        return False, size_error
+    try:
+        obj = _parse_object(line)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return False, f"invalid json: {exc}"
+
+    # Both Fabric models carry the literal `directive: false` as a field; that
+    # one key is the contract saying "not a directive", so it is checked below
+    # for being exactly `false` and left out of the banned-key walk. A
+    # `directive` key anywhere deeper (a fact map) is still banned.
+    scan = {
+        k: ({kk: vv for kk, vv in v.items() if kk != "directive"} if k in ("outcome", "effect_observation") and isinstance(v, Mapping) else v)
+        for k, v in obj.items()
+    }
+    if _contains_banned_directive(scan):
+        return False, "runtime-directive field not permitted on an outcome envelope"
+    if _contains_banned_verdict(obj):
+        return False, "belief/verdict/effectiveness field not permitted on an outcome envelope"
+
+    if set(obj) - {"environment_id", "package_id", "outcome", "effect_observation"}:
+        return False, "unknown top-level fields"
+    environment_id, error = _outcome_str(obj, "environment_id")
+    if error:
+        return False, error
+    package_id, error = _outcome_str(obj, "package_id", optional=True)
+    if error:
+        return False, error
+    env = obj.get("outcome")
+    eff = obj.get("effect_observation")
+    if not isinstance(env, Mapping) or not isinstance(eff, Mapping):
+        return False, "outcome and effect_observation must be objects"
+    if set(env) - _OUTCOME_ENVELOPE_FIELDS:
+        return False, f"unknown outcome fields: {sorted(set(env) - _OUTCOME_ENVELOPE_FIELDS)}"
+    if set(eff) - _EFFECT_OBSERVATION_FIELDS:
+        return False, f"unknown effect_observation fields: {sorted(set(eff) - _EFFECT_OBSERVATION_FIELDS)}"
+    if env.get("schema_version") != OUTCOME_ENVELOPE_SCHEMA:
+        return False, f"unknown outcome schema_version: {env.get('schema_version')!r}"
+    if eff.get("schema_version") != EFFECT_OBSERVATION_SCHEMA:
+        return False, f"unknown effect_observation schema_version: {eff.get('schema_version')!r}"
+    if env.get("directive") is not False or eff.get("directive") is not False:
+        return False, "directive must be false"
+
+    strings: dict[str, str | None] = {}
+    for source, name, optional in (
+        (env, "envelope_id", False), (env, "producer_product", False),
+        (env, "producer_node", False), (env, "producer_version", False),
+        (env, "trace_id", False), (env, "effect_ref", False),
+        (env, "environment_ref", False), (env, "observation_class", False),
+        (env, "decision_ref", True), (env, "presentation_ref", True),
+        (eff, "observation_id", False), (eff, "effect_ref", False),
+        (eff, "trace_id", False), (eff, "status", False),
+        (eff, "materialization_producer", False),
+        (eff, "termination_reason", True),
+    ):
+        value, error = _outcome_str(source, name, optional=optional)
+        if error:
+            return False, f"{'outcome' if source is env else 'effect_observation'}.{error}"
+        strings[("o." if source is env else "e.") + name] = value
+
+    if strings["o.environment_ref"] != f"environment:{environment_id}":
+        return False, "outcome environment_ref is not the batch environment"
+    if strings["e.effect_ref"] != strings["o.effect_ref"]:
+        return False, "effect_observation belongs to a different effect"
+    if strings["e.trace_id"] != strings["o.trace_id"]:
+        return False, "effect_observation belongs to a different trace"
+    if strings["e.materialization_producer"] != strings["o.producer_product"]:
+        return False, "effect_observation was produced by a different product"
+
+    if env.get("authority_class") not in OUTCOME_ENVELOPE_AUTHORITY_ENUM:
+        return False, f"outcome authority_class not permitted: {env.get('authority_class')!r}"
+    if eff.get("authority_class") not in EFFECT_OBSERVATION_AUTHORITY_ENUM:
+        return False, f"effect_observation authority_class not permitted: {eff.get('authority_class')!r}"
+
+    coverage_complete = env.get("coverage_complete")
+    if not isinstance(coverage_complete, bool):
+        return False, "coverage_complete must be a boolean"
+    # Contradictions are judged on what the producer sent, before any entry is
+    # dropped: dropping is hygiene, it must not manufacture or hide a conflict.
+    raw_gaps = env.get("telemetry_gaps", [])
+    if not isinstance(raw_gaps, list):
+        return False, "telemetry_gaps must be a list"
+    if coverage_complete and raw_gaps:
+        return False, "coverage_complete is true but telemetry_gaps names gaps"
+    if not coverage_complete and not raw_gaps:
+        return False, "coverage is incomplete but no telemetry_gaps are named"
+    gaps, d_gaps, error = _outcome_tokens(env, "telemetry_gaps", pattern=_OUTCOME_NAME_RE)
+    if error:
+        return False, error
+    confounders, d_conf, error = _outcome_tokens(env, "confounders", pattern=_OUTCOME_NAME_RE)
+    if error:
+        return False, error
+    limitations, d_lim, error = _outcome_tokens(eff, "limitations", pattern=_OUTCOME_LIMITATION_RE)
+    if error:
+        return False, error
+    if not coverage_complete and not gaps:
+        # Every named gap was unusable. The window is still incomplete; say so
+        # with a gap the table's CHECK accepts rather than storing none.
+        gaps = ["entries_dropped"]
+    entries_dropped = d_gaps + d_conf + d_lim
+    for source, name in (
+        (env, "evidence_refs"), (env, "outcome_observation_refs"), (eff, "evidence_refs"),
+    ):
+        error = _outcome_refs(source, name)
+        if error:
+            return False, error
+    evidence_refs = list(env.get("evidence_refs", []))
+
+    for name in ("telemetry_coverage", "impact_observations"):
+        if not isinstance(env.get(name, {}), Mapping):
+            return False, f"{name} must be an object"
+
+    try:
+        window_start = parse_rfc3339(env["window_start"])
+        window_end = parse_rfc3339(env["window_end"])
+        observed = parse_rfc3339(env["observed_at"])
+        parse_rfc3339(eff["observed_at"])
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        return False, f"invalid timestamp: {exc}"
+    if window_end < window_start:
+        return False, "window_end precedes window_start"
+
+    return True, {
+        "envelope_ref": strings["o.envelope_id"],
+        "environment_id": environment_id,
+        "package_id": package_id,
+        "producer_product": strings["o.producer_product"],
+        "producer_node": strings["o.producer_node"],
+        "trace_id": strings["o.trace_id"],
+        "decision_ref": strings["o.decision_ref"],
+        "effect_ref": strings["o.effect_ref"],
+        "presentation_ref": strings["o.presentation_ref"],
+        "window_start": observed_utc(window_start),
+        "window_end": observed_utc(window_end),
+        "observation_class": strings["o.observation_class"],
+        "coverage_complete": coverage_complete,
+        "telemetry_coverage": dict(env.get("telemetry_coverage", {})),
+        "telemetry_gaps": gaps,
+        "confounders": confounders,
+        "impact_observations": dict(env.get("impact_observations", {})),
+        "evidence_refs": evidence_refs,
+        "effect_observation_ref": strings["e.observation_id"],
+        "effect_status": strings["e.status"],
+        "termination_reason": strings["e.termination_reason"],
+        "limitations": limitations,
+        "entries_dropped": entries_dropped,
+        "observed_at": observed_utc(observed),
+        "authority_class": env["authority_class"],
+        "schema_version": env["schema_version"],
+        "raw": dict(obj),
+    }
+
+
+def observed_utc(value: datetime) -> str:
+    """Fixed-width UTC (microseconds, `Z`) so string order is time order."""
+
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")

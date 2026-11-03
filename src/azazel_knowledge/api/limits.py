@@ -13,6 +13,9 @@ INGEST_LINE_MAX_BYTES = 64 * 1024
 INGEST_BATCH_MAX_BYTES = 8 * 1024 * 1024
 INGEST_DEFAULT_QUOTA_BYTES = 64 * 1024 * 1024
 INGEST_QUOTA_RETRY_AFTER_S = 30
+# A feedback bundle yields one (outcome, effect_observation) pair; a batch is a
+# handful of environments' worth, not a replay of history.
+INGEST_OUTCOME_ENVELOPE_MAX_ITEMS = 64
 
 WARMUP_RETRY_AFTER_S = 5
 

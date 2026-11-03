@@ -92,6 +92,7 @@ INGEST_ENDPOINTS: tuple[str, ...] = (
     "engagement-events",
     "outcome-evidence",
     "deception-observations",
+    "deception-outcome-envelopes",
 )
 
 ADVISORY_LOG_FIELDS: tuple[str, ...] = (
