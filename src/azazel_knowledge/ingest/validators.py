@@ -11,6 +11,7 @@ line errors").
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
@@ -974,13 +975,20 @@ EFFECT_OBSERVATION_AUTHORITY_ENUM = frozenset({"observed_fact", "active_material
 OUTCOME_ENVELOPE_LIST_MAX = 128
 
 # Limitation / gap / confounder tokens are rendered into the effectiveness
-# advisory that a downstream planner reads. Free prose in that position is an
-# injection channel, so a token is held to an identifier-like charset: the
-# producer's vocabulary (`telemetry_gap:process_events`, `stale`, ...) fits,
-# a sentence does not.
+# advisory that a downstream planner reads, so free prose or an instruction in
+# that position is an injection channel. They are held to the series grammar
+# (CONVENTIONS C2: a lowercase identifier with one optional `:parameter`; no
+# `/`, so no URL or path fits) and to the imperative-word set (C3), judged per
+# segment so `redirection_does_not_imply_diversion` passes and `redirect` does
+# not. The set is copied here, not imported: this module runs without Fabric.
 _OUTCOME_TOKEN_MAX = 200
-_OUTCOME_TOKEN_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:@=+/~-"
+_OUTCOME_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?$")
+_OUTCOME_TOKEN_SEGMENT_SPLIT = re.compile(r"[_.:~-]+")
+IMPERATIVE_SEGMENTS = frozenset(
+    "activate activation deactivate execute exec run start stop open allow "
+    "authorize authorized approve approved enable extend terminate withdraw "
+    "block isolate quarantine redirect expose command shell sudo deploy "
+    "install delete kill".split()
 )
 _OUTCOME_REF_MAX = 256
 
@@ -1028,8 +1036,12 @@ def _outcome_tokens(obj: Mapping[str, Any], name: str, *, charset: bool) -> tupl
         limit = _OUTCOME_TOKEN_MAX if charset else _OUTCOME_REF_MAX
         if len(item) > limit:
             return [], f"{name} entry exceeds {limit} characters"
-        if charset and not set(item) <= _OUTCOME_TOKEN_CHARS:
-            return [], f"{name} entry is not an identifier-like token"
+        if charset:
+            if not _OUTCOME_TOKEN_RE.match(item):
+                return [], f"{name} entry is not a valid token"
+            segments = set(_OUTCOME_TOKEN_SEGMENT_SPLIT.split(item.lower()))
+            if segments & IMPERATIVE_SEGMENTS:
+                return [], f"{name} entry contains an imperative word"
     return list(value), None
 
 

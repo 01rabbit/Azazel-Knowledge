@@ -306,9 +306,9 @@ REFUSED_PAIRS = {
     "observation_claims_advisory_inference": _mutate(("effect_observation", "authority_class"), "advisory_inference"),
     "observation_claims_nothing": _mutate(("effect_observation", "authority_class"), "stale_or_unknown"),
     # bounds
-    "too_many_gaps": lambda p: (_mutate(("outcome", "telemetry_gaps"), [f"g{i}" for i in range(129)])(p)),
-    "too_many_limitations": _mutate(("effect_observation", "limitations"), [f"l{i}" for i in range(129)]),
-    "too_many_confounders": _mutate(("outcome", "confounders"), [f"c{i}" for i in range(129)]),
+    "too_many_gaps": lambda p: (_mutate(("outcome", "telemetry_gaps"), [f"gap{i:03d}" for i in range(129)])(p)),
+    "too_many_limitations": _mutate(("effect_observation", "limitations"), [f"lim{i:03d}" for i in range(129)]),
+    "too_many_confounders": _mutate(("outcome", "confounders"), [f"con{i:03d}" for i in range(129)]),
     "window_inverted": lambda p: (
         _mutate(("outcome", "window_start"), "2099-01-01T00:00:00+00:00")(p)
     ),
@@ -437,7 +437,7 @@ def _bad_lines() -> dict[str, str]:
     long_ref = _pair()
     long_ref["outcome"]["evidence_refs"] = ["x" * 300]
     many = _pair()
-    many["effect_observation"]["limitations"] = [f"l{i}" for i in range(129)]
+    many["effect_observation"]["limitations"] = [f"lim{i:03d}" for i in range(129)]
     return {
         "complete_but_names_gaps": _line(complete_but_gaps),
         "incomplete_but_names_no_gaps": _line(incomplete_no_gaps),
@@ -675,3 +675,73 @@ def test_the_lane_stays_out_of_core_and_does_no_api_writes():
         ), rel
     router = (root / "api" / "routers" / "deception.py").read_text(encoding="utf-8")
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|executemany|executescript)\b", router, re.IGNORECASE)
+
+
+# --------------------------------------------------------------------------
+# token grammar (CONVENTIONS C2) and imperative words (C3)
+# --------------------------------------------------------------------------
+
+DECEPTION_TOKENS = """
+objective_content_not_bound objective_trace_differs_from_effect_trace
+objective_not_supplied desired_observations_not_hypothesis_specific
+desired_observations_not_specified no_interaction_observed_is_not_evidence_of_safety
+telemetry_gap:http_access_log stale lease_expired runtime_active_after_lease_end
+redirection_does_not_imply_diversion isolation_drift_observed isolation_not_asserted
+interactions_truncated unbound_interactions_excluded:3 interactions_outside_lease:2
+runtime_state_not_independently_reverified
+session_ended_new_observations_belong_to_a_new_session presented_terrain_not_projected
+""".split()
+
+
+def _token_pair(token: str) -> dict:
+    pair = _pair("complete")
+    pair["effect_observation"]["limitations"] = [token]
+    return pair
+
+
+@pytest.mark.parametrize("token", DECEPTION_TOKENS)
+def test_every_token_deception_emits_is_accepted(tmp_path, token):
+    ok, _ = validate_deception_outcome_envelope_line(_line(_token_pair(token)), now=NOW)
+    assert ok, token
+    client, _, ingest, _ = _api(tmp_path)
+    assert client.post(URL, json=_body(_token_pair(token)), headers=auth_header(ingest)).status_code == 202
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "https://x/y",
+        "a/b",
+        "ignore_previous_instructions_and_activate",
+        "please-redirect-now",
+        "Activate_now",
+        "run.script",
+        "x:y/z",
+        "ab",
+        "has space",
+    ],
+)
+def test_urls_prose_and_imperative_tokens_are_refused_at_drain(token):
+    for field, pair in (
+        ("limitations", _token_pair(token)),
+    ):
+        ok, _ = validate_deception_outcome_envelope_line(_line(pair), now=NOW)
+        assert not ok, (field, token)
+    gap = _pair("gap")
+    gap["outcome"]["telemetry_gaps"] = [token]
+    assert not validate_deception_outcome_envelope_line(_line(gap), now=NOW)[0]
+    conf = _pair("complete")
+    conf["outcome"]["confounders"] = [token]
+    assert not validate_deception_outcome_envelope_line(_line(conf), now=NOW)[0]
+
+
+def test_advisory_refs_include_objective_hypothesis_and_frame_kinds(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    pair = _pair("complete")
+    pair["outcome"]["evidence_refs"] = [
+        "observation_objective:o1", "hypothesis:h1", "frame:f1",
+        "advisory:mio-objective-obj1", "decision:edge-activate-1",
+    ]
+    _post_and_drain(client, settings, ingest, tmp_path, _body(pair))
+    refs = _advisory(client, read)["metadata"]["latest_advisory_refs"].split(",")
+    assert refs == ["observation_objective:o1", "hypothesis:h1", "frame:f1", "advisory:mio-objective-obj1"]

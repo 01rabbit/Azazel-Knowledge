@@ -116,7 +116,7 @@ _COUNTER_EVIDENCE_LIMITATIONS = ("stale", "isolation_drift_observed")
 _NO_INTERACTION_LIMITATION = "no_interaction_observed_is_not_evidence_of_safety"
 _ISOLATION_NOT_ASSERTED = "isolation_not_asserted"
 _ISOLATION_DRIFT = "isolation_drift_observed"
-_ADVISORY_REF_PREFIX = "advisory:"
+_ADVISORY_REF_PREFIXES = ("advisory:", "observation_objective:", "hypothesis:", "frame:")
 _ADVISORY_REF_CAP = 8
 
 
@@ -171,7 +171,7 @@ def _outcome_envelope_notes(
     confounders = _loads_list(confounders_json)
     limitations = list(dict.fromkeys(_loads_list(limitations_json)))
     advisory_refs = [
-        r for r in _loads_list(evidence_json) if r.startswith(_ADVISORY_REF_PREFIX)
+        r for r in _loads_list(evidence_json) if r.startswith(_ADVISORY_REF_PREFIXES)
     ][:_ADVISORY_REF_CAP]
 
     unknowns: list[str] = []

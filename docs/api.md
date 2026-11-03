@@ -435,8 +435,10 @@ Storage is `deception_outcome_envelope_v0` (`local.db`, migration `0008`),
 append-only, with no verdict column. It is idempotent on `envelope_id`: an
 identical re-delivery is a no-op, while a re-used `envelope_id` with different
 content is quarantined in the batch status and the stored row is left as it was.
-Limitation, gap and confounder tokens are held to an identifier-like charset at
-drain because they are rendered into an advisory a planner reads.
+Limitation, gap and confounder tokens are held at drain to the series grammar
+`[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?` (no `/`, so no URL or path) and
+to the imperative-word set (`redirect`, `activate`, `run`, ...; judged per
+`_ - . : ~` segment), because they are rendered into an advisory a planner reads.
 
 **What the advisory does with it** (`GET /v1/deception-effectiveness`): the latest
 envelope (by `observed_at`) speaks for current coverage. Incomplete coverage is
@@ -448,8 +450,8 @@ when nothing was observed. `metadata` gains `outcome_envelope_count`,
 `latest_envelope_observed_at`, `latest_coverage_complete`, `latest_isolation`
 (`drift_observed` / `not_asserted` / `no_drift_reported` — derived from the
 limitations, never `asserted`), `latest_effect_status`, `latest_effect_ref`,
-`latest_decision_ref` and `latest_advisory_refs` (the `advisory:` refs, e.g. MIO
-objective / hypothesis / frame). **`confidence`, `assessment` and the suggested
+`latest_decision_ref` and `latest_advisory_refs` (the `advisory:`, `observation_objective:`,
+`hypothesis:` and `frame:` refs). **`confidence`, `assessment` and the suggested
 posture are unchanged by any of it**: coverage can only make the advisory less
 able to conclude, and `coverage_complete: true` is stated to describe telemetry,
 not the outcome. With no envelope stored the advisory is byte-identical to what
