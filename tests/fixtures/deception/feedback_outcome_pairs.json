@@ -1,0 +1,245 @@
+{
+ "_provenance": "Captured from Azazel-Deception b282b10 (branch for PR #59), tests/test_mio_feedback.py World fixture: build_feedback_bundle() -> bundle['outcome'] and bundle['runtime_materialization']['effect_observation']. environment_id=env-55. Synthetic test data only.",
+ "complete": {
+  "effect_observation": {
+   "authority_class": "active_materialized",
+   "directive": false,
+   "effect_ref": "effect:edge-activate-1",
+   "evidence_refs": [
+    "advisory:mio-objective-obj1",
+    "advisory:mio-hypothesis-hyp1",
+    "advisory:mio-frame-frm1",
+    "decision:edge-activate-1",
+    "session:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9",
+    "environment:env-55",
+    "evidence:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9"
+   ],
+   "execution_ref": null,
+   "limitations": [
+    "virtual_or_local_evidence_not_hil",
+    "tenant_substituted_by_node_id_and_trace_id",
+    "objective_content_not_bound",
+    "objective_not_supplied",
+    "no_interaction_observed_is_not_evidence_of_safety",
+    "runtime_state_not_independently_reverified"
+   ],
+   "materialization_producer": "azazel-deception",
+   "observation_id": "effect_observation:d2bd2b97d2718667d5972ae0",
+   "observed_at": "2026-11-03T06:11:02.932120+00:00",
+   "schema_version": "effect-observation/v0.1",
+   "status": "active",
+   "termination_reason": null,
+   "trace_id": "trace-55"
+  },
+  "outcome": {
+   "actor_session_ref": null,
+   "authority_class": "observed_fact",
+   "confounders": [],
+   "coverage_complete": true,
+   "decision_ref": "decision:edge-activate-1",
+   "directive": false,
+   "effect_ref": "effect:edge-activate-1",
+   "envelope_id": "envelope:fd20ec9676f73071b21349d9",
+   "environment_ref": "environment:env-55",
+   "evidence_refs": [
+    "advisory:mio-objective-obj1",
+    "advisory:mio-hypothesis-hyp1",
+    "advisory:mio-frame-frm1",
+    "decision:edge-activate-1",
+    "session:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9",
+    "environment:env-55",
+    "evidence:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9"
+   ],
+   "impact_observations": {
+    "drift_count": 0,
+    "interaction_count": 0
+   },
+   "observation_class": "interaction",
+   "observed_at": "2026-11-03T06:11:02.932120+00:00",
+   "outcome_observation_refs": [],
+   "presentation_ref": "presentation:41884438203c0df487040a00",
+   "producer_node": "az06-test",
+   "producer_product": "azazel-deception",
+   "producer_version": "0.2.0.dev0",
+   "provenance": null,
+   "schema_version": "outcome-observation-envelope/v0.1",
+   "telemetry_coverage": {
+    "expected": [
+     "interaction_log",
+     "process_events"
+    ],
+    "observed": [
+     "interaction_log",
+     "process_events"
+    ]
+   },
+   "telemetry_gaps": [],
+   "trace_id": "trace-55",
+   "window_end": "2026-11-03T06:11:02.932120+00:00",
+   "window_start": "2026-11-03T06:11:02.928709+00:00"
+  }
+ },
+ "drift": {
+  "effect_observation": {
+   "authority_class": "observed_fact",
+   "directive": false,
+   "effect_ref": "effect:edge-activate-1",
+   "evidence_refs": [
+    "advisory:mio-objective-obj1",
+    "advisory:mio-hypothesis-hyp1",
+    "advisory:mio-frame-frm1",
+    "decision:edge-activate-1",
+    "session:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9",
+    "environment:env-55",
+    "evidence:sha256:2e355b1086e1396950620f05d9e1f6a418b05f49bcda13f60b05e0e19f273d49"
+   ],
+   "execution_ref": null,
+   "limitations": [
+    "virtual_or_local_evidence_not_hil",
+    "tenant_substituted_by_node_id_and_trace_id",
+    "objective_content_not_bound",
+    "objective_not_supplied",
+    "no_interaction_observed_is_not_evidence_of_safety",
+    "isolation_drift_observed",
+    "runtime_state_not_independently_reverified"
+   ],
+   "materialization_producer": "azazel-deception",
+   "observation_id": "effect_observation:805af41b5c6fdf555a1869a2",
+   "observed_at": "2026-11-03T06:11:02.936159+00:00",
+   "schema_version": "effect-observation/v0.1",
+   "status": "failed",
+   "termination_reason": "isolation_drift_observed",
+   "trace_id": "trace-55"
+  },
+  "outcome": {
+   "actor_session_ref": null,
+   "authority_class": "observed_fact",
+   "confounders": [],
+   "coverage_complete": true,
+   "decision_ref": "decision:edge-activate-1",
+   "directive": false,
+   "effect_ref": "effect:edge-activate-1",
+   "envelope_id": "envelope:68c2d26a1ba4bfd713ce73bc",
+   "environment_ref": "environment:env-55",
+   "evidence_refs": [
+    "advisory:mio-objective-obj1",
+    "advisory:mio-hypothesis-hyp1",
+    "advisory:mio-frame-frm1",
+    "decision:edge-activate-1",
+    "session:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9",
+    "environment:env-55",
+    "evidence:sha256:2e355b1086e1396950620f05d9e1f6a418b05f49bcda13f60b05e0e19f273d49"
+   ],
+   "impact_observations": {
+    "drift_count": 1,
+    "interaction_count": 0
+   },
+   "observation_class": "interaction",
+   "observed_at": "2026-11-03T06:11:02.936159+00:00",
+   "outcome_observation_refs": [],
+   "presentation_ref": "presentation:41884438203c0df487040a00",
+   "producer_node": "az06-test",
+   "producer_product": "azazel-deception",
+   "producer_version": "0.2.0.dev0",
+   "provenance": null,
+   "schema_version": "outcome-observation-envelope/v0.1",
+   "telemetry_coverage": {
+    "expected": [
+     "interaction_log",
+     "process_events"
+    ],
+    "observed": [
+     "interaction_log",
+     "process_events"
+    ]
+   },
+   "telemetry_gaps": [],
+   "trace_id": "trace-55",
+   "window_end": "2026-11-03T06:11:02.936159+00:00",
+   "window_start": "2026-11-03T06:11:02.928709+00:00"
+  }
+ },
+ "environment_id": "env-55",
+ "gap": {
+  "effect_observation": {
+   "authority_class": "active_materialized",
+   "directive": false,
+   "effect_ref": "effect:edge-activate-1",
+   "evidence_refs": [
+    "advisory:mio-objective-obj1",
+    "advisory:mio-hypothesis-hyp1",
+    "advisory:mio-frame-frm1",
+    "decision:edge-activate-1",
+    "session:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9",
+    "environment:env-55",
+    "evidence:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9"
+   ],
+   "execution_ref": null,
+   "limitations": [
+    "virtual_or_local_evidence_not_hil",
+    "tenant_substituted_by_node_id_and_trace_id",
+    "objective_content_not_bound",
+    "objective_not_supplied",
+    "no_interaction_observed_is_not_evidence_of_safety",
+    "telemetry_gap:process_events",
+    "runtime_state_not_independently_reverified"
+   ],
+   "materialization_producer": "azazel-deception",
+   "observation_id": "effect_observation:aef374ab16e92c71de99599f",
+   "observed_at": "2026-11-03T06:11:02.934172+00:00",
+   "schema_version": "effect-observation/v0.1",
+   "status": "active",
+   "termination_reason": null,
+   "trace_id": "trace-55"
+  },
+  "outcome": {
+   "actor_session_ref": null,
+   "authority_class": "observed_fact",
+   "confounders": [],
+   "coverage_complete": false,
+   "decision_ref": "decision:edge-activate-1",
+   "directive": false,
+   "effect_ref": "effect:edge-activate-1",
+   "envelope_id": "envelope:fb63769e83a9543e0cf2810f",
+   "environment_ref": "environment:env-55",
+   "evidence_refs": [
+    "advisory:mio-objective-obj1",
+    "advisory:mio-hypothesis-hyp1",
+    "advisory:mio-frame-frm1",
+    "decision:edge-activate-1",
+    "session:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9",
+    "environment:env-55",
+    "evidence:sha256:d176340a70b943e665b70ba1c634bf66a4c2dca0e372363979e67c3ac0e287d9"
+   ],
+   "impact_observations": {
+    "drift_count": 0,
+    "interaction_count": 0
+   },
+   "observation_class": "interaction",
+   "observed_at": "2026-11-03T06:11:02.934172+00:00",
+   "outcome_observation_refs": [],
+   "presentation_ref": "presentation:41884438203c0df487040a00",
+   "producer_node": "az06-test",
+   "producer_product": "azazel-deception",
+   "producer_version": "0.2.0.dev0",
+   "provenance": null,
+   "schema_version": "outcome-observation-envelope/v0.1",
+   "telemetry_coverage": {
+    "expected": [
+     "interaction_log",
+     "process_events"
+    ],
+    "observed": [
+     "interaction_log"
+    ]
+   },
+   "telemetry_gaps": [
+    "process_events"
+   ],
+   "trace_id": "trace-55",
+   "window_end": "2026-11-03T06:11:02.934172+00:00",
+   "window_start": "2026-11-03T06:11:02.928709+00:00"
+  }
+ },
+ "package_id": "municipal-linux-v1"
+}

@@ -35,6 +35,7 @@ EXPECTED_LANES = {
     "engagement-events",
     "outcome-evidence",
     "deception-observations",
+    "deception-outcome-envelopes",
 }
 
 

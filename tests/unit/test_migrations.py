@@ -48,6 +48,7 @@ LOCAL_TABLES = {
     "outcome_mechanism_v0",
     "outcome_observation_v0",
     "outcome_effect_assessment_v0",
+    "deception_outcome_envelope_v0",
 }
 
 
@@ -82,6 +83,7 @@ def test_local_migrations_apply_cleanly(tmp_path):
         "0005_outcome_evidence_v0",
         "0006_defensive_state_observation",
         "0007_engagement_event",
+        "0008_deception_outcome_envelope",
     ]
     tables = _table_names(conn)
     assert LOCAL_TABLES <= tables

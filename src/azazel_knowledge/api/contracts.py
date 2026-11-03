@@ -48,6 +48,8 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, ValidationError
 
+from azazel_knowledge.api import limits
+
 from azazel_fabric.cti_contracts import (
     BANNED_DIRECTIVE_FIELDS,
     CtiEventBatch,
@@ -61,6 +63,7 @@ from azazel_fabric.deception_contracts import (
     assert_no_effectiveness_verdict,
     assert_no_runtime_directives,
 )
+from azazel_fabric.effect_contracts import EffectObservation, OutcomeObservationEnvelope
 from azazel_fabric.engagement_contracts import EngagementAdvisory, EngagementEvent
 from azazel_fabric.outcome_contracts import (
     ExecutionRefV0,
@@ -87,6 +90,7 @@ __all__ = [
     "maybe_fabric_engagement_lines",
     "fabric_outcome_evidence_lines",
     "maybe_fabric_observation_lines",
+    "fabric_deception_outcome_lines",
     "build_effectiveness_advisory",
     "assert_response_advisory_only",
 ]
@@ -216,6 +220,98 @@ def maybe_fabric_observation_lines(
             raise IngestBatchInvalid(str(exc)) from exc
 
     return [json.dumps(item, sort_keys=True) for item in items]
+
+
+# The pair a Deception feedback bundle (Azazel-Deception#59) carries under
+# `outcome` and `runtime_materialization.effect_observation`. Neither alone is
+# enough: the envelope holds coverage / gaps / confounders and has no
+# `limitations` field, the effect observation holds `limitations` and has no
+# coverage. Isolation state and the objective refs are not Fabric fields at
+# all; they are visible only as limitation tokens and `evidence_refs`.
+_DECEPTION_OUTCOME_ITEM_KEYS = frozenset({"outcome", "effect_observation"})
+
+
+def fabric_deception_outcome_lines(raw_body: bytes, endpoint: str) -> list[str] | None:
+    """Return JSONL lines for a deception outcome-envelope batch, or `None` off-endpoint.
+
+    Like `/v1/outcome-evidence` this lane is new and has no legacy per-line
+    caller, so there is no fall-through: a body that is not a valid envelope of
+    Fabric-valid items fails closed (`IngestBatchInvalid` -> `422`).
+
+    Beyond the two Fabric models, the boundary checks that the pair describes
+    one thing: the envelope's `environment_ref` is the batch's
+    `environment_id`, and the effect observation names the same effect, trace
+    and producer as the envelope. A pair assembled from two different traces
+    is not a corrupted fact, it is two facts, and storing it as one would put
+    one trace's coverage next to another trace's limitations.
+
+    Nothing here judges freshness. A late envelope is the one most worth
+    keeping, and age is the reader's to state against its own `query_as_of`.
+    """
+
+    if endpoint != "deception-outcome-envelopes":
+        return None
+
+    text = raw_body.decode("utf-8", errors="replace").strip()
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise IngestBatchInvalid(f"body must be a JSON object: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise IngestBatchInvalid("body must be a JSON object")
+    unknown = set(obj) - {"environment_id", "package_id", "items"}
+    if unknown:
+        raise IngestBatchInvalid(f"unknown envelope fields: {sorted(unknown)}")
+    environment_id = obj.get("environment_id")
+    if not isinstance(environment_id, str) or not environment_id.strip():
+        raise IngestBatchInvalid("envelope 'environment_id' must be a non-empty string")
+    package_id = obj.get("package_id")
+    if package_id is not None and (not isinstance(package_id, str) or not package_id.strip()):
+        raise IngestBatchInvalid("envelope 'package_id' must be a non-empty string when present")
+    items = obj.get("items")
+    if not isinstance(items, list):
+        raise IngestBatchInvalid("envelope 'items' must be a list")
+    if len(items) > limits.INGEST_OUTCOME_ENVELOPE_MAX_ITEMS:
+        raise IngestBatchInvalid(
+            f"envelope carries {len(items)} items; cap is "
+            f"{limits.INGEST_OUTCOME_ENVELOPE_MAX_ITEMS}"
+        )
+
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or set(item) != _DECEPTION_OUTCOME_ITEM_KEYS:
+            raise IngestBatchInvalid(
+                "envelope item must be an object with exactly 'outcome' and 'effect_observation'"
+            )
+        try:
+            # Honesty invariant first, over the whole item: a verdict-shaped
+            # key is a layer-4 claim that must never ride on a fact.
+            assert_no_effectiveness_verdict(item)
+            envelope = OutcomeObservationEnvelope.model_validate(item["outcome"])
+            effect = EffectObservation.model_validate(item["effect_observation"])
+        except (ValidationError, ValueError) as exc:
+            raise IngestBatchInvalid(str(exc)) from exc
+
+        if envelope.environment_ref != f"environment:{environment_id}":
+            raise IngestBatchInvalid("outcome environment_ref is not the batch environment")
+        if envelope.effect_ref is None:
+            raise IngestBatchInvalid("outcome must name the effect it observed (effect_ref)")
+        if effect.effect_ref != envelope.effect_ref:
+            raise IngestBatchInvalid("effect_observation belongs to a different effect")
+        if effect.trace_id != envelope.trace_id:
+            raise IngestBatchInvalid("effect_observation belongs to a different trace")
+        if effect.materialization_producer != envelope.producer_product:
+            raise IngestBatchInvalid("effect_observation was produced by a different product")
+
+        line = {
+            "environment_id": environment_id,
+            "package_id": package_id,
+            "outcome": envelope.model_dump(mode="json"),
+            "effect_observation": effect.model_dump(mode="json"),
+        }
+        lines.append(json.dumps(line, sort_keys=True))
+
+    return lines
 
 
 # An `EngagementEvent` records what a product selected and the reaction it

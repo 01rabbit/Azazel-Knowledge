@@ -11,6 +11,14 @@ Two boundary surfaces for the deception-effectiveness loop:
   into the batch **envelope** -- a Fabric envelope-contract violation
   (``422``), mirroring the ``Cti<Kind>Batch`` handling. Same INGEST scope/auth.
 
+* ``POST /v1/deception-outcome-envelopes`` -- the coverage side of the same
+  loop (Deception#55 / Knowledge#111 G7): a Fabric ``OutcomeObservationEnvelope``
+  with the ``EffectObservation`` it correlates, which together carry what the
+  interaction rows cannot -- coverage, telemetry gaps, confounders, limitations
+  and the decision / objective refs. New lane, no legacy per-line path, so a
+  body that is not a valid envelope of Fabric-valid pairs is ``422`` and nothing
+  unvalidated reaches the spool. Same ``413`` / ``503`` / INGEST scope as above.
+
 * ``GET /v1/deception-effectiveness`` -- read-side advisory. Runs the
   deterministic ``correlate.deception_effectiveness`` summary under a monotonic
   deadline pinned from handler entry, type-enforces the result as a Fabric
@@ -40,6 +48,7 @@ from azazel_knowledge.api.contracts import (
     IngestBatchInvalid,
     assert_response_advisory_only,
     build_effectiveness_advisory,
+    fabric_deception_outcome_lines,
     maybe_fabric_observation_lines,
 )
 from azazel_knowledge.api.models import IngestAcceptedResponse
@@ -59,6 +68,7 @@ _READ_SCOPE = Depends(require_scope_dep(Scope.READ))
 _RAW_BODY = Depends(read_raw_body)
 
 _ENDPOINT = "deception-observations"
+_OUTCOME_ENDPOINT = "deception-outcome-envelopes"
 
 
 def _split_lines(raw_text: str) -> list[str]:
@@ -91,6 +101,34 @@ def post_deception_observations(
     spool: SpoolWriter = request.app.state.spool
     try:
         batch_id = spool.write_batch(_ENDPOINT, auth.key_id, lines)
+    except QuotaExceeded:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "ingest_quota_exceeded"},
+            headers={"Retry-After": str(limits.INGEST_QUOTA_RETRY_AFTER_S)},
+        )
+    return IngestAcceptedResponse(batch_id=batch_id)
+
+
+@router.post(
+    "/deception-outcome-envelopes",
+    status_code=202,
+    response_model=IngestAcceptedResponse,
+)
+def post_deception_outcome_envelopes(
+    request: Request, raw_body: bytes = _RAW_BODY, auth: AuthContext = _INGEST_SCOPE
+) -> IngestAcceptedResponse:
+    try:
+        limits.check_ingest_batch_size(raw_body)
+    except limits.IngestBatchTooLarge:
+        raise HTTPException(status_code=413, detail={"error": "ingest_batch_too_large"})
+    try:
+        lines = fabric_deception_outcome_lines(raw_body, _OUTCOME_ENDPOINT)
+    except IngestBatchInvalid:
+        raise HTTPException(status_code=422, detail={"error": "ingest_batch_invalid"})
+    spool: SpoolWriter = request.app.state.spool
+    try:
+        batch_id = spool.write_batch(_OUTCOME_ENDPOINT, auth.key_id, lines or [])
     except QuotaExceeded:
         raise HTTPException(
             status_code=503,
