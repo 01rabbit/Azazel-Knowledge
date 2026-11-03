@@ -337,6 +337,19 @@ codex exec \
 - **SDK 版追随。** MCP SDK / クライアントは既知脆弱性(供給網 RCE・tool poisoning・token passthrough・
   SSRF・confused deputy 等)に対して版を追随する。参考: [Wiz MCP セキュリティ](https://www.wiz.io/academy/ai-security/model-context-protocol-security) /
   [NSA CSI: MCP Security](https://www.nsa.gov/Portals/75/documents/Cybersecurity/CSI_MCP_SECURITY.pdf)。
+- **注入文の混入防止(供給網 × indirect prompt injection)。** `spec.md`・worktree 内の `AGENTS.md`・
+  Codex から取り込む差分・外部由来の資料に、**信頼できない注入文(indirect prompt injection)**が
+  混ざっていないことをレビュー時に確認する。MITRE ATT&CK v20 は Indirect Prompt Injection(**T1698**)と
+  開発環境/AI コーディングエージェント設定ファイルを狙う供給網(**T1195.001**)を収載し、Google GTIG は
+  設定ファイルやローダのコメントにプロンプトを埋めてスキャナを回避するマルウェア(DUSTMAKER)や
+  **AI 開発者設定を標的とするインフォスティーラ**を報告した(2026-11 レポート §3.4)。本面は既存の
+  `--sandbox workspace-write` 固定・network 要求即中断・許可リスト運用(§2B)が機械的に緩和しているため、
+  ここでは**レビュー観点の明文化**にとどめる。
+- **Claude Code / Codex の新機能整合(2026-11)。** (a) Claude Code の**背景エージェントによるドラフト PR 起票**は
+  本書の git 規律(PR はドラフトで作成)と噛み合う運用経路であり、月次偵察・保守タスクはこの形で提出してよい。
+  (b) **Claude in Chrome(GA)**等のブラウザ機能は開発補助に限り、**プロダクトのクエリパス検証には使わない**
+  (offline-first の一貫性)。(c) Codex CLI の **enterprise MCP 認証拡張**は上記「認可」の許可リスト運用の範囲内で扱う。
+  最新の推奨モデル世代は §0 の単一情報源([`docs/reports/ai-landscape-*.md`](reports/) 最新号)に委譲する。
 - **プロダクトへの MCP 導入は現時点で行わない。** 助言 API を MCP サーバとして公開する等は
   攻撃面・依存増を招くため据え置き(覆すなら ADR 案件。2026-08 レポート §5)。
 

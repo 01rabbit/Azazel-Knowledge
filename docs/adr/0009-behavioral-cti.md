@@ -83,6 +83,15 @@ The full mechanics are specified in
 - Rules 3–5 keep the Azazel doctrine intact: *AI suggests, CTI contextualizes,
   the deterministic arbiter decides.* Behavioral CTI widens what CTI can
   contextualize without moving authority.
+- **External corroboration (2026-11, non-binding).** The no-ML, non-attribution,
+  explainable stance of Rules 3–5 is reinforced by the wider field: MITRE
+  ATT&CK v20 cataloging prompt injection (T1699 / T1698) as adversary technique
+  validates keeping authority out of a promptable path, and the TRACE-CTI work
+  names the "predicted vs. trusted" boundary this lane enforces through its own
+  hash, complete `reason[]`, and shadow-only gating. This does not reopen the
+  decision; adopting ML/embedding/LLM-based behavioral scoring would still
+  require a new ADR superseding Rule 4. See
+  [`docs/reports/ai-landscape-2026-11.md`](../reports/ai-landscape-2026-11.md) §3.
 
 ## Consequences
 
