@@ -21,6 +21,11 @@ Effectiveness boundary (docs/azazel-deception-effectiveness.md, binding):
   never read as narrative failure;
 * attacker belief is never claimed from interaction alone -- it is always listed
   under `unknowns`;
+* a producer's coverage and limitations (``deception_outcome_envelope_v0``) are
+  surfaced as ``unknowns`` / ``counter_evidence`` and never move ``confidence``
+  or the suggested posture: an incomplete window, a ``stale`` flag or observed
+  isolation drift makes the advisory *less* able to conclude, and silence is
+  never read as safety;
 * the vocabulary is the claim-boundary vocabulary (observed interaction /
   observed reaction / measured outcome / runtime-context confounder / suggested
   posture / unknown-insufficient-evidence).
@@ -101,6 +106,130 @@ def _clamp_round(raw: float, cfg: Mapping[str, Any]) -> float:
     ceil = float(cfg.get("ceil", 1.0))
     ndigits = int(cfg.get("round_ndigits", 6))
     return round(min(max(raw, floor), ceil), ndigits)
+
+# Limitation tokens the producer (Azazel-Deception) states in its own words.
+# Every token is surfaced verbatim under `unknowns` -- a limitation is by
+# definition a bound on what can be concluded. These two additionally count
+# against the observation, so they are repeated under `counter_evidence`.
+# Anything not listed is still shown; this is a promotion list, not a filter.
+_COUNTER_EVIDENCE_LIMITATIONS = ("stale", "isolation_drift_observed")
+_NO_INTERACTION_LIMITATION = "no_interaction_observed_is_not_evidence_of_safety"
+_ISOLATION_NOT_ASSERTED = "isolation_not_asserted"
+_ISOLATION_DRIFT = "isolation_drift_observed"
+_ADVISORY_REF_PREFIX = "advisory:"
+_ADVISORY_REF_CAP = 8
+
+
+def _outcome_envelope_notes(
+    conn: sqlite3.Connection,
+    *,
+    environment_id: str,
+    package_id: str | None,
+    n_observations: int,
+) -> tuple[list[str], list[str], dict[str, Any], tuple[str, str] | None]:
+    """Fold stored outcome envelopes into (unknowns, counter_evidence, metadata, scope).
+
+    Only the latest envelope (by `observed_at`, then `envelope_ref`) speaks for
+    the environment's current coverage; the count of all envelopes and of the
+    incomplete ones is reported so an earlier gap is not erased by a later
+    clean window. Returns empty results when none is stored, which keeps an
+    advisory built without this lane byte-identical to what it was before it.
+    `scope` is `(package_id, node_id)` of the latest envelope, used only as a
+    fallback identity when no interaction observation exists.
+    """
+
+    params: list[Any] = [environment_id]
+    where = "environment_id = ?"
+    if package_id is not None:
+        where += " AND package_id = ?"
+        params.append(package_id)
+    try:
+        total, incomplete = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(coverage_complete = 0), 0) "
+            f"FROM deception_outcome_envelope_v0 WHERE {where}",
+            params,
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        # A local.db the worker has not migrated to 0008 yet (API upgraded
+        # first). Same as "nothing stored"; any other error still propagates.
+        if "no such table: deception_outcome_envelope_v0" not in str(exc):
+            raise
+        return [], [], {}, None
+    if not total:
+        return [], [], {}, None
+    row = conn.execute(
+        "SELECT envelope_ref, package_id, producer_node, decision_ref, effect_ref, "
+        "observed_at, coverage_complete, telemetry_gaps, confounders, "
+        "evidence_refs, effect_status, limitations "
+        f"FROM deception_outcome_envelope_v0 WHERE {where} "
+        "ORDER BY observed_at DESC, envelope_ref DESC LIMIT 1",
+        params,
+    ).fetchone()
+    (ref, pkg, node, decision_ref, effect_ref, observed_at, complete,
+     gaps_json, confounders_json, evidence_json, effect_status, limitations_json) = row
+    gaps = _loads_list(gaps_json)
+    confounders = _loads_list(confounders_json)
+    limitations = list(dict.fromkeys(_loads_list(limitations_json)))
+    advisory_refs = [
+        r for r in _loads_list(evidence_json) if r.startswith(_ADVISORY_REF_PREFIX)
+    ][:_ADVISORY_REF_CAP]
+
+    unknowns: list[str] = []
+    counter: list[str] = []
+
+    if not complete:
+        counter.append(
+            "telemetry coverage incomplete in the latest outcome envelope (gaps: "
+            + ", ".join(gaps)
+            + ") -- absence of observation inside a gap is not evidence of absence"
+        )
+        unknowns.append(
+            "coverage incomplete: " + ", ".join(gaps) + " not observed in the producer's window"
+        )
+    else:
+        unknowns.append(
+            "coverage_complete describes telemetry only -- it says the producer "
+            "could see the window, not that the decoy worked"
+        )
+    if confounders:
+        counter.append(
+            "outcome envelope confounders: " + ", ".join(confounders)
+            + " (subtract before claiming effectiveness)"
+        )
+    if _ISOLATION_DRIFT in limitations:
+        isolation = "drift_observed"
+    elif _ISOLATION_NOT_ASSERTED in limitations:
+        isolation = "not_asserted"
+        unknowns.append("isolation not asserted by the producer")
+    else:
+        isolation = "no_drift_reported"
+    for token in _COUNTER_EVIDENCE_LIMITATIONS:
+        if token in limitations:
+            counter.append(f"producer limitation: {token}")
+    for token in limitations:
+        unknowns.append(f"producer limitation: {token}")
+    if n_observations == 0 or _NO_INTERACTION_LIMITATION in limitations:
+        unknowns.append(
+            "no interaction observed is not evidence of safety, and not evidence "
+            "that the deception was effective or ineffective"
+        )
+    unknowns.append(f"coverage as of {observed_at} (latest outcome envelope)")
+
+    metadata: dict[str, Any] = {
+        "outcome_envelope_count": int(total),
+        "outcome_envelopes_incomplete": int(incomplete),
+        "latest_envelope_ref": str(ref),
+        "latest_envelope_observed_at": str(observed_at),
+        "latest_coverage_complete": bool(complete),
+        "latest_isolation": isolation,
+        "latest_effect_status": str(effect_status),
+        "latest_effect_ref": str(effect_ref),
+    }
+    if decision_ref:
+        metadata["latest_decision_ref"] = str(decision_ref)
+    if advisory_refs:
+        metadata["latest_advisory_refs"] = ",".join(advisory_refs)
+    return unknowns, counter, metadata, (str(pkg) if pkg else "", str(node))
 
 
 def summarize_effectiveness(
@@ -226,6 +355,22 @@ def summarize_effectiveness(
             + ")"
         )
 
+    # --- producer coverage / limitations (outcome envelopes) -----------------
+    env_unknowns, env_counter, env_metadata, env_scope = _outcome_envelope_notes(
+        conn,
+        environment_id=environment_id,
+        package_id=package_id,
+        n_observations=n,
+    )
+    _deadline_check(deadline)
+    counter_evidence.extend(env_counter)
+    unknowns.extend(env_unknowns)
+    if env_scope is not None:
+        if not packages and env_scope[0]:
+            packages.add(env_scope[0])
+        if not nodes:
+            nodes.add(env_scope[1])
+
     # --- suggested posture (bounded, non-executable) -------------------------
     has_counter_confounder = any(t in distinct_confounders for t in counter_confounders)
     if n == 0:
@@ -260,6 +405,7 @@ def summarize_effectiveness(
         "saturated_resources": len(saturated),
         "config_hash": config_hash,
         "suggested_posture": posture,
+        **env_metadata,
     }
 
     core = {

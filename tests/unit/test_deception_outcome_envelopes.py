@@ -493,6 +493,147 @@ def test_late_evidence_is_kept_not_refused(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# the advisory: coverage and limitations show, nothing else moves
+# --------------------------------------------------------------------------
+
+
+def _scrub(advisory: dict) -> dict:
+    """The fields coverage must not touch."""
+    return {k: advisory[k] for k in ("confidence", "assessment", "observation_refs")} | {
+        "posture": advisory["metadata"]["suggested_posture"]
+    }
+
+
+def test_an_advisory_without_envelopes_carries_no_envelope_fields(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    _seed_interactions(client, settings, ingest, tmp_path, 3)
+    advisory = _advisory(client, read)
+    assert not any(k.startswith(("latest_", "outcome_envelope")) for k in advisory["metadata"])
+    assert not any("coverage" in u or "producer limitation" in u for u in advisory["unknowns"])
+
+
+def test_incomplete_coverage_is_counter_evidence_and_an_unknown(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    _seed_interactions(client, settings, ingest, tmp_path, 3)
+    baseline = _advisory(client, read)
+
+    _post_and_drain(client, settings, ingest, tmp_path, _body(_pair("gap")))
+    advisory = _advisory(client, read)
+
+    assert any("coverage incomplete" in c and "process_events" in c for c in advisory["counter_evidence"])
+    assert any(u.startswith("coverage incomplete: process_events") for u in advisory["unknowns"])
+    assert "producer limitation: telemetry_gap:process_events" in advisory["unknowns"]
+    assert advisory["metadata"]["latest_coverage_complete"] is False
+    assert advisory["metadata"]["outcome_envelopes_incomplete"] == 1
+    # coverage informs; it does not re-score or re-label
+    assert _scrub(advisory) == _scrub(baseline)
+
+
+def test_isolation_drift_and_stale_are_counter_evidence(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    pair = _pair("drift")
+    pair["effect_observation"]["limitations"].append("stale")
+    _post_and_drain(client, settings, ingest, tmp_path, _body(pair))
+    advisory = _advisory(client, read)
+
+    assert "producer limitation: isolation_drift_observed" in advisory["counter_evidence"]
+    assert "producer limitation: stale" in advisory["counter_evidence"]
+    assert advisory["metadata"]["latest_isolation"] == "drift_observed"
+    assert advisory["metadata"]["latest_effect_status"] == "failed"
+
+
+def test_every_limitation_is_shown_verbatim_even_if_knowledge_has_no_word_for_it(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    pair = _pair("complete")
+    pair["effect_observation"]["limitations"].append("some_future_limitation:x")
+    _post_and_drain(client, settings, ingest, tmp_path, _body(pair))
+    advisory = _advisory(client, read)
+    for token in pair["effect_observation"]["limitations"]:
+        assert f"producer limitation: {token}" in advisory["unknowns"]
+
+
+def test_silence_is_never_read_as_safe_or_effective(tmp_path):
+    """No interactions, complete coverage: still an unknown, still zero confidence."""
+    client, settings, ingest, read = _api(tmp_path)
+    _post_and_drain(client, settings, ingest, tmp_path, _body(_pair("complete")))
+    advisory = _advisory(client, read)
+
+    assert advisory["confidence"] == 0.0
+    assert advisory["metadata"]["suggested_posture"] == "insufficient-evidence"
+    assert any(
+        "no interaction observed is not evidence of safety" in u for u in advisory["unknowns"]
+    )
+    assert any("coverage_complete describes telemetry only" in u for u in advisory["unknowns"])
+    # the envelope supplies the identity when no interaction row exists
+    assert advisory["node_id"] == "az06-test"
+    assert advisory["package_id"] == "municipal-linux-v1"
+    assert advisory["authority"] == "advisory_only" and advisory["executable"] is False
+    # coverage text never turns into a claim
+    text = json.dumps([advisory["assessment"], advisory["counter_evidence"]]).lower()
+    for claim in ("deception succeeded", "attacker was deceived", "is safe", "is secure", "diverted"):
+        assert claim not in text
+
+
+def test_complete_coverage_does_not_remove_the_belief_unknown(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    _seed_interactions(client, settings, ingest, tmp_path, 4)
+    _post_and_drain(client, settings, ingest, tmp_path, _body(_pair("complete")))
+    advisory = _advisory(client, read)
+    assert any("belief" in u for u in advisory["unknowns"])
+    assert not any("coverage incomplete" in c for c in advisory["counter_evidence"])
+
+
+def test_the_latest_envelope_speaks_but_an_earlier_gap_is_still_counted(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    older = _with_id(_pair("gap"), "older", observed_at="2026-01-01T00:00:00+00:00")
+    newer = _with_id(_pair("complete"), "newer", observed_at="2026-02-01T00:00:00+00:00")
+    _post_and_drain(client, settings, ingest, tmp_path, _body(older, newer))
+    advisory = _advisory(client, read)
+    assert advisory["metadata"]["latest_envelope_ref"] == "envelope:newer"
+    assert advisory["metadata"]["latest_coverage_complete"] is True
+    assert advisory["metadata"]["outcome_envelope_count"] == 2
+    assert advisory["metadata"]["outcome_envelopes_incomplete"] == 1
+
+
+def test_decision_and_objective_refs_are_reported(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    _post_and_drain(client, settings, ingest, tmp_path, _body(_pair("complete")))
+    metadata = _advisory(client, read)["metadata"]
+    assert metadata["latest_decision_ref"] == "decision:edge-activate-1"
+    assert "advisory:mio-objective-obj1" in metadata["latest_advisory_refs"].split(",")
+    assert metadata["latest_effect_ref"] == "effect:edge-activate-1"
+
+
+def test_package_filter_applies_to_envelopes(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    _post_and_drain(client, settings, ingest, tmp_path, _body(_pair("gap"), package_id="pkg-A"))
+    other = client.get(ADVISORY_URL + "&package_id=pkg-B", headers=auth_header(read)).json()
+    assert "outcome_envelope_count" not in other["metadata"]
+    mine = client.get(ADVISORY_URL + "&package_id=pkg-A", headers=auth_header(read)).json()
+    assert mine["metadata"]["outcome_envelope_count"] == 1
+
+
+def test_the_advisory_with_envelopes_is_byte_identical_on_replay(tmp_path):
+    client, settings, ingest, read = _api(tmp_path)
+    _seed_interactions(client, settings, ingest, tmp_path, 3)
+    _post_and_drain(client, settings, ingest, tmp_path, _body(_pair("gap"), _pair("drift")))
+    first = client.get(ADVISORY_URL, headers=auth_header(read)).content
+    assert client.get(ADVISORY_URL, headers=auth_header(read)).content == first
+
+
+def test_an_unmigrated_database_serves_the_advisory_without_envelopes(tmp_path):
+    """API upgraded before the worker applied 0008: same as nothing stored, not a 500."""
+    client, settings, ingest, read = _api(tmp_path)
+    _seed_interactions(client, settings, ingest, tmp_path, 3)
+    baseline = _advisory(client, read)
+    conn = sqlite3.connect(settings.local_db_path)
+    conn.execute("DROP TABLE deception_outcome_envelope_v0")
+    conn.commit()
+    conn.close()
+    assert _advisory(client, read) == baseline
+
+
+# --------------------------------------------------------------------------
 # the mirrored validator must not drift from the Fabric models
 # --------------------------------------------------------------------------
 
