@@ -109,9 +109,10 @@ existing **api-extra** pin `azazel-fabric` from `@v0.3.0` to `@v0.6.0`; core
 deps (stdlib + PyYAML + idna + PyNaCl) are unchanged. Fabric remains imported
 only in `api/contracts.py`.
 
-> **Pin superseded (2026-09-19).** The api-extra pin in force is now
-> **`v0.8.0`**, moved by [ADR-0016](0016-fabric-pin-v0-8-0.md) with test
-> evidence. Everything else this ADR decided stands.
+> **Pin superseded (2026-11-03).** The api-extra pin in force is now
+> **`v0.9.0rc5`**, recorded by [ADR-0019](0019-fabric-pin-v0-9-0rc5.md)
+> after [ADR-0016](0016-fabric-pin-v0-8-0.md). Everything else this ADR
+> decided stands.
 >
 > **Note resolved (2026-09-19, Azazel-Knowledge#73).** This ADR originally
 > warned that the `v0.6.0` git tag was unpublished and that CI installing
