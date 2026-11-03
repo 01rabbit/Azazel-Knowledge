@@ -435,18 +435,28 @@ Storage is `deception_outcome_envelope_v0` (`local.db`, migration `0008`),
 append-only, with no verdict column. It is idempotent on `envelope_id`: an
 identical re-delivery is a no-op, while a re-used `envelope_id` with different
 content is quarantined in the batch status and the stored row is left as it was.
-Limitation, gap and confounder tokens are held at drain to the series grammar
-`[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?` (no `/`, so no URL or path) and
-to the imperative-word set (`redirect`, `activate`, `run`, ...; judged per
-`_ - . : ~` segment), because they are rendered into an advisory a planner reads.
+Tokens are held at drain to the series grammar, matched with `fullmatch` (a
+trailing newline does not pass): limitations to
+`[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?`, gap and confounder names to
+`[A-Za-z0-9._-]{1,64}` (so `Suricata_eve` is fine). Neither admits `/`, so no URL
+or path fits, and a token containing an imperative segment (`redirect`,
+`activate`, `run`, `override`, `bypass`, ... judged per `_ - . : ~` segment) is
+refused, because they are rendered into an advisory a planner reads. **An invalid
+entry is dropped on its own, not the pair**: the rest is stored and the count is
+kept in `entries_dropped` (`raw` still holds what arrived). If every named gap
+was dropped the window is still incomplete, so a single gap named
+`entries_dropped` is stored. Structural contradictions -- `coverage_complete`
+against the gaps *as sent*, a different trace or effect, a re-used `envelope_id`
+with different content -- still quarantine the whole pair.
 
 **What the advisory does with it** (`GET /v1/deception-effectiveness`): the latest
 envelope (by `observed_at`) speaks for current coverage. Incomplete coverage is
 `counter_evidence` and an `unknown`; every `limitations` token is listed under
 `unknowns` verbatim, and `stale` / `isolation_drift_observed` are also
 `counter_evidence`; `no interaction observed is not evidence of safety` is added
-when nothing was observed. `metadata` gains `outcome_envelope_count`,
-`outcome_envelopes_incomplete`, `latest_envelope_ref`,
+when nothing was observed, and `outcome_envelope_entries_dropped: N` when entries
+were discarded. `metadata` gains `outcome_envelope_count`,
+`outcome_envelopes_incomplete`, `outcome_envelope_entries_dropped`, `latest_envelope_ref`,
 `latest_envelope_observed_at`, `latest_coverage_complete`, `latest_isolation`
 (`drift_observed` / `not_asserted` / `no_drift_reported` — derived from the
 limitations, never `asserted`), `latest_effect_status`, `latest_effect_ref`,

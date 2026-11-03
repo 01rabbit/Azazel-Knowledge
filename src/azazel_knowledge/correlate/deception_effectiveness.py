@@ -144,8 +144,9 @@ def _outcome_envelope_notes(
         where += " AND package_id = ?"
         params.append(package_id)
     try:
-        total, incomplete = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(coverage_complete = 0), 0) "
+        total, incomplete, dropped = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(coverage_complete = 0), 0), "
+            "COALESCE(SUM(entries_dropped), 0) "
             f"FROM deception_outcome_envelope_v0 WHERE {where}",
             params,
         ).fetchone()
@@ -213,11 +214,18 @@ def _outcome_envelope_notes(
             "no interaction observed is not evidence of safety, and not evidence "
             "that the deception was effective or ineffective"
         )
+    if dropped:
+        unknowns.append(
+            f"outcome_envelope_entries_dropped: {int(dropped)} limitation / gap / "
+            "confounder entr(ies) were not valid tokens and were discarded; "
+            "the producer's statement is incomplete to that extent"
+        )
     unknowns.append(f"coverage as of {observed_at} (latest outcome envelope)")
 
     metadata: dict[str, Any] = {
         "outcome_envelope_count": int(total),
         "outcome_envelopes_incomplete": int(incomplete),
+        "outcome_envelope_entries_dropped": int(dropped),
         "latest_envelope_ref": str(ref),
         "latest_envelope_observed_at": str(observed_at),
         "latest_coverage_complete": bool(complete),

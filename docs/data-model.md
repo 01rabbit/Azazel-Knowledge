@@ -308,7 +308,8 @@ is read from `limitations` at query time rather than stored a second time.
 | coverage_complete, telemetry_gaps | 0/1 and JSON array; CHECKed against each other in both directions |
 | telemetry_coverage, impact_observations, confounders | JSON; bounded fact maps / tokens |
 | evidence_refs | JSON; includes the typed `advisory:` objective / hypothesis / frame refs |
-| effect_observation_ref, effect_status, termination_reason, limitations | from the `EffectObservation` (`limitations` is JSON, identifier-like tokens) |
+| effect_observation_ref, effect_status, termination_reason, limitations | from the `EffectObservation` (`limitations` is JSON, tokens in the series grammar) |
+| entries_dropped | count of limitation / gap / confounder entries discarded as invalid tokens (the rest is kept) |
 | authority_class | CHECK `observed_fact` / `active_materialized` |
 | raw | the whole `{outcome, effect_observation}` line as stored |
 

@@ -431,9 +431,9 @@ def _insert_deception_outcome_envelopes(
             "trace_id, decision_ref, effect_ref, presentation_ref, window_start, window_end, "
             "observation_class, coverage_complete, telemetry_coverage, telemetry_gaps, "
             "confounders, impact_observations, evidence_refs, effect_observation_ref, "
-            "effect_status, termination_reason, limitations, observed_at, authority_class, "
-            "schema_version, raw, received_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "effect_status, termination_reason, limitations, entries_dropped, observed_at, "
+            "authority_class, schema_version, raw, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 r["envelope_ref"], r["environment_id"], r["package_id"],
                 r["producer_product"], r["producer_node"], r["trace_id"],
@@ -447,6 +447,7 @@ def _insert_deception_outcome_envelopes(
                 json.dumps(r["evidence_refs"]),
                 r["effect_observation_ref"], r["effect_status"], r["termination_reason"],
                 json.dumps(r["limitations"]),
+                r["entries_dropped"],
                 r["observed_at"], r["authority_class"], r["schema_version"],
                 raw, to_rfc3339(now),
             ),

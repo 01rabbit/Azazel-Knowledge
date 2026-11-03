@@ -982,13 +982,16 @@ OUTCOME_ENVELOPE_LIST_MAX = 128
 # segment so `redirection_does_not_imply_diversion` passes and `redirect` does
 # not. The set is copied here, not imported: this module runs without Fabric.
 _OUTCOME_TOKEN_MAX = 200
-_OUTCOME_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?$")
+# Matched with fullmatch: `$` accepts a trailing newline, so `stale\n` would pass.
+_OUTCOME_LIMITATION_RE = re.compile(r"[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?")
+# Gap and confounder names (CONVENTIONS C2'): the parameter half of the above.
+_OUTCOME_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _OUTCOME_TOKEN_SEGMENT_SPLIT = re.compile(r"[_.:~-]+")
 IMPERATIVE_SEGMENTS = frozenset(
     "activate activation deactivate execute exec run start stop open allow "
     "authorize authorized approve approved enable extend terminate withdraw "
     "block isolate quarantine redirect expose command shell sudo deploy "
-    "install delete kill".split()
+    "install delete kill override enforce grant granted bypass".split()
 )
 _OUTCOME_REF_MAX = 256
 
@@ -1024,25 +1027,46 @@ def _outcome_str(obj: Mapping[str, Any], name: str, *, optional: bool = False) -
     return value, None
 
 
-def _outcome_tokens(obj: Mapping[str, Any], name: str, *, charset: bool) -> tuple[list[str], str | None]:
+def _valid_token(item: Any, pattern: re.Pattern[str]) -> bool:
+    if not isinstance(item, str) or len(item) > _OUTCOME_TOKEN_MAX:
+        return False
+    if pattern.fullmatch(item) is None:
+        return False
+    return not set(_OUTCOME_TOKEN_SEGMENT_SPLIT.split(item.lower())) & IMPERATIVE_SEGMENTS
+
+
+def _outcome_tokens(
+    obj: Mapping[str, Any], name: str, *, pattern: re.Pattern[str]
+) -> tuple[list[str], int, str | None]:
+    """Return `(kept, dropped, error)` for a token list.
+
+    A list that is not a list, or is over the bound, is a structural problem
+    and an error (the whole pair is quarantined). An *entry* that is not a valid
+    token is dropped on its own and counted (CONVENTIONS C6): one bad word must
+    not cost the producer the rest of its coverage statement.
+    """
+
     value = obj.get(name, [])
     if not isinstance(value, list):
-        return [], f"{name} must be a list"
+        return [], 0, f"{name} must be a list"
     if len(value) > OUTCOME_ENVELOPE_LIST_MAX:
-        return [], f"{name} exceeds {OUTCOME_ENVELOPE_LIST_MAX} entries"
+        return [], 0, f"{name} exceeds {OUTCOME_ENVELOPE_LIST_MAX} entries"
+    kept = [item for item in value if _valid_token(item, pattern)]
+    return kept, len(value) - len(kept), None
+
+
+def _outcome_refs(obj: Mapping[str, Any], name: str) -> str | None:
+    value = obj.get(name, [])
+    if not isinstance(value, list):
+        return f"{name} must be a list"
+    if len(value) > OUTCOME_ENVELOPE_LIST_MAX:
+        return f"{name} exceeds {OUTCOME_ENVELOPE_LIST_MAX} entries"
     for item in value:
         if not isinstance(item, str) or not item.strip():
-            return [], f"{name} entries must be non-empty strings"
-        limit = _OUTCOME_TOKEN_MAX if charset else _OUTCOME_REF_MAX
-        if len(item) > limit:
-            return [], f"{name} entry exceeds {limit} characters"
-        if charset:
-            if not _OUTCOME_TOKEN_RE.match(item):
-                return [], f"{name} entry is not a valid token"
-            segments = set(_OUTCOME_TOKEN_SEGMENT_SPLIT.split(item.lower()))
-            if segments & IMPERATIVE_SEGMENTS:
-                return [], f"{name} entry contains an imperative word"
-    return list(value), None
+            return f"{name} entries must be non-empty strings"
+        if len(item) > _OUTCOME_REF_MAX:
+            return f"{name} entry exceeds {_OUTCOME_REF_MAX} characters"
+    return None
 
 
 def validate_deception_outcome_envelope_line(line: str, *, now: datetime) -> Result:
@@ -1138,28 +1162,36 @@ def validate_deception_outcome_envelope_line(line: str, *, now: datetime) -> Res
     coverage_complete = env.get("coverage_complete")
     if not isinstance(coverage_complete, bool):
         return False, "coverage_complete must be a boolean"
-    gaps, error = _outcome_tokens(env, "telemetry_gaps", charset=True)
-    if error:
-        return False, error
-    if coverage_complete and gaps:
+    # Contradictions are judged on what the producer sent, before any entry is
+    # dropped: dropping is hygiene, it must not manufacture or hide a conflict.
+    raw_gaps = env.get("telemetry_gaps", [])
+    if not isinstance(raw_gaps, list):
+        return False, "telemetry_gaps must be a list"
+    if coverage_complete and raw_gaps:
         return False, "coverage_complete is true but telemetry_gaps names gaps"
-    if not coverage_complete and not gaps:
+    if not coverage_complete and not raw_gaps:
         return False, "coverage is incomplete but no telemetry_gaps are named"
-    confounders, error = _outcome_tokens(env, "confounders", charset=True)
+    gaps, d_gaps, error = _outcome_tokens(env, "telemetry_gaps", pattern=_OUTCOME_NAME_RE)
     if error:
         return False, error
-    limitations, error = _outcome_tokens(eff, "limitations", charset=True)
+    confounders, d_conf, error = _outcome_tokens(env, "confounders", pattern=_OUTCOME_NAME_RE)
     if error:
         return False, error
-    evidence_refs, error = _outcome_tokens(env, "evidence_refs", charset=False)
+    limitations, d_lim, error = _outcome_tokens(eff, "limitations", pattern=_OUTCOME_LIMITATION_RE)
     if error:
         return False, error
-    _, error = _outcome_tokens(env, "outcome_observation_refs", charset=False)
-    if error:
-        return False, error
-    _, error = _outcome_tokens(eff, "evidence_refs", charset=False)
-    if error:
-        return False, error
+    if not coverage_complete and not gaps:
+        # Every named gap was unusable. The window is still incomplete; say so
+        # with a gap the table's CHECK accepts rather than storing none.
+        gaps = ["entries_dropped"]
+    entries_dropped = d_gaps + d_conf + d_lim
+    for source, name in (
+        (env, "evidence_refs"), (env, "outcome_observation_refs"), (eff, "evidence_refs"),
+    ):
+        error = _outcome_refs(source, name)
+        if error:
+            return False, error
+    evidence_refs = list(env.get("evidence_refs", []))
 
     for name in ("telemetry_coverage", "impact_observations"):
         if not isinstance(env.get(name, {}), Mapping):
@@ -1198,6 +1230,7 @@ def validate_deception_outcome_envelope_line(line: str, *, now: datetime) -> Res
         "effect_status": strings["e.status"],
         "termination_reason": strings["e.termination_reason"],
         "limitations": limitations,
+        "entries_dropped": entries_dropped,
         "observed_at": observed_utc(observed),
         "authority_class": env["authority_class"],
         "schema_version": env["schema_version"],

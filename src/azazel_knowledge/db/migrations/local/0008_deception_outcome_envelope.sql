@@ -58,6 +58,10 @@ CREATE TABLE deception_outcome_envelope_v0 (
     effect_status TEXT NOT NULL,
     termination_reason TEXT,
     limitations TEXT NOT NULL DEFAULT '[]',
+    -- Entries of limitations / telemetry_gaps / confounders discarded one by one
+    -- because they were not valid tokens (CONVENTIONS C6). The rest of the pair is
+    -- kept; `raw` still holds what arrived.
+    entries_dropped INTEGER NOT NULL DEFAULT 0 CHECK (entries_dropped >= 0),
     -- Fixed-width UTC (`%Y-%m-%dT%H:%M:%S.%fZ`) so string order is time order.
     observed_at TEXT NOT NULL,
     authority_class TEXT NOT NULL CHECK (authority_class IN ('observed_fact', 'active_materialized')),
