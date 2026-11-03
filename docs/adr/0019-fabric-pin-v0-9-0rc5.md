@@ -13,8 +13,13 @@ The merged pin change was needed for the Deception outcome-envelope path:
 Fabric `v0.9.0rc5` supports the typed-reference grammar used by that path and
 the `EffectObservation` restrictions validated by Knowledge. The released tag
 `v0.9.0rc5` resolves to commit
-`450d9502884ba533653210056a6fb85012b96b84`; it is a pre-release. The newer
-Fabric development candidate is not the Knowledge dependency.
+`450d9502884ba533653210056a6fb85012b96b84`; it is a published pre-release,
+not a stable release. The interim `v0.9.0rc2` pin was present at PR #114's
+base and was replaced by commit `1146eec` in that PR; no separate ADR was
+recorded for that interim pin. Fabric main at
+`8e765430326fbdf63c8b1a65119c04da3ee88383` reports `0.9.0rc6.dev0`; that
+development snapshot is not the Knowledge dependency and has no published
+`v0.9.0rc6` tag.
 
 ## Decision
 

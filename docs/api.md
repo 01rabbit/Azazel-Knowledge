@@ -5,7 +5,7 @@ every endpoint; mTLS optional. All requests and responses are logged as JSONL.
 
 Since [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md) this boundary is also
 **type-enforced by `azazel_fabric.cti_contracts`** (tag-pinned,
-`api`-extra only; the pin in force is `v0.9.0rc5` per
+`api`-extra only; the pin in force is the published pre-release `v0.9.0rc5` per
 [ADR-0019](adr/0019-fabric-pin-v0-9-0rc5.md), carried in `pyproject.toml`). The enforcement is additive and the wire **shapes below are
 unchanged**: ingest callers may opt into the canonical `Cti<Kind>Batch`
 envelope and have it validated (see *Ingest*), and every `/v1/context` response
