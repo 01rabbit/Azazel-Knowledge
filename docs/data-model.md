@@ -289,6 +289,29 @@ summarizes these rows deterministically into a Fabric `EffectivenessAdvisory`;
 it separates narrative effectiveness from runtime/capacity confounders and never
 claims attacker belief.
 
+### deception_outcome_envelope_v0 — `local.db`, F-1 immutable
+
+What the producer could see while it watched (Knowledge#111 G7): a Fabric
+`OutcomeObservationEnvelope` and the `EffectObservation` it correlates. Migration
+`db/migrations/local/0008_deception_outcome_envelope.sql`; INSERT-only with
+`BEFORE UPDATE`/`BEFORE DELETE` triggers; idempotent on `envelope_ref`
+(= `envelope_id`). **No verdict column**, and no derived column: isolation state
+is read from `limitations` at query time rather than stored a second time.
+
+| Column | Notes |
+|---|---|
+| envelope_ref | Fabric `envelope_id`; UNIQUE. A re-used id with different `raw` is quarantined at drain, never overwritten |
+| environment_id, package_id | from the batch (`package_id` optional); `environment_ref` is checked against `environment_id` |
+| producer_product, producer_node, trace_id | identity; `trace_id` and `effect_ref` must match the effect observation |
+| decision_ref, effect_ref, presentation_ref | typed refs, as sent |
+| window_start, window_end, observed_at | UTC, fixed-width (`…%S.%fZ`) so string order is time order |
+| coverage_complete, telemetry_gaps | 0/1 and JSON array; CHECKed against each other in both directions |
+| telemetry_coverage, impact_observations, confounders | JSON; bounded fact maps / tokens |
+| evidence_refs | JSON; includes the typed `advisory:` objective / hypothesis / frame refs |
+| effect_observation_ref, effect_status, termination_reason, limitations | from the `EffectObservation` (`limitations` is JSON, identifier-like tokens) |
+| authority_class | CHECK `observed_fact` / `active_materialized` |
+| raw | the whole `{outcome, effect_observation}` line as stored |
+
 ## Normalization rules
 
 - All timestamps UTC ISO 8601.
