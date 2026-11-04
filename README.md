@@ -32,8 +32,8 @@ offline-first contracts are enforced by static and replay tests.
 
 **Product version:** `azazel-knowledge` **0.1.0** (`pyproject.toml`); no release
 tag is published. Requires Python ≥ 3.11. Boundary dependency:
-`azazel-fabric` **`v0.9.0rc5`** (pre-release, `api` extra only;
-[ADR-0019](docs/adr/0019-fabric-pin-v0-9-0rc5.md)). Compatibility with a given
+`azazel-fabric` **`v0.10.0`** (stable, `api` extra only;
+[ADR-0023](docs/adr/0023-fabric-pin-v0-10-0.md)). Compatibility with a given
 Azazel-Edge release is not verified in this repository; the Edge payload contract
 is tracked in [Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305).
 
@@ -142,8 +142,9 @@ contract ([design](docs/design/phase2-implementation.md),
 
 **What Phase 2 does not yet include:** the multi-Edge scale-out. Cross-edge
 linkage is partly implemented, but whether the actor at one Edge is the actor at
-another is not yet inferred by Knowledge
-([ADR-0018](docs/adr/0018-cross-edge-actor-inference.md)).
+another is not yet inferred by Knowledge. Cross-edge actor inference is an
+accepted design ([ADR-0018](docs/adr/0018-cross-edge-actor-inference.md));
+implementation is pending.
 
 **Non-attribution doctrine:** Behavioral CTI characterizes adaptive or
 automation-like behavior. It does not prove that an attacker used AI.
@@ -164,14 +165,19 @@ Edge-facing endpoints (full contract in [api.md](docs/api.md)):
   Outcome-as-Evidence records) are validated at the boundary and stored as
   evidence.
 - **TAXII 2.1 inbox:** accepts STIX bundles pushed by Azazel-Edge. Outbound
-  TAXII collections for upstream sharing are Phase 4 (future work).
+  TAXII collections for upstream sharing are Phase 4 (future work; see
+  [api.md](docs/api.md#other-read-endpoints)).
 - **Feeds (pulled, optional internet):** MITRE ATT&CK, CISA KEV, abuse.ch
   and other reference feeds, and signed offline bundles. The adapters are in
   `src/azazel_knowledge/feeds/adapters/`.
 
 Boundaries:
 
-- Azazel-MIO owns common cross-product reasoning and advice, while Knowledge provides verified facts, reference data, and advisory context; this main has no direct MIO runtime connection.
+- Common cross-product reasoning and advice belong to
+  [Azazel-MIO](https://github.com/01rabbit/Azazel-MIO#readme) (its README is the
+  reference for that role). Knowledge supplies verified facts, reference data,
+  and advisory context; this repository's `main` has no direct MIO runtime
+  connection.
 - Fabric is the shared contract at the boundary (see above); it does not
   decide anything.
 - Azazel-Edge's deterministic arbiter remains the final authority.
@@ -192,7 +198,7 @@ in [Azazel-Edge #283](https://github.com/01rabbit/Azazel-Edge/issues/283):
 | Tactical CTI Sensor extension | Attacker-reaction store ([data model](docs/data-model.md)); Edge payload contract [Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305) |
 | Tactical Pattern Memory | Pattern store + deterministic Behavioral CTI generator ([architecture](docs/architecture.md), [Phase 2 design](docs/design/phase2-implementation.md)) |
 | Richer correlation / knowledge model | Correlation engine, historical observation DB, behavioral similarity |
-| External SOC/SIEM integration | STIX 2.1 / TAXII 2.1 inbox from Azazel-Edge is implemented here; outbound collections are Phase 4 (future work) |
+| External SOC/SIEM integration | STIX 2.1 / TAXII 2.1 inbox from Azazel-Edge is implemented here; outbound collections are Phase 4 (future work, see [api.md](docs/api.md#other-read-endpoints)) |
 
 Research framing: **"How does CTI optimize delaying defense?"** — not
 "a lightweight CTI platform." See [ADR-0008](docs/adr/0008-research-theme.md).
@@ -212,13 +218,14 @@ at its API boundary
 ([ADR-0010](docs/adr/0010-adopt-fabric-cti-contracts.md)), tag-pinned as an
 `api`-extra-only dependency; the **pin in force is `v0.10.0` (stable)**
 ([ADR-0023](docs/adr/0023-fabric-pin-v0-10-0.md),
-carried in `pyproject.toml`) — ingest can be
-type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
-`/v1/context` response is checked against Fabric's directive-field validator
-before it is emitted (fail-closed). The adoption is additive, wire shapes are
-unchanged, and **there is still no core dependency**: Fabric is imported only
-under `azazel_knowledge.api`; the core dependency set (stdlib + PyYAML + idna
-+ PyNaCl) is untouched, per this repo's dependency-minimality constraint.
+carried in `pyproject.toml`). Ingest can be type-enforced against the canonical
+`Cti<Kind>Batch` envelope, and every `/v1/context` response is checked against
+Fabric's directive-field validator before it is emitted (fail-closed). The
+adoption is additive, wire shapes are unchanged, and **there is still no core
+dependency**: Fabric is imported under `azazel_knowledge.api`;
+`azazel_knowledge.taxii` is only a permitted future scope and currently imports
+no Fabric model. The core dependency set (stdlib + PyYAML + idna + PyNaCl) is
+untouched.
 
 ## Documentation
 
