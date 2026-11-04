@@ -39,6 +39,42 @@ same warm-cache, query, audit, and deadline path as `/v1/context`. The response
 is advisory-only and marks the snapshot `partial`: the current Knowledge API
 does not expose source-level freshness deadlines in this projection.
 
+Request media type: the body is JSON. `application/json` and
+`application/*+json` (with optional parameters) are accepted. Optional
+parameters do not select a decoder; the route parses the request body bytes
+with the JSON decoder. The OpenAPI document advertises the canonical
+`application/json` content type. A missing
+`Content-Type` header, or any other media type, is rejected with a fixed `422`
+(`invalid_knowledge_context_request`), even when the body is valid JSON. The
+OpenAPI `requestBody` schema is generated from the Fabric
+`KnowledgeContextRequestV1` model.
+
+Gate order: a disabled profile returns `404`, and an unauthenticated peer
+returns `401`, both before any body byte is read. An authenticated, enabled
+request is streamed into a buffer capped at 256 KiB. The cap is enforced on the
+bytes actually received, so an under-declared `Content-Length` cannot bypass it.
+A `Content-Length` is compared as an ASCII decimal numeral, without `int()`, so an
+arbitrarily long one (e.g. 5000 digits) is safely early-rejected with `413` when it
+exceeds the cap. Only values that are not ASCII decimal (such as Unicode digit
+look-alikes) are ignored by the early reject and fall through to the streamed cap,
+which decides; they never cause an error.
+The body is parsed only after these gates pass.
+For an enabled authenticated peer, the declared-length check and streamed byte
+cap run before media-type validation. An oversized body therefore returns `413`
+even if its `Content-Type` is missing or unsupported.
+
+Fixed error responses (bodies are constant and never echo request content):
+
+| Status | `detail.error` | Cause |
+| --- | --- | --- |
+| `404` | `knowledge_context_unavailable` | Profile disabled or not configured (no body read) |
+| `401` | `peer_authentication_failed` | Peer not authenticated (no body read) |
+| `413` | `context_request_too_large` | Body exceeds the cap |
+| `422` | `invalid_knowledge_context_request` | Malformed JSON, deeply nested JSON, schema-invalid body, or missing/unsupported `Content-Type` |
+| `403` | `peer_profile_mismatch` | Valid request whose `source_product` is not `azazel_nexus` |
+
+The success response and the rest of the endpoint contract are unchanged.
+
 This endpoint is unavailable unless an application integrator explicitly injects
 `Settings.knowledge_context_transport` with an enabled profile, a trusted mTLS
 peer authenticator bound to one expected Nexus peer ID, an Ed25519 signing
