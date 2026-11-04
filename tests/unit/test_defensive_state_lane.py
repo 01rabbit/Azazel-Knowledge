@@ -448,8 +448,9 @@ def test_the_api_surface_uses_no_ambiguous_mode_field(tmp_path):
 
 
 def test_the_pinned_fabric_carries_the_canonical_vocabulary():
-    """The precondition AC-6 waited on. Pinned so a re-pin backwards is loud."""
+    """The pin must carry DefensiveState and may only use an allowed ref form."""
     import tomllib
+    import re
 
     from azazel_fabric.schema.defensive_state import DefensiveState
 
@@ -457,7 +458,20 @@ def test_the_pinned_fabric_carries_the_canonical_vocabulary():
         (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text("utf-8")
     )
     pins = [d for d in manifest["project"]["optional-dependencies"]["api"] if "azazel-fabric" in d]
-    assert len(pins) == 1 and "@v" in pins[0], f"Fabric must be pinned to an exact tag: {pins}"
+    assert len(pins) == 1, f"Expected exactly one Fabric api-extra pin: {pins}"
+    reference = pins[0].rsplit("@", 1)[-1]
+    if re.fullmatch(r"v\d+\.\d+\.\d+(?:rc\d+)?", reference):
+        pass
+    else:
+        assert re.fullmatch(r"[0-9a-f]{40}", reference), (
+            f"Fabric reference must be an exact version tag or immutable commit: {reference}"
+        )
+        project = Path(__file__).resolve().parents[2]
+        pyproject_text = (project / "pyproject.toml").read_text("utf-8")
+        adr_text = (project / "docs/adr/0020-fabric-dev-commit-pin-knowledge-context.md").read_text("utf-8")
+        assert "DEVELOPMENT-ONLY" in pyproject_text
+        assert f"`{reference}`" in adr_text
+        assert "not a shippable install" in re.sub(r"\s+", " ", adr_text)
 
     assert {member.value for member in DefensiveState} == {
         "OBSERVE",
