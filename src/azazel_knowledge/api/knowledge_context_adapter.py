@@ -31,7 +31,9 @@ Mapping rules this adapter enforces:
   requested ``entity_type`` and ``value`` as the caller sent them, not the
   canonicalized value, so Fabric correlation holds.
 * **Generic provenance.** Every fact carries the fixed provenance
-  ``knowledge:intel-index``. Individual Knowledge source group names are
+  ``knowledge:intel-index`` only if at least one source group is in the fixed
+  external-feed allowlist (``abusech``, ``spamhaus`` or ``geoip``). A local-only
+  or unrecognized source group yields no fact. Individual group names are
   validated but never serialized, so no feed name or local-tier marker leaves
   the adapter.
 * **Explicit absence.** Every requested entity without an exact representable
@@ -87,6 +89,11 @@ __all__ = [
 #: never an individual source group, feed, or local-tier marker.
 PROVENANCE_REF = "knowledge:intel-index"
 
+# Groups defined by the current public external IOC feeds in config/feeds.yaml.
+# The local `edge_reported` group and unknown/future groups are never sufficient
+# provenance for an egress fact until explicitly reviewed and added here.
+EGRESSIBLE_SOURCE_GROUPS = frozenset({"abusech", "spamhaus", "geoip"})
+
 #: Aggregated unknown recorded for request entity indices without an exact
 #: representable fact. Deliberately echoes no entity values.
 ABSENT_UNKNOWN = (
@@ -112,6 +119,8 @@ APPROXIMATE_UNKNOWN = (
 #: deliberately does not carry. Fixed text: deterministic output.
 MAPPING_LIMITATION = (
     "knowledge output is mapped exact-only: only exact-tier ioc matches become facts, "
+    "and only when backed by an approved external source group; local-only or "
+    "unrecognized source groups are withheld; "
     "and CIDR, domain-suffix and other non-exact matches are not represented; "
     "knowledge scoring, confidence, aggregate raw confidence, recommendation, "
     "campaign, attack, pattern, history and engagement context are not mapped "
@@ -169,10 +178,12 @@ def from_knowledge_context_request(request: KnowledgeContextRequestV1) -> Contex
     """Map a Fabric Knowledge Context request onto the Knowledge ``/v1/context`` query.
 
     Only the requested entities are carried over. The Fabric ``request_id`` becomes
-    the Knowledge ``event_id`` (an opaque correlation handle). Everything that
-    would select local actor, edge, event or trace history is left empty: the
-    Fabric ``source_product``, ``source_ref`` and ``correlation_id`` describe the
-    caller, not a Knowledge lookup, so they are never mapped into those fields.
+    the Knowledge ``event_id`` (an opaque correlation handle); if a future route
+    uses the existing handler, that ID will be written in its audit event, so it
+    must not contain a secret. Everything that would select local actor, edge,
+    event or trace history is left empty: the Fabric ``source_product``,
+    ``source_ref`` and ``correlation_id`` describe the caller, not a Knowledge
+    lookup, so they are never mapped into those fields.
     """
 
     if type(request) is not KnowledgeContextRequestV1:
@@ -225,8 +236,8 @@ def _index_requested(request: KnowledgeContextRequestV1) -> tuple[dict[tuple[str
     return by_key, unnormalized
 
 
-def _parse_match(index: int, match: Any) -> tuple[str, str, str]:
-    """Validate one ``ioc_matches`` entry's structure. Returns (type, value, tier).
+def _parse_match(index: int, match: Any) -> tuple[str, str, str, bool]:
+    """Validate one entry; return type, value, tier and egressable-source flag.
 
     Structure and provenance are checked for every entry, exact or not, so a
     malformed entry fails closed regardless of its tier.
@@ -275,7 +286,8 @@ def _parse_match(index: int, match: Any) -> tuple[str, str, str]:
             f"ioc_matches[{index}] carries more sources than the provenance cap of "
             f"{MAX_PROVENANCE_REFS}"
         )
-    return entity_type, value, tier
+    has_egressable_source = any(source in EGRESSIBLE_SOURCE_GROUPS for source in sources)
+    return entity_type, value, tier, has_egressable_source
 
 
 def _exact_fact(fact_index: int, entity: Any) -> dict[str, Any]:
@@ -345,11 +357,16 @@ def to_knowledge_context_response(
     exact_for: dict[int, int] = {}
     approximate_seen = False
     for match_index, match in enumerate(raw_matches):
-        entity_type, value, tier = _parse_match(match_index, match)
+        entity_type, value, tier, has_egressable_source = _parse_match(match_index, match)
         if tier != _EXACT_TIER:
             # Non-exact (CIDR containment, domain suffix, anything else): no
             # host or range claim. Recorded once as an unknown below.
             approximate_seen = True
+            continue
+        if not has_egressable_source:
+            # A local-only (or not-yet-reviewed) source is not egressable.
+            # The requested entity gets a generic unknown below; source class
+            # and entity values are not disclosed.
             continue
         try:
             key = _canonical_key(entity_type, value)

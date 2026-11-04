@@ -44,8 +44,13 @@ The producer adapter itself is a pure module under `azazel_knowledge/api/`:
 Fabric models. It has no clock, no I/O, no route, no signature, and no mTLS.
 It maps only `threat_context.ioc_matches` to facts, because that is the only
 Knowledge output with explicit source provenance and a requested entity
-identity. It emits no inferences, and it fails closed on anything it cannot
-represent faithfully.
+identity. An exact match is emitted only when at least one source group is in
+the fixed allowlist derived from `config/feeds.yaml` (`abusech`, `spamhaus`,
+`geoip`). Local-only `edge_reported` and unrecognized or future groups produce
+no fact until separately reviewed and added. It emits no inferences, and it
+fails closed on anything it cannot represent faithfully. The request ID becomes
+the Knowledge event ID; if later wired through the current router, it is written
+to the audit event, so it must remain opaque and nonsensitive.
 
 ## Additive optional outcome fields (worker mirror)
 

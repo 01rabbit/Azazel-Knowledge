@@ -117,7 +117,7 @@ def _api_response(
 def _match(
     value: str = IP,
     type_: str = "ip",
-    sources=("threatfox",),
+    sources=("abusech",),
     tier: str = "exact",
 ) -> dict:
     return {
@@ -151,7 +151,7 @@ def test_request_mapping_is_deterministic():
 
 
 def test_response_conversion_is_deterministic():
-    api_response = _api_response([_match(), _match(DOMAIN, "domain", ("feed_b",))])
+    api_response = _api_response([_match(), _match(DOMAIN, "domain", ("spamhaus",))])
     first = canonical_knowledge_context_bytes(_response(api_response))
     second = canonical_knowledge_context_bytes(_response(api_response))
     assert first == second
@@ -446,7 +446,7 @@ def test_mapping_limitation_states_exact_only_and_no_score_or_recommendation():
 
 
 def test_provenance_is_the_fixed_generic_index_ref():
-    response = _response(_api_response([_match(sources=("threatfox",))]))
+    response = _response(_api_response([_match(sources=("abusech",))]))
     assert response.facts[0].provenance == (PROVENANCE_REF,)
     assert PROVENANCE_REF == "knowledge:intel-index"
 
@@ -457,16 +457,24 @@ def test_provenance_is_the_fixed_generic_index_ref():
 )
 def test_source_group_and_local_tier_names_never_enter_canonical_bytes(sentinel):
     api_response = _api_response(
-        [_match(sources=("SENTINEL-PUBLIC-FEED", "edge_reported", "local_edge"))]
+        [_match(sources=("abusech", "SENTINEL-PUBLIC-FEED", "edge_reported", "local_edge"))]
     )
     payload = canonical_knowledge_context_bytes(_response(api_response))
     assert sentinel.encode() not in payload
+    if sentinel == "edge_reported":
+        for source_group in ("edge_reported", "future_unreviewed_group"):
+            response = _response(_api_response([_match(sources=(source_group,))]))
+            assert response.facts == ()
+            assert response.unknowns == (_absent(0, 1),)
+            payload = canonical_knowledge_context_bytes(response)
+            assert source_group.encode() not in payload
+            assert IP.encode() not in payload
 
 
 def test_source_names_are_validated_but_not_serialized():
-    response = _response(_api_response([_match(sources=("feed_b", "threatfox"))]))
+    response = _response(_api_response([_match(sources=("spamhaus", "abusech"))]))
     assert response.facts[0].provenance == (PROVENANCE_REF,)
-    assert b"feed_b" not in canonical_knowledge_context_bytes(response)
+    assert b"spamhaus" not in canonical_knowledge_context_bytes(response)
 
 
 @pytest.mark.parametrize(
@@ -556,7 +564,7 @@ def test_non_list_ioc_matches_fail_closed():
 
 def test_duplicate_source_names_fail_closed_not_silently_deduped():
     with pytest.raises(KnowledgeContextAdaptationError, match="repeats"):
-        _response(_api_response([_match(sources=("threatfox", "threatfox"))]))
+        _response(_api_response([_match(sources=("abusech", "abusech"))]))
 
 
 # --- caller unknowns ----------------------------------------------------------
@@ -621,7 +629,7 @@ def test_directive_key_in_recommendation_aborts_conversion():
 
 def test_inputs_are_not_mutated():
     api_response = _api_response(
-        [_match(sources=("threatfox", "edge_reported"))],
+        [_match(sources=("abusech", "edge_reported"))],
         threat_context_extra={"campaign": {"name": "x"}},
     )
     before_response = copy.deepcopy(api_response.model_dump(mode="python"))
@@ -679,7 +687,7 @@ def test_maximum_profile_stays_within_the_shared_size_bound():
     request = _fabric_request(entities=entities)
     count = min(MAX_ENTITIES, adapter.MAX_FACTS)
     matches = [
-        _match(entities[i][1], "ip", tuple(f"group{j}" for j in range(8)))
+        _match(entities[i][1], "ip", ("abusech", *(f"group{j}" for j in range(7))))
         for i in range(count)
     ]
     response = _response(_api_response(matches), request)
