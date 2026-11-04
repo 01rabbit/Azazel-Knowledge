@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 ADVISORY_NOTICE = (
     "Recommendation is advisory. Final authority: Azazel-Edge Deterministic Arbiter."
@@ -132,6 +132,11 @@ class ReportedDefensiveStateFact(BaseModel):
 
 
 class ContextResponse(BaseModel):
+    # Local-only binding metadata used by the optional signed Fabric producer.
+    # PrivateAttr keeps these values out of `/v1/context` JSON serialization.
+    _knowledge_snapshot_ref: str | None = PrivateAttr(default=None)
+    _knowledge_snapshot_as_of: str | None = PrivateAttr(default=None)
+
     threat_context: dict[str, Any]
     threat_score: float
     confidence: float

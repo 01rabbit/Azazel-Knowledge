@@ -281,7 +281,7 @@ def post_context(
             status_code=500, detail={"error": "advisory_invariant_violation"}
         )
 
-    return ContextResponse(
+    response = ContextResponse(
         threat_context=result.threat_context,
         threat_score=result.threat_score,
         confidence=result.confidence,
@@ -298,3 +298,11 @@ def post_context(
         engagement_advisory=engagement_advisory,
         engagement_repeatability_score=engagement_repeatability,
     )
+    # These private attributes bind the optional Fabric projection to the exact
+    # index generation and query instant used by this invocation. They are not
+    # part of the existing `/v1/context` public response.
+    response._knowledge_snapshot_ref = (
+        f"knowledge:intel-generation:{result.determinism['intel_generation']}"
+    )
+    response._knowledge_snapshot_as_of = created_at
+    return response

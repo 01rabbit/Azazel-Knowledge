@@ -30,6 +30,41 @@ Everything else flows asynchronously via `POST /v1/events`. Edge enforces a
 query timeout (default 250 ms) and proceeds without the answer on expiry.
 The CTI node must never be a synchronous dependency of the arbiter.
 
+## Optional Nexus Knowledge Context v1 profile
+
+`POST /v1/knowledge-context` accepts the Fabric-owned Knowledge Context v1
+request and returns the Nexus profile's detached Ed25519 envelope as
+`application/octet-stream` (`signature || canonical-envelope`). It reuses the
+same warm-cache, query, audit, and deadline path as `/v1/context`. The response
+is advisory-only and marks the snapshot `partial`: the current Knowledge API
+does not expose source-level freshness deadlines in this projection.
+
+This endpoint is unavailable unless an application integrator explicitly injects
+`Settings.knowledge_context_transport` with an enabled profile, a trusted mTLS
+peer authenticator bound to one expected Nexus peer ID, an Ed25519 signing
+provider whose key identifier is the SHA-256 fingerprint of its public key,
+and an explicit maximum TTL from 1 through 30 seconds. There is no
+environment-variable switch, default signer,
+default peer, certificate loader, or TLS listener change. Peer authentication
+must come from the trusted listener boundary; caller-provided headers are not a
+valid certificate identity source. Without this complete configuration the
+route returns unavailable and makes no outbound connection.
+
+Proposed pre-connection lifecycle: the Knowledge node operator owns its
+server certificate and renews it at least 14 days before its 90-day maximum
+validity; the Nexus security/commissioning operator owns the Nexus-only client
+certificate, Ed25519 response-signing key, and the signed registry that binds
+their identities, with the same 90-day maximum and 14-day planned-rotation
+overlap. Nexus security is the revocation authority. Suspected compromise
+immediately disables the Knowledge profile, revokes the affected certificate
+or signing key in the relevant trust registry, and blocks requests until the
+new trust state is installed. Recovery requires new credentials, registry
+refresh, and a passing isolated mTLS/signature interop check; no bearer-only or
+unsigned fallback is allowed. Production use remains disabled until the named
+operators and notification path are recorded. Tests may inject ephemeral
+credentials; production credentials and TLS settings are not part of this
+change.
+
 ## Read surfaces (operator-facing, advisory-only)
 
 These endpoints are `Scope.READ` only, return plain JSON, and stay on the
