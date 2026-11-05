@@ -27,7 +27,7 @@ api = [
     # solely under azazel_knowledge.api / .taxii for payload validation; never
     # a core dependency (Absolute Constraint 7). Tag-pinned per Azazel-Fabric
     # design-principles §6.
-    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0rc5",
+    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0rc6",
 ]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
 

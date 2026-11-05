@@ -57,9 +57,10 @@ is the multi-edge *scale-out* around it.
   tag-pinned `azazel-fabric` as an `api`-extra-only dependency for
   boundary payload validation; additive, wire shapes unchanged. The pin has
   since moved `v0.3.0` → `v0.6.0` → `v0.8.0` → `v0.9.0rc2` →
-  **`v0.9.0rc5`** (published pre-release)
+  `v0.9.0rc5` → **`v0.9.0rc6`** (published pre-release)
   ([ADR-0016](adr/0016-fabric-pin-v0-8-0.md), then
-  [ADR-0019](adr/0019-fabric-pin-v0-9-0rc5.md)). Edge side
+  [ADR-0019](adr/0019-fabric-pin-v0-9-0rc5.md), then
+  [ADR-0020](adr/0020-fabric-pin-v0-9-0rc6.md)). Edge side
   still defers its own CTI integration to FY2027+ per Azazel-Edge's adapter
   plan (`docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` in the Azazel-Edge repo).
 

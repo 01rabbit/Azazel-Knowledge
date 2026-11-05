@@ -1004,8 +1004,17 @@ _OUTCOME_ENVELOPE_FIELDS = frozenset(
         "observation_class", "telemetry_coverage", "coverage_complete",
         "telemetry_gaps", "confounders", "impact_observations", "evidence_refs",
         "provenance", "observed_at", "authority_class", "directive",
+        # Fabric v0.9.0rc6 (Fabric#72): optional observation-context fields and
+        # the envelope's own limitations. ADR-0020.
+        "observation_objective_ref", "hypothesis_refs", "frame_ref",
+        "limitations",
     }
 )
+# Typed-reference prefix each rc6 observation-context slot takes (Fabric#72).
+_OUTCOME_OBJECTIVE_PREFIX = "observation_objective:"
+_OUTCOME_HYPOTHESIS_PREFIX = "hypothesis:"
+_OUTCOME_FRAME_PREFIX = "frame:"
+_OUTCOME_HYPOTHESIS_MAX = 8
 _EFFECT_OBSERVATION_FIELDS = frozenset(
     {
         "schema_version", "observation_id", "effect_ref", "trace_id", "status",
@@ -1067,6 +1076,81 @@ def _outcome_refs(obj: Mapping[str, Any], name: str) -> str | None:
         if len(item) > _OUTCOME_REF_MAX:
             return f"{name} entry exceeds {_OUTCOME_REF_MAX} characters"
     return None
+
+
+def _outcome_context_ref(
+    obj: Mapping[str, Any], name: str, prefix: str
+) -> str | None:
+    """Check one optional rc6 context ref: a bounded string of its own kind.
+
+    Structural mirror of Fabric's `require_ref_kind` for the slot; the boundary
+    full Fabric validation. Any whitespace or control character (including a
+    trailing newline) is refused, matching Fabric#65.
+    """
+
+    value = obj.get(name)
+    if value is None:
+        return None
+    return _outcome_context_value(value, name, prefix)
+
+
+def _outcome_context_value(value: Any, name: str, prefix: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return f"{name} must be a non-empty string"
+    if len(value) > _OUTCOME_REF_MAX:
+        return f"{name} exceeds {_OUTCOME_REF_MAX} characters"
+    if not value.startswith(prefix) or len(value) == len(prefix):
+        return f"{name} must be a {prefix}<id> reference"
+    if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in value):
+        return f"{name} must not contain whitespace or control characters"
+    return None
+
+
+def _outcome_observation_context(env: Mapping[str, Any]) -> tuple[int, str | None]:
+    """Validate the rc6 objective / hypothesis / frame fields and `limitations`.
+
+    Returns `(entries_dropped, error)`. These fields are kept verbatim in the
+    row's `raw` and are not promoted to columns (ADR-0020); an entry of the
+    envelope's own `limitations` that is not a valid token is counted, like the
+    effect observation's (CONVENTIONS C6), but is not merged into the
+    `limitations` column, which stays the effect observation's statement.
+    """
+
+    for name, prefix in (
+        ("observation_objective_ref", _OUTCOME_OBJECTIVE_PREFIX),
+        ("frame_ref", _OUTCOME_FRAME_PREFIX),
+    ):
+        error = _outcome_context_ref(env, name, prefix)
+        if error:
+            return 0, error
+    hypotheses = env.get("hypothesis_refs", [])
+    if not isinstance(hypotheses, list):
+        return 0, "hypothesis_refs must be a list"
+    if len(hypotheses) > _OUTCOME_HYPOTHESIS_MAX:
+        return 0, f"hypothesis_refs exceeds {_OUTCOME_HYPOTHESIS_MAX} entries"
+    for item in hypotheses:
+        error = _outcome_context_value(item, "hypothesis_refs entry", _OUTCOME_HYPOTHESIS_PREFIX)
+        if error:
+            return 0, error
+    if len(set(hypotheses)) != len(hypotheses):
+        return 0, "hypothesis_refs must not repeat a hypothesis"
+    if hypotheses and env.get("frame_ref") is None:
+        return 0, "hypothesis_refs require frame_ref"
+    has_context = bool(
+        env.get("observation_objective_ref") is not None or hypotheses
+        or env.get("frame_ref") is not None
+    )
+    if (
+        has_context
+        and env.get("decision_ref") is None
+        and env.get("authority_class") == "active_materialized"
+    ):
+        return 0, (
+            "an objective, hypothesis or frame without a decision_ref must not "
+            "claim active_materialized"
+        )
+    _, dropped, error = _outcome_tokens(env, "limitations", pattern=_OUTCOME_LIMITATION_RE)
+    return dropped, error
 
 
 def validate_deception_outcome_envelope_line(line: str, *, now: datetime) -> Result:
@@ -1184,7 +1268,10 @@ def validate_deception_outcome_envelope_line(line: str, *, now: datetime) -> Res
         # Every named gap was unusable. The window is still incomplete; say so
         # with a gap the table's CHECK accepts rather than storing none.
         gaps = ["entries_dropped"]
-    entries_dropped = d_gaps + d_conf + d_lim
+    d_ctx, error = _outcome_observation_context(env)
+    if error:
+        return False, error
+    entries_dropped = d_gaps + d_conf + d_lim + d_ctx
     for source, name in (
         (env, "evidence_refs"), (env, "outcome_observation_refs"), (eff, "evidence_refs"),
     ):

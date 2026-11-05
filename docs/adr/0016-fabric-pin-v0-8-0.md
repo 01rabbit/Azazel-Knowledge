@@ -2,7 +2,8 @@
 
 Status: accepted (2026-09-19 — owner-authorized; evidence below); its current-pin
 decision was superseded by [ADR-0019](0019-fabric-pin-v0-9-0rc5.md) after the
-owner-merged pin update in Knowledge PR #114.
+owner-merged pin update in Knowledge PR #114, and later by
+[ADR-0020](0020-fabric-pin-v0-9-0rc6.md).
 
 ## Context
 

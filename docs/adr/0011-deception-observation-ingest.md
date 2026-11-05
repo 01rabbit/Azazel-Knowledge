@@ -112,7 +112,8 @@ only in `api/contracts.py`.
 > **Pin history.** The api-extra pin moved from `v0.6.0` to `v0.8.0` on
 > 2026-09-19 ([ADR-0016](0016-fabric-pin-v0-8-0.md)); it then passed through
 > interim `v0.9.0rc2` before the 2026-11-03 move to published pre-release
-> `v0.9.0rc5` ([ADR-0019](0019-fabric-pin-v0-9-0rc5.md)). Everything else
+> `v0.9.0rc5` ([ADR-0019](0019-fabric-pin-v0-9-0rc5.md)), then `v0.9.0rc6`
+> ([ADR-0020](0020-fabric-pin-v0-9-0rc6.md)). Everything else
 > this ADR decided stands.
 >
 > **Note resolved (2026-09-19, Azazel-Knowledge#73).** This ADR originally
