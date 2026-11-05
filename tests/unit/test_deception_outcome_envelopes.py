@@ -831,3 +831,87 @@ def test_advisory_refs_include_objective_hypothesis_and_frame_kinds(tmp_path):
     _post_and_drain(client, settings, ingest, tmp_path, _body(pair))
     refs = _advisory(client, read)["metadata"]["latest_advisory_refs"].split(",")
     assert refs == ["observation_objective:o1", "hypothesis:h1", "frame:f1", "advisory:mio-objective-obj1"]
+
+
+# --------------------------------------------------------------------------
+# Fabric v0.9.0rc6 (Fabric#72): objective / hypothesis / frame refs and the
+# envelope's own `limitations` are accepted, kept in `raw`, never a column.
+# --------------------------------------------------------------------------
+
+_RC6_CONTEXT = {
+    "observation_objective_ref": "observation_objective:obj-1",
+    "hypothesis_refs": ["hypothesis:h1", "hypothesis:h2"],
+    "frame_ref": "frame:f-1",
+    "limitations": ["stale", "lease_expired"],
+}
+
+
+def _rc6_pair(**context) -> dict:
+    pair = _pair("gap")
+    pair["outcome"].update(context)
+    return pair
+
+
+def test_rc6_context_fields_are_stored_in_raw_and_not_as_columns(tmp_path):
+    client, settings, ingest, _ = _api(tmp_path)
+    stats = _post_and_drain(client, settings, ingest, tmp_path, _body(_rc6_pair(**_RC6_CONTEXT)))
+    assert stats.lines_valid == 1 and stats.lines_invalid == 0
+    conn = sqlite3.connect(settings.local_db_path)
+    (row,) = _rows(conn)
+    stored = json.loads(row["raw"])["outcome"]
+    for name, value in _RC6_CONTEXT.items():
+        assert stored[name] == value
+    for name in ("observation_objective_ref", "hypothesis_refs", "frame_ref"):
+        assert name not in row.keys()
+    # the envelope's `limitations` is not merged into the effect observation's column
+    assert "lease_expired" not in json.loads(row["limitations"])
+
+
+def test_an_rc5_shaped_pair_without_the_new_fields_is_unchanged():
+    ok, row = _validate(_pair("gap"))
+    assert ok and row["entries_dropped"] == 0
+
+
+def test_rc6_context_fields_pass_the_drain_validator():
+    ok, row = _validate(_rc6_pair(**_RC6_CONTEXT))
+    assert ok and row["entries_dropped"] == 0
+    assert row["raw"]["outcome"]["frame_ref"] == "frame:f-1"
+
+
+def test_an_invalid_envelope_limitation_is_dropped_alone_and_counted():
+    ok, row = _validate(_rc6_pair(limitations=["stale", "run the playbook now"]))
+    assert ok and row["entries_dropped"] == 1
+
+
+RC6_REFUSED = {
+    "objective_is_an_advisory": {"observation_objective_ref": "advisory:obj-1"},
+    "objective_with_trailing_newline": {"observation_objective_ref": "observation_objective:obj-1\n"},
+    "hypothesis_is_a_frame": {"hypothesis_refs": ["frame:f-1"], "frame_ref": "frame:f-1"},
+    "frame_is_a_hypothesis": {"frame_ref": "hypothesis:h1"},
+    "hypothesis_without_frame": {"hypothesis_refs": ["hypothesis:h1"]},
+    "hypothesis_repeated": {"hypothesis_refs": ["hypothesis:h1", "hypothesis:h1"], "frame_ref": "frame:f-1"},
+    "too_many_hypotheses": {
+        "hypothesis_refs": [f"hypothesis:h{i}" for i in range(9)], "frame_ref": "frame:f-1",
+    },
+    "objective_over_cap": {"observation_objective_ref": "observation_objective:" + "x" * 300},
+    "objective_is_a_list": {"observation_objective_ref": ["observation_objective:a"]},
+    "active_materialized_without_decision": {
+        "observation_objective_ref": "observation_objective:obj-1",
+        "authority_class": "active_materialized", "decision_ref": None,
+    },
+    "too_many_limitations": {"limitations": [f"lim{i:03d}" for i in range(129)]},
+}
+
+
+@pytest.mark.parametrize("name", sorted(RC6_REFUSED))
+def test_the_boundary_refuses_a_bad_rc6_context(tmp_path, name):
+    client, settings, ingest, _ = _api(tmp_path)
+    resp = client.post(URL, json=_body(_rc6_pair(**RC6_REFUSED[name])), headers=auth_header(ingest))
+    assert resp.status_code == 422, (name, resp.text)
+    assert not list((settings.spool_root / ENDPOINT).glob("*.jsonl"))
+
+
+@pytest.mark.parametrize("name", sorted(RC6_REFUSED))
+def test_the_drain_validator_refuses_a_bad_rc6_context(name):
+    ok, reason = _validate(_rc6_pair(**RC6_REFUSED[name]))
+    assert not ok, (name, reason)

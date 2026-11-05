@@ -11,7 +11,7 @@
 - 5巡の敵対的設計レビューを経た最終設計 `docs/design/phase1-implementation.md`(修正登録簿 F-1〜F-20 付き。以後「設計書」)
 - Phase 1 実装一式: `src/azazel_knowledge/`(api / core / db / normalize / feeds / ingest / correlate / scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii)、`worker.py`、`azctl`、`tools/`、`ops/`、`docs/operations.md`、`tests/unit`
 - Phase 2 **Behavioral CTI**(issue #31〜#37、設計 `docs/design/phase2-implementation.md` の F2-1〜F2-20、[ADR-0009](adr/0009-behavioral-cti.md)): 行動パターン schema(`migrations/local/0002_behavior.sql`)、決定論生成器(`patterns/behavior_generate.py` + P2 + `azctl behavior`)、類似度/再現性(`scoring/behavior_similarity.py`)、friction timeline レポート(`reports/` + `reads.py`)、`/v1/context` の `behavioral_cti` ブロック、reaction ペイロード拡張(`0003_reaction_ext.sql`)、shadow scoring(`scoring/behavior_shadow.py`、default-off)
-- テスト基準線の推移: Phase 1 = 487 → Phase 1 整備完了 = 518 → Phase 2 完了 = 583 → 591 → 714 → 819 → 821 → 859 → 874 → 952 → 956 → 961 → 975 → 1015 → 1052 → 1067 → 1102 → 1213 → **現在 = 1595**(削除ゼロ)
+- テスト基準線の推移: Phase 1 = 487 → Phase 1 整備完了 = 518 → Phase 2 完了 = 583 → 591 → 714 → 819 → 821 → 859 → 874 → 952 → 956 → 961 → 975 → 1015 → 1052 → 1067 → 1102 → 1213 → 1595 → **現在 = 1621**(削除ゼロ)
 
 > **基準線テスト数の単一情報源は `CLAUDE.md`**(§git 規律 / §検証コマンド / §リポジトリ地図)。
 > 本書は**正を名乗らない**。かつて本書が「唯一の正」を名乗って 591、`AGENTS.md` が 487、
@@ -43,7 +43,7 @@
 | — | Pi 4 実機での性能ゲート実行(S9)、LUKS/Adiantum検証 | ×(実機必須。issue #21) |
 | — | Edge側SLO確認(220msブレーカー、advisory_idエコー)、Behavioral CTI 用 reaction ペイロード送信([Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305)) | ×(Azazel-Edge側判断) |
 | — | roadmap Phase 2 のスケール項目(cross-edge 相関、multi-edge ingest、SQLite→Postgres 評価) | ○ |
-| — | ~~[Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric)(旧 Azazel-Common、`azazel_fabric.cti_contracts`)の採用可否評価~~ **完了**: [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md)(2026-07-10)で `api` extra 限定・タグ固定として採用済み(境界のみ・追加的・wire shape 不変)。現行ピンは **v0.9.0rc5**([ADR-0019](adr/0019-fabric-pin-v0-9-0rc5.md)・`pyproject.toml`、公開pre-release) | ○(完了) |
+| — | ~~[Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric)(旧 Azazel-Common、`azazel_fabric.cti_contracts`)の採用可否評価~~ **完了**: [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md)(2026-07-10)で `api` extra 限定・タグ固定として採用済み(境界のみ・追加的・wire shape 不変)。現行ピンは **v0.9.0rc6**([ADR-0020](adr/0020-fabric-pin-v0-9-0rc6.md)・`pyproject.toml`、公開pre-release) | ○(完了) |
 
 ### 絶対制約(全タスクの受け入れ基準。違反はレビューで即差し戻し)
 
@@ -85,11 +85,11 @@ cd -
 
 virtual E2E で Deception→Edge→Knowledge を localhost で噛み合わせる際の最小起動手順。
 `api` extra(fastapi/uvicorn/pydantic/azazel-fabric)を入れた venv 前提。Fabric の
-現行ピンは **v0.9.0rc5**([ADR-0019](adr/0019-fabric-pin-v0-9-0rc5.md))で、公開済みpre-releaseタグです。
+現行ピンは **v0.9.0rc6**([ADR-0020](adr/0020-fabric-pin-v0-9-0rc6.md))で、公開済みpre-releaseタグです。
 `pip install -e '.[api,dev]'` がタグから解決するので、editable の Fabric は不要:
 
 ```bash
-pip install -e '.[api,dev]'                    # azazel-fabric 0.9.0rc5 をタグから解決
+pip install -e '.[api,dev]'                    # azazel-fabric 0.9.0rc6 をタグから解決
 
 # 1) ノードを provision(local.db + intel gen-1 + 署名鍵 + admin client)
 ROOT=/tmp/az-dev-root
