@@ -134,7 +134,9 @@ def post_context(
     state.metrics["context_total"] += 1
 
     advisory_id = new_advisory_ulid()
-    created_at = to_rfc3339(clock.query_as_of())
+    # Keep response/audit metadata on the same instant the scoring pipeline
+    # captured for this query; do not read a second query_as_of value here.
+    created_at = result.determinism["query_as_of"]
     advisory_event = {
         "type": "advisory",
         "advisory_id": advisory_id,
@@ -304,5 +306,5 @@ def post_context(
     response._knowledge_snapshot_ref = (
         f"knowledge:intel-generation:{result.determinism['intel_generation']}"
     )
-    response._knowledge_snapshot_as_of = created_at
+    response._knowledge_snapshot_as_of = result.determinism["query_as_of"]
     return response

@@ -289,6 +289,17 @@ def test_endpoint_refuses_invalid_bodies_and_non_nexus_source_product(tmp_path):
 def test_endpoint_returns_signed_bounded_partial_snapshot(tmp_path):
     client, settings, _local_db, _data = make_client(tmp_path)
     signer = _configure(settings)
+    fixed_clock = settings.clock
+
+    class CountingClock:
+        calls = 0
+
+        def query_as_of(self):
+            self.calls += 1
+            return fixed_clock.query_as_of()
+
+    settings.clock = CountingClock()
+    client.app.state.clock = settings.clock
     response = client.post("/v1/knowledge-context", json=_request())
 
     assert response.status_code == 200
@@ -301,6 +312,7 @@ def test_endpoint_returns_signed_bounded_partial_snapshot(tmp_path):
     assert document["schema"] == _SCHEMA
     assert document["key_id"] == signer.key_id
     semantic = document["payload"]
+    assert settings.clock.calls == 1
     pinned_query_time = parse_rfc3339(semantic["snapshot"]["as_of"])
     assert document["issued_at"] == to_rfc3339(pinned_query_time)
     assert document["expires_at"] == to_rfc3339(
