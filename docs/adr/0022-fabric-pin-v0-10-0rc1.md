@@ -1,6 +1,6 @@
 # ADR-0022: Move the Azazel-Fabric api-extra pin to the pre-release `v0.10.0rc1`
 
-Status: proposed (Draft PR; becomes accepted when the owner merges it)
+Status: accepted (owner-merged in PR #121)
 
 ## Context
 
