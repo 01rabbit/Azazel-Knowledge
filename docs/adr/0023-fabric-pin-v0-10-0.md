@@ -1,6 +1,6 @@
 # ADR-0023: Move the Azazel-Fabric api-extra pin to the stable `v0.10.0`
 
-Status: proposed (Draft PR; becomes accepted when the owner merges it)
+Status: accepted (owner-merged in PR #122)
 
 ## Context
 
