@@ -25,4 +25,7 @@ def test_candidate_endpoint_is_not_mounted_without_fabric_profile(monkeypatch, t
         eager_runtime=False,
     )
 
-    assert "/v1/knowledge-context" not in {route.path for route in app.routes}
+    assert not any(
+        getattr(route, "path", None) == "/v1/knowledge-context"
+        for route in app.routes
+    )
