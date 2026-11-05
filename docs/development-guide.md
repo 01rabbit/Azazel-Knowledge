@@ -85,9 +85,10 @@ cd -
 
 For the unreleased Nexus Knowledge Context candidate in ADR-0023, install
 `.[api-context-candidate,dev]` **instead of** `.[api,dev]`. Do not combine the
-extras: the candidate extra pins the unmerged Fabric contract commit and is not
-for shipped or production environments. With the normal `[api]` extra on `v0.10.0rc1`, the route is registered but
-remains unavailable unless explicit transport configuration is supplied.
+extras: the candidate extra pins Fabric's experimental main commit and is not
+for shipped or production environments. With the normal `[api]` extra on
+`v0.10.0rc1`, the route is registered but remains unavailable unless explicit
+transport configuration is supplied.
 
 virtual E2E で Deception→Edge→Knowledge を localhost で噛み合わせる際の最小起動手順。
 `api` extra(fastapi/uvicorn/pydantic/azazel-fabric)を入れた venv 前提。Fabric の
