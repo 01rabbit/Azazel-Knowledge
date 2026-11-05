@@ -480,7 +480,8 @@ points at `docs/adr/README.md` as the index instead of naming a range.)
   by [ADR-0019](0019-fabric-pin-v0-9-0rc5.md) and then to `v0.9.0rc6` by
   [ADR-0020](0020-fabric-pin-v0-9-0rc6.md), to the stable `v0.9.0` by
   [ADR-0021](0021-fabric-pin-v0-9-0.md) and then to the published pre-release
-  `v0.10.0rc1` by [ADR-0022](0022-fabric-pin-v0-10-0rc1.md); this supersedes the `v0.8.0`
+  `v0.10.0rc1` by [ADR-0022](0022-fabric-pin-v0-10-0rc1.md) and then to the stable
+  `v0.10.0` by [ADR-0023](0023-fabric-pin-v0-10-0.md); this supersedes the `v0.8.0`
   pin recorded in [ADR-0016](0016-fabric-pin-v0-8-0.md). The dependency remains
   api-extra-only and is not part of Knowledge Lite core consumers.
 - **Delta bundles and deletes — settled.** Lite is full-only by

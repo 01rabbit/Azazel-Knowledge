@@ -1,6 +1,7 @@
 # ADR-0022: Move the Azazel-Fabric api-extra pin to the pre-release `v0.10.0rc1`
 
-Status: accepted (owner-merged in PR #121)
+Status: accepted (owner-merged in PR #121); current-pin decision superseded
+by [ADR-0023](0023-fabric-pin-v0-10-0.md), which meets the exit condition below (`v0.10.0` published)
 
 ## Context
 
@@ -91,6 +92,6 @@ captures (added separately) would then skip or fail as their own PRs state.
 
 ## Consequences
 
-- Current documentation names `v0.10.0rc1` as the pin in force; `rc5`, `rc6`
-  and `v0.9.0` appear only as history.
+- Historical: current documentation named `v0.10.0rc1` as the pin in force at
+  the time; superseded by ADR-0023.
 - No package version, tag, release, signing or deployment is created.

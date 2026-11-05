@@ -4,14 +4,15 @@ Status: accepted (2026-07-10, owner-authorized Phase 2 boundary adoption)
 
 > **Pin superseded.** The `v0.3.0` tag recorded below is this ADR's original
 > decision and is kept as the historical record. The api-extra pin in force is
-> **`v0.10.0rc1`**, moved by [ADR-0011](0011-deception-observation-ingest.md) §
+> **`v0.10.0`**, moved by [ADR-0011](0011-deception-observation-ingest.md) §
 > *Consequences* (to `v0.6.0`) and then by
 > [ADR-0016](0016-fabric-pin-v0-8-0.md) (to `v0.8.0`), an interim
 > `v0.9.0rc2` pin, and [ADR-0019](0019-fabric-pin-v0-9-0rc5.md) (to the
 > published pre-release `v0.9.0rc5`), then by
 > [ADR-0020](0020-fabric-pin-v0-9-0rc6.md) (to `v0.9.0rc6`), then by
 > [ADR-0021](0021-fabric-pin-v0-9-0.md) (to the stable `v0.9.0`), then by
-> [ADR-0022](0022-fabric-pin-v0-10-0rc1.md) (to the published pre-release `v0.10.0rc1`), and carried in
+> [ADR-0022](0022-fabric-pin-v0-10-0rc1.md) (to the published pre-release `v0.10.0rc1`), then by
+> [ADR-0023](0023-fabric-pin-v0-10-0.md) (to the stable `v0.10.0`), and carried in
 > `pyproject.toml`. Everything else in this ADR —
 > api-extra-only scope, `api/`+`taxii/` confinement, never a core dependency —
 > remains in force.

@@ -43,7 +43,7 @@
 | — | Pi 4 実機での性能ゲート実行(S9)、LUKS/Adiantum検証 | ×(実機必須。issue #21) |
 | — | Edge側SLO確認(220msブレーカー、advisory_idエコー)、Behavioral CTI 用 reaction ペイロード送信([Azazel-Edge#305](https://github.com/01rabbit/Azazel-Edge/issues/305)) | ×(Azazel-Edge側判断) |
 | — | roadmap Phase 2 のスケール項目(cross-edge 相関、multi-edge ingest、SQLite→Postgres 評価) | ○ |
-| — | ~~[Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric)(旧 Azazel-Common、`azazel_fabric.cti_contracts`)の採用可否評価~~ **完了**: [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md)(2026-07-10)で `api` extra 限定・タグ固定として採用済み(境界のみ・追加的・wire shape 不変)。現行ピンは **v0.10.0rc1**([ADR-0022](adr/0022-fabric-pin-v0-10-0rc1.md)・`pyproject.toml`、公開pre-release) | ○(完了) |
+| — | ~~[Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric)(旧 Azazel-Common、`azazel_fabric.cti_contracts`)の採用可否評価~~ **完了**: [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md)(2026-07-10)で `api` extra 限定・タグ固定として採用済み(境界のみ・追加的・wire shape 不変)。現行ピンは **v0.10.0**([ADR-0023](adr/0023-fabric-pin-v0-10-0.md)・`pyproject.toml`、正式版) | ○(完了) |
 
 ### 絶対制約(全タスクの受け入れ基準。違反はレビューで即差し戻し)
 
@@ -85,11 +85,11 @@ cd -
 
 virtual E2E で Deception→Edge→Knowledge を localhost で噛み合わせる際の最小起動手順。
 `api` extra(fastapi/uvicorn/pydantic/azazel-fabric)を入れた venv 前提。Fabric の
-現行ピンは **v0.10.0rc1**([ADR-0022](adr/0022-fabric-pin-v0-10-0rc1.md))で、公開済みpre-releaseタグです。
+現行ピンは **v0.10.0**([ADR-0023](adr/0023-fabric-pin-v0-10-0.md))で、正式版(stable)タグです。
 `pip install -e '.[api,dev]'` がタグから解決するので、editable の Fabric は不要:
 
 ```bash
-pip install -e '.[api,dev]'                    # azazel-fabric 0.10.0rc1 をタグから解決
+pip install -e '.[api,dev]'                    # azazel-fabric 0.10.0 をタグから解決
 
 # 1) ノードを provision(local.db + intel gen-1 + 署名鍵 + admin client)
 ROOT=/tmp/az-dev-root
