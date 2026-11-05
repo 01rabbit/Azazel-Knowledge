@@ -21,6 +21,7 @@ from pathlib import Path
 from nacl.signing import SigningKey
 
 from _api_support import build_app
+from azazel_knowledge.core.clock import SystemClock
 from azazel_knowledge.api.knowledge_context_mtls import (
     KnowledgeContextMtlsListener,
     MtlsListenerConfig,
@@ -42,6 +43,11 @@ class _Signer:
 def main(root: Path, pki: Path) -> int:
     root.mkdir(parents=True, exist_ok=True)
     app, settings, _local, _data = build_app(root)
+    # The separate Nexus process validates response expiry against its own
+    # current clock. Keep the producer process on real time too; the fixed
+    # fixture clock would make an otherwise valid short-lived response stale.
+    settings.clock = SystemClock()
+    app.state.clock = settings.clock
     pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert((pki / "nexus.pem").read_text())).hexdigest()
     signer = _Signer()
     settings.knowledge_context_transport = KnowledgeContextTransportConfig(
