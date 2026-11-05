@@ -1,6 +1,7 @@
 # ADR-0021: Move the Azazel-Fabric api-extra pin to the stable `v0.9.0`
 
-Status: accepted (owner-merged in PR #119)
+Status: accepted (owner-merged in PR #119); current-pin decision superseded
+by [ADR-0022](0022-fabric-pin-v0-10-0rc1.md)
 
 ## Context
 
@@ -77,6 +78,6 @@ contract surface is the same, no code or test change is needed.
 
 ## Consequences
 
-- Current documentation names `v0.9.0` as the pin in force; `rc5` and `rc6`
-  appear only as history.
+- Historical: current documentation named `v0.9.0` as the pin in force at
+  the time; superseded by ADR-0022.
 - No package version, tag, release, signing or deployment is created.
