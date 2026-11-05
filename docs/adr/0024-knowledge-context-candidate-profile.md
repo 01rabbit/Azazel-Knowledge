@@ -14,8 +14,8 @@ service.
 ## Decision
 
 1. Keep the normal api extra pinned to published stable Fabric v0.10.0 under
-   ADR-0023. Use its exact tag and signed release digest; do not use floating
-   main references.
+   ADR-0023. Use its exact tag and signed release digest (verification is recorded in
+   ADR-0023); do not use floating main references.
 2. Keep api-context-candidate as a test-only extra pinned to the same exact
    v0.10.0 tag. It is used instead of api for isolated producer-path tests;
    do not combine the extras.
