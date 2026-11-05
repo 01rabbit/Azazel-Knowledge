@@ -186,7 +186,7 @@ def test_adapter_module_reads_no_clock_no_randomness_no_io():
 
 
 def test_module_docstring_states_not_wired_and_unverified_freshness():
-    doc = adapter.__doc__ or ""
+    doc = " ".join((adapter.__doc__ or "").split())
     assert "Optional route caller" in doc
     assert "candidate-only" in doc
     assert "does not authenticate" in doc
