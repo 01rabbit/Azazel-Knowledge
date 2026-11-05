@@ -132,6 +132,7 @@ def _fake_result_with(recommendation: dict) -> SimpleNamespace:
             "stats_generation": 7,
             "attack_version": "15.1",
             "config_hash": "cfg",
+            "query_as_of": "2026-07-06T12:00:00Z",
         },
     )
 
