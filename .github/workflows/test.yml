@@ -15,6 +15,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      AZAZEL_REQUIRE_FULL_CANDIDATE_SUITE: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -28,6 +30,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -e ".[api-context-candidate,dev]"
+
+      - name: Require the pinned candidate Fabric contract
+        run: python -c "import azazel_fabric.knowledge_context"
 
       - name: Run unit tests
         run: python -m pytest tests/unit -q

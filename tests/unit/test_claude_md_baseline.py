@@ -36,6 +36,8 @@ test exists to catch.
 from __future__ import annotations
 
 import re
+import os
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -96,6 +98,17 @@ def test_baseline_is_not_below_the_real_test_count(request: pytest.FixtureReques
     values = _baseline_values()
     baseline = min(values.values())
     stale = sorted(site for site, value in values.items() if value == baseline)
+    require_full_candidate_suite = (
+        os.environ.get("AZAZEL_REQUIRE_FULL_CANDIDATE_SUITE") == "1"
+        and importlib.util.find_spec("azazel_fabric.knowledge_context") is not None
+    )
+    if require_full_candidate_suite:
+        assert selected == baseline, (
+            f"The candidate CI suite must collect exactly {baseline} tests, but selected "
+            f"{selected}. Check candidate test skips and update every baseline site only "
+            "when the full candidate suite intentionally changes."
+        )
+        return
     assert selected <= baseline, (
         f"The lowest stated baseline is {baseline} ({', '.join(stale)}) but this run "
         f"selected {selected} tests. The baseline is stale and low, so the 'tests did "

@@ -232,7 +232,7 @@ def post_knowledge_context(
             ),
         )
         semantic_bytes = canonical_knowledge_context_bytes(semantic)
-    except KnowledgeContextAdaptationError:
+    except (KnowledgeContextAdaptationError, ValidationError, TypeError, ValueError):
         raise HTTPException(
             status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
         ) from None

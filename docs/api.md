@@ -82,7 +82,7 @@ Fixed error responses (bodies are constant and never echo request content):
 | `422` | `knowledge_context_request_unrepresentable` | A valid Fabric request cannot be represented by Knowledge's query model |
 | `403` | `peer_profile_mismatch` | Valid request whose `source_product` is not `azazel_nexus` |
 | `503` | `cache_state_cold` | No current intel generation is available yet; includes `Retry-After` |
-| `503` | `context_busy` / `context_timeout` | Bounded application concurrency is full or the absolute connection deadline expires |
+| `503` | `context_busy` / `context_timeout` | Bounded application concurrency is full, or the ordinary `/v1/context` query deadline expires while transport time remains |
 | `503` | `audit_unavailable` | The ordinary Knowledge audit path cannot append the request result |
 | `503` | `snapshot_metadata_unavailable` | The ordinary query response lacks required snapshot metadata |
 | `503` | `knowledge_context_projection_unavailable` | The result cannot be faithfully represented by the candidate contract |
@@ -93,7 +93,9 @@ Fixed error responses (bodies are constant and never echo request content):
 The HTTP parser also emits fixed `400`, `411`, `404` and `431` errors for malformed
 or unsupported framing, missing length, unknown paths, and oversized headers.
 Connections dropped before TLS when the listener is at capacity, or when the
-TLS handshake cannot be completed, receive no HTTP response.
+TLS handshake cannot be completed, receive no HTTP response. Exhausting the
+absolute transport deadline closes the connection without promising a final
+HTTP response; the `context_timeout` row is the ordinary query's bounded 503.
 
 The success response and the rest of the endpoint contract are unchanged.
 

@@ -369,16 +369,25 @@ def test_endpoint_rejects_a_64_byte_but_invalid_signature(tmp_path):
     }
 
 
-def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["adapter", "type", "canonicalizer"])
+def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch, failure):
     client, settings, _local_db, _data = make_client(tmp_path)
     _configure(settings)
 
-    def fail_projection(*_args, **_kwargs):
-        from azazel_knowledge.api.knowledge_context_adapter import KnowledgeContextAdaptationError
-        raise KnowledgeContextAdaptationError("private input detail")
-
     from azazel_knowledge.api.routers import knowledge_context as route
-    monkeypatch.setattr(route, "to_knowledge_context_response", fail_projection)
+    if failure == "canonicalizer":
+        def fail_canonicalization(_semantic):
+            raise ValueError("private input detail")
+
+        monkeypatch.setattr(route, "canonical_knowledge_context_bytes", fail_canonicalization)
+    else:
+        def fail_projection(*_args, **_kwargs):
+            if failure == "type":
+                raise TypeError("private input detail")
+            from azazel_knowledge.api.knowledge_context_adapter import KnowledgeContextAdaptationError
+            raise KnowledgeContextAdaptationError("private input detail")
+
+        monkeypatch.setattr(route, "to_knowledge_context_response", fail_projection)
 
     response = client.post("/v1/knowledge-context", json=_request())
 

@@ -31,6 +31,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +139,29 @@ def _json(status: int, error: str) -> tuple[int, list[tuple[str, str]], bytes]:
     return status, [("Content-Type", "application/json")], body
 
 
+def _send_until(sock: socket.socket, data: bytes, deadline: float) -> None:
+    """Send all bytes without allowing partial writes to extend the deadline."""
+    sock.setblocking(False)
+    pending = memoryview(data)
+    while pending:
+        try:
+            written = sock.send(pending)
+            if written <= 0:
+                raise OSError("socket closed during response")
+            pending = pending[written:]
+            continue
+        except ssl.SSLWantReadError:
+            readable, writable = [sock], []
+        except (BlockingIOError, ssl.SSLWantWriteError):
+            readable, writable = [], [sock]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("response write deadline")
+        ready_read, ready_write, _ = select.select(readable, writable, [], remaining)
+        if not ready_read and not ready_write:
+            raise TimeoutError("response write deadline")
+
+
 class _Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -228,14 +252,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _reply(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
         try:
-            self.connection.settimeout(self._remaining())
-            self.send_response(status)
+            reason = HTTPStatus(status).phrase.encode("ascii")
+            response = [b"HTTP/1.0 " + str(status).encode("ascii") + b" " + reason + b"\r\n"]
             for name, value in headers:
-                self.send_header(name, value)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(body)
+                if (not name or any(ch in name for ch in "\r\n:")
+                        or "\r" in value or "\n" in value):
+                    raise ValueError("invalid internal response header")
+                response.append(name.encode("latin-1") + b": " + value.encode("latin-1") + b"\r\n")
+            response.extend((
+                f"Content-Length: {len(body)}\r\n".encode("ascii"),
+                b"Connection: close\r\n\r\n",
+                body,
+            ))
+            _send_until(self.connection, b"".join(response), self._deadline)
         except (OSError, TimeoutError):
             pass
 
@@ -278,7 +307,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if head is not None:
                 self._serve(listener, *head)
         except (TimeoutError, socket.timeout):
-            self._reply(*_json(503, "context_timeout"))
+            # The absolute transport deadline is exhausted; close without
+            # promising an HTTP response that can no longer be sent in-budget.
+            return
         except OSError:
             return
         except Exception:  # noqa: BLE001 -- listener failures fail closed

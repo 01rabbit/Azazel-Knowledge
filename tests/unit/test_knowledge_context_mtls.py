@@ -34,6 +34,7 @@ from azazel_knowledge.api.knowledge_context_mtls import (
     PinnedCertificatePeerAuthenticator,
     VerifiedTlsPeer,
     _SCOPE_KEY,
+    _send_until,
 )
 from azazel_knowledge.api.knowledge_context_transport import KnowledgeContextTransportConfig
 from _api_support import build_app
@@ -436,6 +437,19 @@ def test_stalled_tls_handshake_uses_deadline_and_releases_connection_slot(tmp_pa
     finally:
         stalled.close()
         listener.stop()
+
+
+def test_response_write_stops_at_the_absolute_deadline():
+    sender, receiver = socket.socketpair()
+    sender.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="response write deadline"):
+            _send_until(sender, b"x" * (8 * 1024 * 1024), started + 0.1)
+        assert time.monotonic() - started < 0.75
+    finally:
+        sender.close()
+        receiver.close()
 
 
 def test_timed_out_app_keeps_its_concurrency_slot_until_worker_finishes(tmp_path, pki):

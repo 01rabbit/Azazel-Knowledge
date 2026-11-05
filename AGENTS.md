@@ -19,9 +19,12 @@ ADR(`docs/adr/`)は既決事項であり、実装で黙って覆さない。覆�
 
 ```bash
 source .venv/bin/activate     # worktree に事前構築済み
-pip install -e ".[api,dev]"   # 通常は構築済み。オフラインで実装する
-python -m pytest tests/unit -q # 全緑が完了条件(基準線 1732 本)
+pip install -e ".[api-context-candidate,dev]" # 候補連携の全suite用
+python -m pytest tests/unit -q # 全緑が完了条件(基準線 1735 本)
 ```
+
+公開Fabric `v0.9.0` の安定profileは `pip install -e ".[api,dev]"` で別途確認する。
+候補suiteのCIは候補moduleのimportを先に必須化し、module-level skipで緑になることを防ぐ。
 
 基準線テスト数の**単一情報源は `CLAUDE.md`**(§git 規律 / §検証コマンド / §リポジトリ地図)。
 本ファイルはそれを再掲するだけで、一致は `tests/unit/test_claude_md_baseline.py` が強制する。
@@ -53,7 +56,7 @@ python -m pytest tests/unit -q # 全緑が完了条件(基準線 1732 本)
 
 - Python 3.11、型ヒント必須、ナレーション的コメント禁止(制約の明示のみ可)。
 - 新規コードには必ず `tests/unit/` にテストを追加。テストは実装の写経でなく**仕様**を検証する。
-- 既存テストの改変は指示がある場合のみ。**テスト数を減らさない**(基準線 1732 本)
+- 既存テストの改変は指示がある場合のみ。**テスト数を減らさない**(基準線 1735 本)
 - 1タスクで**指示された所有ファイル以外に触れない**。
 
 ## git 規律

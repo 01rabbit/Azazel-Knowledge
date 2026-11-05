@@ -363,7 +363,7 @@ def test_a_body_that_is_not_an_envelope_is_refused(tmp_path, body):
 
 
 def test_hierarchical_producer_refs_are_accepted(tmp_path):
-    """Why the pin is v0.9.0rc5: Edge and Deception mint refs like `effect:edge:nft:1`.
+    """The stable pin is v0.9.0: Edge and Deception mint refs like `effect:edge:nft:1`.
 
     Under the `rc2` grammar a typed ref's body could not contain a colon, so
     every hierarchical reference was refused by every slot that requires a
