@@ -90,7 +90,7 @@ jobs:
               base = Path(root)
               app = create_app(
                   Settings(
-                      config_dir=base / "config",
+                      config_dir=Path("config"),
                       local_db_path=base / "local.db",
                       data_db_dir=base / "generations",
                       spool_root=base / "spool",
@@ -98,11 +98,12 @@ jobs:
                   ),
                   eager_runtime=False,
               )
-              response = TestClient(app).post(
-                  "/v1/knowledge-context",
-                  content=b"not-read-while-disabled",
-                  headers={"content-type": "application/json"},
-              )
+              with TestClient(app) as client:
+                  response = client.post(
+                      "/v1/knowledge-context",
+                      content=b"not-read-while-disabled",
+                      headers={"content-type": "application/json"},
+                  )
               assert response.status_code == 404, response.text
               assert response.json() == {
                   "detail": {"error": "knowledge_context_unavailable"}
