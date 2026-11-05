@@ -142,8 +142,8 @@ Knowledge-local integration note: this repository adopts
 [`azazel_fabric.cti_contracts`](https://github.com/01rabbit/Azazel-Fabric)
 at its API boundary
 ([ADR-0010](docs/adr/0010-adopt-fabric-cti-contracts.md)), tag-pinned as an
-`api`-extra-only dependency; the **pin in force is `v0.9.0` (stable)**
-([ADR-0021](docs/adr/0021-fabric-pin-v0-9-0.md),
+`api`-extra-only dependency; the **pin in force is `v0.10.0rc1` (published pre-release)**
+([ADR-0022](docs/adr/0022-fabric-pin-v0-10-0rc1.md),
 carried in `pyproject.toml`) — ingest can be
 type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
 `/v1/context` response is checked against Fabric's directive-field validator

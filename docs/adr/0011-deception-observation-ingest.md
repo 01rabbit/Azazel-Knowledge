@@ -114,7 +114,8 @@ only in `api/contracts.py`.
 > interim `v0.9.0rc2` before the 2026-11-03 move to published pre-release
 > `v0.9.0rc5` ([ADR-0019](0019-fabric-pin-v0-9-0rc5.md)), then `v0.9.0rc6`
 > ([ADR-0020](0020-fabric-pin-v0-9-0rc6.md)), then the stable `v0.9.0`
-> ([ADR-0021](0021-fabric-pin-v0-9-0.md)). Everything else
+> ([ADR-0021](0021-fabric-pin-v0-9-0.md)), then the published pre-release
+> `v0.10.0rc1` ([ADR-0022](0022-fabric-pin-v0-10-0rc1.md)). Everything else
 > this ADR decided stands.
 >
 > **Note resolved (2026-09-19, Azazel-Knowledge#73).** This ADR originally
