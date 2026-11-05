@@ -18,7 +18,7 @@ from azazel_knowledge.api.routers.knowledge_context import (
     _bounded_envelope,
     _declared_length_exceeds_cap,
 )
-from azazel_knowledge.core.clock import to_rfc3339
+from azazel_knowledge.core.clock import parse_rfc3339, to_rfc3339
 from _api_support import add_api_client, make_client
 
 _DOMAIN = b"azazel-nexus/knowledge-context-envelope/v1\x00"
@@ -300,11 +300,12 @@ def test_endpoint_returns_signed_bounded_partial_snapshot(tmp_path):
     assert _canonical(document) == payload
     assert document["schema"] == _SCHEMA
     assert document["key_id"] == signer.key_id
-    assert document["issued_at"] == to_rfc3339(settings.clock.query_as_of())
-    assert document["expires_at"] == to_rfc3339(
-        settings.clock.query_as_of() + timedelta(seconds=30)
-    )
     semantic = document["payload"]
+    pinned_query_time = parse_rfc3339(semantic["snapshot"]["as_of"])
+    assert document["issued_at"] == to_rfc3339(pinned_query_time)
+    assert document["expires_at"] == to_rfc3339(
+        pinned_query_time + timedelta(seconds=30)
+    )
     assert semantic["request_id"] == _request()["request_id"]
     assert semantic["correlation_id"] == _request()["correlation_id"]
     assert semantic["snapshot"] == {
@@ -406,6 +407,27 @@ def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch, fa
         "detail": {"error": "knowledge_context_projection_unavailable"}
     }
     assert "private input detail" not in response.text
+
+
+def test_invalid_snapshot_time_fails_closed_as_projection_unavailable(tmp_path, monkeypatch):
+    from azazel_knowledge.api.routers import knowledge_context as route
+
+    client, settings, _local_db, _data = make_client(tmp_path)
+    _configure(settings)
+    original_post_context = route.post_context
+
+    def invalid_snapshot_time(*args, **kwargs):
+        result = original_post_context(*args, **kwargs)
+        result._knowledge_snapshot_as_of = "not-a-timestamp"
+        return result
+
+    monkeypatch.setattr(route, "post_context", invalid_snapshot_time)
+    response = client.post("/v1/knowledge-context", json=_request())
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {"error": "knowledge_context_projection_unavailable"}
+    }
 
 
 def test_unexpected_request_conversion_error_is_fixed_and_private(tmp_path, monkeypatch):

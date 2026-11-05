@@ -24,7 +24,7 @@ from azazel_knowledge.api.knowledge_context_adapter import (
 )
 from azazel_knowledge.api.models import ContextResponse
 from azazel_knowledge.api.routers.context import post_context
-from azazel_knowledge.core.clock import to_rfc3339
+from azazel_knowledge.core.clock import parse_rfc3339, to_rfc3339
 from azazel_knowledge.security.auth import Scope
 
 router = APIRouter(prefix="/v1", tags=["knowledge-context"])
@@ -217,10 +217,11 @@ def post_knowledge_context(
     if not isinstance(snapshot_ref, str) or not isinstance(snapshot_as_of, str):
         raise HTTPException(status_code=503, detail={"error": "snapshot_metadata_unavailable"})
 
-    clock = request.app.state.clock
-    generated = clock.query_as_of()
-    expires = generated + timedelta(seconds=config.max_ttl_seconds)
     try:
+        # Reuse the query's pinned snapshot time; the request has exactly one
+        # query_as_of instant across Knowledge and the signed projection.
+        generated = parse_rfc3339(snapshot_as_of)
+        expires = generated + timedelta(seconds=config.max_ttl_seconds)
         semantic = to_knowledge_context_response(
             context_response,
             body,
