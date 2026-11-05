@@ -34,7 +34,10 @@ def test_candidate_endpoint_is_not_mounted_without_fabric_profile(monkeypatch, t
     )
 
 
-@pytest.mark.parametrize("import_error", [ImportError, RuntimeError, TypeError, ValueError])
+@pytest.mark.parametrize(
+    "import_error",
+    [ImportError, RuntimeError, TypeError, ValueError, AttributeError, KeyError],
+)
 def test_incompatible_fabric_context_does_not_break_ordinary_routes(
     monkeypatch, tmp_path, import_error
 ):

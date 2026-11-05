@@ -50,7 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: held to it here.
 BASELINE_SITES: tuple[tuple[str, str, str], ...] = (
     ("CLAUDE.md", "git 規律", r"テスト(\d+)本\(基準線\)"),
-    ("CLAUDE.md", "検証コマンド", r"基準線 (\d+) passed"),
+    ("CLAUDE.md", "検証コマンド", r"基準線 (\d+) collected"),
     ("CLAUDE.md", "リポジトリ地図", r"`tests/unit/`\((\d+)\)"),
     ("docs/development-guide.md", "§0 現状分析(基準線の推移)", r"\*\*現在 = (\d+)\*\*"),
     ("AGENTS.md", "セットアップ / 検証", r"完了条件\(基準線 (\d+) 本\)"),

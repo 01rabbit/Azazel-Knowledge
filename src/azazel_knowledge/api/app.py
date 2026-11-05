@@ -283,17 +283,22 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
         context_contract_available = (
             importlib.util.find_spec("azazel_fabric.knowledge_context") is not None
         )
-    except (ImportError, ValueError):
+    except (ImportError, ValueError) as exc:
         context_contract_available = False
+        logging.getLogger(__name__).warning(
+            "Optional Knowledge Context route disabled: contract discovery failed (%s)",
+            type(exc).__name__,
+        )
 
     if context_contract_available:
         try:
             from azazel_knowledge.api.routers import knowledge_context
 
             app.include_router(knowledge_context.router)
-        except (ImportError, RuntimeError, TypeError, ValueError):
+        except Exception as exc:
             logging.getLogger(__name__).warning(
-                "Optional Knowledge Context route disabled: incompatible Fabric contract"
+                "Optional Knowledge Context route disabled: incompatible Fabric contract (%s)",
+                type(exc).__name__,
             )
     app.include_router(reads.router)
     app.include_router(admin.router)

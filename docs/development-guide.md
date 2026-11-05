@@ -11,7 +11,7 @@
 - 5巡の敵対的設計レビューを経た最終設計 `docs/design/phase1-implementation.md`(修正登録簿 F-1〜F-20 付き。以後「設計書」)
 - Phase 1 実装一式: `src/azazel_knowledge/`(api / core / db / normalize / feeds / ingest / correlate / scoring / recommend / rules / patterns / reactions / attack / bundle / security / audit / taxii)、`worker.py`、`azctl`、`tools/`、`ops/`、`docs/operations.md`、`tests/unit`
 - Phase 2 **Behavioral CTI**(issue #31〜#37、設計 `docs/design/phase2-implementation.md` の F2-1〜F2-20、[ADR-0009](adr/0009-behavioral-cti.md)): 行動パターン schema(`migrations/local/0002_behavior.sql`)、決定論生成器(`patterns/behavior_generate.py` + P2 + `azctl behavior`)、類似度/再現性(`scoring/behavior_similarity.py`)、friction timeline レポート(`reports/` + `reads.py`)、`/v1/context` の `behavioral_cti` ブロック、reaction ペイロード拡張(`0003_reaction_ext.sql`)、shadow scoring(`scoring/behavior_shadow.py`、default-off)
-- テスト基準線: 通常API依存は公開pre-release Fabric v0.10.0rc1 (ADR-0022)。Knowledge Context候補profileはFabric commit 33aa79c… (ADR-0023)で検証し、**現在 = 1763 collected**。
+- テスト基準線: 通常API依存は公開pre-release Fabric v0.10.0rc1 (ADR-0022)。Knowledge Context候補profileはFabric commit 33aa79c… (ADR-0023)で検証し、**現在 = 1765 collected**。
 
 > **基準線テスト数の単一情報源は `CLAUDE.md`**(§git 規律 / §検証コマンド / §リポジトリ地図)。
 > 本書は**正を名乗らない**。かつて本書が「唯一の正」を名乗って 591、`AGENTS.md` が 487、
