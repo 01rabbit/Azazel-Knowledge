@@ -1,6 +1,6 @@
 # ADR-0024: Isolate the experimental Knowledge Context profile
 
-Status: accepted for the Nexus #395 development candidate only (2026-11-05).
+Status: approved for the Nexus #395 development candidate; awaiting merge (2026-11-05).
 
 ## Context
 
