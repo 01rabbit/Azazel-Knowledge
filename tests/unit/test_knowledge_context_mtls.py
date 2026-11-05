@@ -39,6 +39,10 @@ from azazel_knowledge.api.knowledge_context_mtls import (
 from azazel_knowledge.api.knowledge_context_transport import KnowledgeContextTransportConfig
 from _api_support import build_app
 
+if (os.environ.get("AZAZEL_REQUIRE_FULL_CANDIDATE_SUITE") == "1"
+        and shutil.which("openssl") is None):
+    raise RuntimeError("candidate CI requires the openssl CLI for isolated mTLS tests")
+
 pytestmark = pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl CLI required")
 
 _DOMAIN = b"azazel-nexus/knowledge-context-envelope/v1\x00"

@@ -18,7 +18,6 @@ from azazel_fabric.knowledge_context import (
 from azazel_knowledge.api import limits
 from azazel_knowledge.api.app import AuthContext
 from azazel_knowledge.api.knowledge_context_adapter import (
-    KnowledgeContextAdaptationError,
     from_knowledge_context_request,
     to_knowledge_context_response,
 )
@@ -197,7 +196,7 @@ def post_knowledge_context(
 
     try:
         context_request = from_knowledge_context_request(body)
-    except KnowledgeContextAdaptationError:
+    except Exception:  # noqa: BLE001 -- request conversion fails closed without echoing input
         raise HTTPException(
             status_code=422, detail={"error": "knowledge_context_request_unrepresentable"}
         ) from None
@@ -232,7 +231,7 @@ def post_knowledge_context(
             ),
         )
         semantic_bytes = canonical_knowledge_context_bytes(semantic)
-    except (KnowledgeContextAdaptationError, ValidationError, TypeError, ValueError):
+    except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
         raise HTTPException(
             status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
         ) from None

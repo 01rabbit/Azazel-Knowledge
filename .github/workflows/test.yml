@@ -34,6 +34,9 @@ jobs:
       - name: Require the pinned candidate Fabric contract
         run: python -c "import azazel_fabric.knowledge_context"
 
+      - name: Require OpenSSL for isolated mTLS tests
+        run: openssl version
+
       - name: Run unit tests
         run: python -m pytest tests/unit -q
 

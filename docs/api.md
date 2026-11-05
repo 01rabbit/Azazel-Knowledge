@@ -96,6 +96,9 @@ Connections dropped before TLS when the listener is at capacity, or when the
 TLS handshake cannot be completed, receive no HTTP response. Exhausting the
 absolute transport deadline closes the connection without promising a final
 HTTP response; the `context_timeout` row is the ordinary query's bounded 503.
+If a client has already received `503 context_timeout`, the synchronous query
+worker may still finish its audit and spool writes; its bounded application slot
+remains reserved until that work completes.
 
 The success response and the rest of the endpoint contract are unchanged.
 

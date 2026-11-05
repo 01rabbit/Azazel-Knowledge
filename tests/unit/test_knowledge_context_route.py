@@ -369,7 +369,7 @@ def test_endpoint_rejects_a_64_byte_but_invalid_signature(tmp_path):
     }
 
 
-@pytest.mark.parametrize("failure", ["adapter", "type", "canonicalizer"])
+@pytest.mark.parametrize("failure", ["adapter", "type", "canonicalizer", "unexpected"])
 def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch, failure):
     client, settings, _local_db, _data = make_client(tmp_path)
     _configure(settings)
@@ -384,6 +384,8 @@ def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch, fa
         def fail_projection(*_args, **_kwargs):
             if failure == "type":
                 raise TypeError("private input detail")
+            if failure == "unexpected":
+                raise RuntimeError("private input detail")
             from azazel_knowledge.api.knowledge_context_adapter import KnowledgeContextAdaptationError
             raise KnowledgeContextAdaptationError("private input detail")
 
@@ -394,6 +396,25 @@ def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch, fa
     assert response.status_code == 503
     assert response.json() == {
         "detail": {"error": "knowledge_context_projection_unavailable"}
+    }
+    assert "private input detail" not in response.text
+
+
+def test_unexpected_request_conversion_error_is_fixed_and_private(tmp_path, monkeypatch):
+    from azazel_knowledge.api.routers import knowledge_context as route
+
+    client, settings, _local_db, _data = make_client(tmp_path)
+    _configure(settings)
+
+    def fail_request_conversion(*_args, **_kwargs):
+        raise RuntimeError("private input detail")
+
+    monkeypatch.setattr(route, "from_knowledge_context_request", fail_request_conversion)
+    response = client.post("/v1/knowledge-context", json=_request())
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"error": "knowledge_context_request_unrepresentable"}
     }
     assert "private input detail" not in response.text
 

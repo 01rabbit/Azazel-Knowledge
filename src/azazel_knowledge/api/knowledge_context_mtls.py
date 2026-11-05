@@ -14,7 +14,8 @@ environment switch, no default certificate path and no default bind address.
 * Only ``POST /v1/knowledge-context`` is served here. The ordinary HTTP
   routes of ``create_app`` are not touched.
 * Bounded: header size, body size, per-connection deadline, concurrency. One
-  request per connection. Any listener-side failure answers a fixed 503.
+  request per connection. Application errors are fixed; pre-HTTP refusals close
+  without a response.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import hashlib
 import http.server
 import ipaddress
 import json
-import select
+import selectors
 import socket
 import ssl
 import threading
@@ -151,15 +152,16 @@ def _send_until(sock: socket.socket, data: bytes, deadline: float) -> None:
             pending = pending[written:]
             continue
         except ssl.SSLWantReadError:
-            readable, writable = [sock], []
+            event = selectors.EVENT_READ
         except (BlockingIOError, ssl.SSLWantWriteError):
-            readable, writable = [], [sock]
+            event = selectors.EVENT_WRITE
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("response write deadline")
-        ready_read, ready_write, _ = select.select(readable, writable, [], remaining)
-        if not ready_read and not ready_write:
-            raise TimeoutError("response write deadline")
+        with selectors.DefaultSelector() as selector:
+            selector.register(sock, event)
+            if not selector.select(remaining):
+                raise TimeoutError("response write deadline")
 
 
 class _Server(http.server.ThreadingHTTPServer):
@@ -172,10 +174,18 @@ class _Server(http.server.ThreadingHTTPServer):
         cfg = listener.config
         super().__init__((cfg.bind_host, cfg.bind_port), _Handler, bind_and_activate=False)
         if ":" in cfg.bind_host:
+            self.socket.close()
             self.address_family = socket.AF_INET6
             self.socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         self.server_bind()
         self.server_activate()
+
+    def server_bind(self) -> None:
+        # Avoid HTTPServer.server_bind's socket.getfqdn(), which can trigger DNS.
+        self.socket.bind(self.server_address)
+        self.server_address = self.socket.getsockname()
+        self.server_name = str(self.server_address[0])
+        self.server_port = self.server_address[1]
 
     def process_request(self, request, client_address):  # type: ignore[override]
         if not self.listener._slots.acquire(blocking=False):
@@ -203,7 +213,7 @@ class _Server(http.server.ThreadingHTTPServer):
             )
             tls.setblocking(False)
             self._handshake_until(tls, deadline)
-        except (OSError, ssl.SSLError, TimeoutError):
+        except (OSError, ssl.SSLError, TimeoutError, ValueError):
             return  # handshake refused (incl. no/invalid client cert): no response
         try:
             _Handler(tls, client_address, self, deadline=deadline)
@@ -221,15 +231,16 @@ class _Server(http.server.ThreadingHTTPServer):
                 tls.do_handshake()
                 return
             except ssl.SSLWantReadError:
-                readable, writable = [tls], []
+                event = selectors.EVENT_READ
             except ssl.SSLWantWriteError:
-                readable, writable = [], [tls]
+                event = selectors.EVENT_WRITE
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("TLS handshake deadline")
-            ready_read, ready_write, _ = select.select(readable, writable, [], remaining)
-            if not ready_read and not ready_write:
-                raise TimeoutError("TLS handshake deadline")
+            with selectors.DefaultSelector() as selector:
+                selector.register(tls, event)
+                if not selector.select(remaining):
+                    raise TimeoutError("TLS handshake deadline")
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
