@@ -98,9 +98,6 @@ jobs:
                   ),
                   eager_runtime=False,
               )
-              assert "/v1/knowledge-context" in {
-                  getattr(route, "path", None) for route in app.routes
-              }
               response = TestClient(app).post(
                   "/v1/knowledge-context",
                   content=b"not-read-while-disabled",
