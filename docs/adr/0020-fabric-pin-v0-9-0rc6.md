@@ -1,6 +1,7 @@
 # ADR-0020: Move the Azazel-Fabric api-extra pin to `v0.9.0rc6`
 
-Status: accepted (2026-11-05 — owner-merged in Azazel-Knowledge PR #118)
+Status: accepted (2026-11-05 — owner-merged in Azazel-Knowledge PR #118);
+current-pin decision superseded by [ADR-0021](0021-fabric-pin-v0-9-0.md)
 
 ## Context
 
@@ -112,8 +113,8 @@ quarantined.
 
 ## Consequences
 
-- Current documentation names `v0.9.0rc6` as the pin in force; `rc5` appears
-  only as history.
+- Historical: current documentation named `v0.9.0rc6` as the pin in force at
+  the time; superseded by ADR-0021.
 - The test baseline in `CLAUDE.md` / `AGENTS.md` / the development guide is
   raised to the new real count.
 - No package version, tag, release, signing or deployment is created.
