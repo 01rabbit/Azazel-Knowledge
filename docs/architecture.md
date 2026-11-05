@@ -22,8 +22,8 @@ repo's `/v1/context` above, and encodes the same advisory-only invariant at the
 type level. As of [ADR-0010](adr/0010-adopt-fabric-cti-contracts.md) (ratified
 2026-07-10) this repository **adopts** `azazel_fabric.cti_contracts` at
 the API boundary, tag-pinned as an `api`-extra-only dependency; the pin in
-force is the published pre-release `v0.9.0rc6`
-([ADR-0020](adr/0020-fabric-pin-v0-9-0rc6.md), carried in
+force is the stable release `v0.9.0`
+([ADR-0021](adr/0021-fabric-pin-v0-9-0.md), carried in
 `pyproject.toml`). The adoption is
 additive and the documented wire shapes are unchanged: ingest can now be
 type-enforced against the canonical `Cti<Kind>Batch` envelope, and every
