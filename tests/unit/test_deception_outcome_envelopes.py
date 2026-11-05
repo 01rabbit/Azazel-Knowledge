@@ -895,6 +895,14 @@ RC6_REFUSED = {
     },
     "objective_over_cap": {"observation_objective_ref": "observation_objective:" + "x" * 300},
     "objective_is_a_list": {"observation_objective_ref": ["observation_objective:a"]},
+    "objective_with_imperative_segment": {
+        "observation_objective_ref": "observation_objective:enable_plan"
+    },
+    "frame_with_imperative_segment": {"frame_ref": "frame:deploy_now"},
+    "hypothesis_with_imperative_segment": {
+        "hypothesis_refs": ["hypothesis:stop_action"], "frame_ref": "frame:f-1"
+    },
+    "frame_with_path_separator": {"frame_ref": "frame:etc/passwd"},
     "active_materialized_without_decision": {
         "observation_objective_ref": "observation_objective:obj-1",
         "authority_class": "active_materialized", "decision_ref": None,

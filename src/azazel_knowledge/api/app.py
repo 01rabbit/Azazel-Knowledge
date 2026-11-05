@@ -13,6 +13,7 @@ them (and they can import back from here without a cycle).
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import os
 import sqlite3
@@ -269,7 +270,6 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
         context,
         deception,
         ingest,
-        knowledge_context,
         lookup,
         reads,
     )
@@ -278,7 +278,10 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
     app.include_router(ingest.router)
     app.include_router(lookup.router)
     app.include_router(context.router)
-    app.include_router(knowledge_context.router)
+    if importlib.util.find_spec("azazel_fabric.knowledge_context") is not None:
+        from azazel_knowledge.api.routers import knowledge_context
+
+        app.include_router(knowledge_context.router)
     app.include_router(reads.router)
     app.include_router(admin.router)
     app.include_router(deception.router)

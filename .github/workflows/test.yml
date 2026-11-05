@@ -27,7 +27,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: pip install -e ".[api,dev]"
+        run: pip install -e ".[api-context-candidate,dev]"
 
       - name: Run unit tests
         run: python -m pytest tests/unit -q
@@ -53,3 +53,26 @@ jobs:
 
       - name: Docs sync check (allowlisted drift warns now, fails after T3 ratification)
         run: python tools/docs-sync-check.py
+
+  stable-api-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install stable API dependencies
+        run: pip install -e ".[api]"
+
+      - name: Verify stable Fabric install starts without the candidate endpoint
+        run: |
+          python - <<'PY'
+          from azazel_knowledge.api.app import app
+          assert "/v1/knowledge-context" not in {route.path for route in app.routes}
+          PY

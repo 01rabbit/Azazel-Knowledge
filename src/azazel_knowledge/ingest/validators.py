@@ -994,6 +994,10 @@ IMPERATIVE_SEGMENTS = frozenset(
     "install delete kill override enforce grant granted bypass".split()
 )
 _OUTCOME_REF_MAX = 256
+_OUTCOME_TYPED_REF_RE = re.compile(
+    r"(?P<kind>[a-z][a-z0-9_]{0,31}):(?P<body>[A-Za-z0-9._~@=+:-]{1,200})"
+)
+_OUTCOME_TYPED_REF_SEGMENT_SPLIT = re.compile(r"[_\-.~:]")
 
 _OUTCOME_ENVELOPE_FIELDS = frozenset(
     {
@@ -1099,10 +1103,11 @@ def _outcome_context_value(value: Any, name: str, prefix: str) -> str | None:
         return f"{name} must be a non-empty string"
     if len(value) > _OUTCOME_REF_MAX:
         return f"{name} exceeds {_OUTCOME_REF_MAX} characters"
-    if not value.startswith(prefix) or len(value) == len(prefix):
-        return f"{name} must be a {prefix}<id> reference"
-    if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in value):
-        return f"{name} must not contain whitespace or control characters"
+    match = _OUTCOME_TYPED_REF_RE.fullmatch(value)
+    if match is None or match.group("kind") != prefix[:-1]:
+        return f"{name} must be an opaque {prefix[:-1]} typed reference"
+    if set(_OUTCOME_TYPED_REF_SEGMENT_SPLIT.split(match.group("body").lower())) & IMPERATIVE_SEGMENTS:
+        return f"{name} carries an imperative command segment"
     return None
 
 
