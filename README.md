@@ -187,6 +187,11 @@ Boundaries:
 adapter in the code; shadow scoring is default-off research; Pi 4 performance
 gates and LUKS/Adiantum disk encryption are not yet verified on hardware
 ([issue #21](https://github.com/01rabbit/Azazel-Knowledge/issues/21)).
+Fabric v0.10.0 includes the experimental `knowledge_context` contract, but the
+full-node producer in [Knowledge #116](https://github.com/01rabbit/Azazel-Knowledge/pull/116)
+and the consumer in [MIO #47](https://github.com/01rabbit/Azazel-MIO/pull/47)
+are not merged. The stable Fabric pin and producer-capture fixtures do not show
+that a product-to-product Context connection is operational.
 
 ## Relationship to Azazel-Edge roadmap
 
