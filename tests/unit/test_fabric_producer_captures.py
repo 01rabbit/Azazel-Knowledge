@@ -15,9 +15,10 @@ Provenance of the captures (see `producer_capture_provenance`):
 * Azazel-Edge        e84af9a8ca7c9668416db41cd085d17264cbd8b9
 * Azazel-Deception   305af8524bc362c3f6f9615d369794f72888e1c4
 
-Availability: the captures arrive with Fabric v0.10.0rc1. Under the Fabric
-v0.9.0 pin (this repo's formal pin until a later PR moves it) the module is
-skipped, not failed -- there is nothing to read.
+Availability: the captures arrive with Fabric v0.10.0rc1, the pin in force
+(ADR-0022), so under the pin every test here runs. In an environment with an
+earlier azazel-fabric (v0.9.0 ships none) the module is skipped, not failed --
+there is nothing to read.
 
 Which captures Knowledge consumes (the adoption table: deception / engagement /
 outcome), and the lane each one takes:
