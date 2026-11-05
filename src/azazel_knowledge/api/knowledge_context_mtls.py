@@ -228,6 +228,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _reply(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
         try:
+            self.connection.settimeout(self._remaining())
             self.send_response(status)
             for name, value in headers:
                 self.send_header(name, value)
@@ -235,7 +236,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
-        except OSError:
+        except (OSError, TimeoutError):
             pass
 
     def _recv(self, limit: int) -> bytes:

@@ -77,16 +77,23 @@ Fixed error responses (bodies are constant and never echo request content):
 | --- | --- | --- |
 | `404` | `knowledge_context_unavailable` | Profile disabled or not configured (no body read) |
 | `401` | `peer_authentication_failed` | Peer not authenticated (no body read) |
-| `413` | `context_request_too_large` | Body exceeds the cap |
+| `413` | `context_request_too_large` | Body exceeds the byte cap or request has too many entities |
 | `422` | `invalid_knowledge_context_request` | Malformed JSON, deeply nested JSON, schema-invalid body, or missing/unsupported `Content-Type` |
 | `422` | `knowledge_context_request_unrepresentable` | A valid Fabric request cannot be represented by Knowledge's query model |
 | `403` | `peer_profile_mismatch` | Valid request whose `source_product` is not `azazel_nexus` |
+| `503` | `cache_state_cold` | No current intel generation is available yet; includes `Retry-After` |
 | `503` | `context_busy` / `context_timeout` | Bounded application concurrency is full or the absolute connection deadline expires |
 | `503` | `audit_unavailable` | The ordinary Knowledge audit path cannot append the request result |
 | `503` | `snapshot_metadata_unavailable` | The ordinary query response lacks required snapshot metadata |
 | `503` | `knowledge_context_projection_unavailable` | The result cannot be faithfully represented by the candidate contract |
 | `503` | `knowledge_context_signing_unavailable` | The commissioned signer or signature verification fails |
 | `503` | `knowledge_context_unavailable` | The isolated listener or application path fails closed |
+| `500` | `advisory_invariant_violation` | The ordinary Knowledge query response violates its advisory-only invariant |
+
+The HTTP parser also emits fixed `400`, `411`, `404` and `431` errors for malformed
+or unsupported framing, missing length, unknown paths, and oversized headers.
+Connections dropped before TLS when the listener is at capacity, or when the
+TLS handshake cannot be completed, receive no HTTP response.
 
 The success response and the rest of the endpoint contract are unchanged.
 

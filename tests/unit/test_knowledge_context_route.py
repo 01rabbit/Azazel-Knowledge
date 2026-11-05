@@ -369,6 +369,26 @@ def test_endpoint_rejects_a_64_byte_but_invalid_signature(tmp_path):
     }
 
 
+def test_projection_failure_has_a_distinct_fixed_error(tmp_path, monkeypatch):
+    client, settings, _local_db, _data = make_client(tmp_path)
+    _configure(settings)
+
+    def fail_projection(*_args, **_kwargs):
+        from azazel_knowledge.api.knowledge_context_adapter import KnowledgeContextAdaptationError
+        raise KnowledgeContextAdaptationError("private input detail")
+
+    from azazel_knowledge.api.routers import knowledge_context as route
+    monkeypatch.setattr(route, "to_knowledge_context_response", fail_projection)
+
+    response = client.post("/v1/knowledge-context", json=_request())
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {"error": "knowledge_context_projection_unavailable"}
+    }
+    assert "private input detail" not in response.text
+
+
 def test_existing_context_response_does_not_expose_private_snapshot_binding(tmp_path):
     client, settings, local_db_path, _data = make_client(tmp_path)
     token = add_api_client(local_db_path, "edge1", ["query"])

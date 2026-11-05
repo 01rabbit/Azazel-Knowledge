@@ -187,11 +187,11 @@ def test_adapter_module_reads_no_clock_no_randomness_no_io():
 
 def test_module_docstring_states_not_wired_and_unverified_freshness():
     doc = adapter.__doc__ or ""
-    assert "Not wired" in doc
-    assert "not connected to any HTTP route" in doc
-    assert "auth.key_id" in doc
+    assert "Optional route caller" in doc
+    assert "candidate-only" in doc
+    assert "does not authenticate" in doc
     assert "does not check current freshness" in doc
-    assert "no live route" in doc
+    assert "enforces" in doc and "maximum response TTL" in doc
 
 
 def test_snapshot_and_timestamp_claims_have_no_defaults():

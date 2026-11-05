@@ -216,27 +216,28 @@ def post_knowledge_context(
     generated = clock.query_as_of()
     expires = generated + timedelta(seconds=config.max_ttl_seconds)
     try:
-        try:
-            semantic = to_knowledge_context_response(
-                context_response,
-                body,
-                provider_id="azazel-knowledge",
-                snapshot_ref=snapshot_ref,
-                # Current Knowledge output does not expose per-feed expiry metadata.
-                # `partial` avoids claiming that every source is fresh.
-                snapshot_state="partial",
-                snapshot_as_of=snapshot_as_of,
-                generated_at=generated,
-                expires_at=expires,
-                limitations=(
-                    "source-level freshness deadlines are not included in this projection",
-                ),
-            )
-        except KnowledgeContextAdaptationError:
-            raise HTTPException(
-                status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
-            ) from None
+        semantic = to_knowledge_context_response(
+            context_response,
+            body,
+            provider_id="azazel-knowledge",
+            snapshot_ref=snapshot_ref,
+            # Current Knowledge output does not expose per-feed expiry metadata.
+            # `partial` avoids claiming that every source is fresh.
+            snapshot_state="partial",
+            snapshot_as_of=snapshot_as_of,
+            generated_at=generated,
+            expires_at=expires,
+            limitations=(
+                "source-level freshness deadlines are not included in this projection",
+            ),
+        )
         semantic_bytes = canonical_knowledge_context_bytes(semantic)
+    except KnowledgeContextAdaptationError:
+        raise HTTPException(
+            status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
+        ) from None
+
+    try:
         document = {
             "schema": _ENVELOPE_SCHEMA,
             "key_id": config.signer.key_id,

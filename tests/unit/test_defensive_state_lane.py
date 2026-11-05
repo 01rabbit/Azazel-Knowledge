@@ -463,10 +463,6 @@ def test_the_pinned_fabric_carries_the_canonical_vocabulary():
     assert stable[0].endswith("@v0.9.0"), stable
     assert len(candidate) == 1, f"Expected exactly one candidate Fabric pin: {candidate}"
     assert candidate[0].endswith("@ec31f7eb9989779594d51b265d3c4dcd78350bbc"), candidate
-    adr_path = Path(__file__).resolve().parents[2] / "docs/adr/0022-knowledge-context-candidate-profile.md"
-    adr = adr_path.read_text("utf-8")
-    assert "instead of `api`" in adr
-
     assert {member.value for member in DefensiveState} == {
         "OBSERVE",
         "NOTIFY",

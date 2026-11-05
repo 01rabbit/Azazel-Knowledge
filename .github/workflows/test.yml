@@ -74,7 +74,9 @@ jobs:
         run: |
           python - <<'PY'
           from azazel_knowledge.api.app import app
-          assert "/v1/knowledge-context" not in {route.path for route in app.routes}
+          assert "/v1/knowledge-context" not in {
+              getattr(route, "path", None) for route in app.routes
+          }
           PY
 
       - name: Run unit tests with the published Fabric profile
