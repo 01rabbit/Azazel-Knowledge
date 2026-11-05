@@ -1,7 +1,6 @@
 # ADR-0020: Move the Azazel-Fabric api-extra pin to `v0.9.0rc6`
 
-Status: proposed (2026-11-05 — becomes accepted when the owner merges the
-Azazel-Knowledge pull request that carries it)
+Status: accepted (2026-11-05 — owner-merged in Azazel-Knowledge PR #118)
 
 ## Context
 
