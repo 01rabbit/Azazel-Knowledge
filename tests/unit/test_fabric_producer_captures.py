@@ -15,8 +15,8 @@ Provenance of the captures (see `producer_capture_provenance`):
 * Azazel-Edge        e84af9a8ca7c9668416db41cd085d17264cbd8b9
 * Azazel-Deception   305af8524bc362c3f6f9615d369794f72888e1c4
 
-Availability: the captures arrive with Fabric v0.10.0rc1, the pin in force
-(ADR-0022), so under the pin every test here runs. In an environment with an
+Availability: the captures arrive with Fabric v0.10.0rc1 and ship in the pin in
+force, v0.10.0 (ADR-0023), so under the pin every test here runs. In an environment with an
 earlier azazel-fabric (v0.9.0 ships none) the module is skipped, not failed --
 there is nothing to read.
 

@@ -2,8 +2,8 @@
 
 Status: accepted (2026-11-03 — owner-merged in Azazel-Knowledge PR #114);
 current-pin decision superseded by [ADR-0020](0020-fabric-pin-v0-9-0rc6.md)
-and then [ADR-0021](0021-fabric-pin-v0-9-0.md) and
-[ADR-0022](0022-fabric-pin-v0-10-0rc1.md)
+and then [ADR-0021](0021-fabric-pin-v0-9-0.md),
+[ADR-0022](0022-fabric-pin-v0-10-0rc1.md) and [ADR-0023](0023-fabric-pin-v0-10-0.md)
 
 ## Context
 
