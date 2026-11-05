@@ -9,6 +9,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
+from nacl.signing import VerifyKey
 
 from azazel_fabric.knowledge_context import (
     KnowledgeContextRequestV1,
@@ -17,6 +18,7 @@ from azazel_fabric.knowledge_context import (
 from azazel_knowledge.api import limits
 from azazel_knowledge.api.app import AuthContext
 from azazel_knowledge.api.knowledge_context_adapter import (
+    KnowledgeContextAdaptationError,
     from_knowledge_context_request,
     to_knowledge_context_response,
 )
@@ -193,7 +195,12 @@ def post_knowledge_context(
     if body.source_product != "azazel_nexus":
         raise HTTPException(status_code=403, detail={"error": "peer_profile_mismatch"})
 
-    context_request = from_knowledge_context_request(body)
+    try:
+        context_request = from_knowledge_context_request(body)
+    except KnowledgeContextAdaptationError:
+        raise HTTPException(
+            status_code=422, detail={"error": "knowledge_context_request_unrepresentable"}
+        ) from None
     auth = AuthContext(key_id=peer_id, scopes=frozenset({Scope.QUERY}))
     # Reuse the ordinary query path so cold-cache, deadline, audit and spool
     # behavior are identical. The peer ID is a commissioned non-secret label.
@@ -209,21 +216,26 @@ def post_knowledge_context(
     generated = clock.query_as_of()
     expires = generated + timedelta(seconds=config.max_ttl_seconds)
     try:
-        semantic = to_knowledge_context_response(
-            context_response,
-            body,
-            provider_id="azazel-knowledge",
-            snapshot_ref=snapshot_ref,
-            # Current Knowledge output does not expose per-feed expiry metadata.
-            # `partial` avoids claiming that every source is fresh.
-            snapshot_state="partial",
-            snapshot_as_of=snapshot_as_of,
-            generated_at=generated,
-            expires_at=expires,
-            limitations=(
-                "source-level freshness deadlines are not included in this projection",
-            ),
-        )
+        try:
+            semantic = to_knowledge_context_response(
+                context_response,
+                body,
+                provider_id="azazel-knowledge",
+                snapshot_ref=snapshot_ref,
+                # Current Knowledge output does not expose per-feed expiry metadata.
+                # `partial` avoids claiming that every source is fresh.
+                snapshot_state="partial",
+                snapshot_as_of=snapshot_as_of,
+                generated_at=generated,
+                expires_at=expires,
+                limitations=(
+                    "source-level freshness deadlines are not included in this projection",
+                ),
+            )
+        except KnowledgeContextAdaptationError:
+            raise HTTPException(
+                status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
+            ) from None
         semantic_bytes = canonical_knowledge_context_bytes(semantic)
         document = {
             "schema": _ENVELOPE_SCHEMA,
@@ -243,6 +255,7 @@ def post_knowledge_context(
         signature = config.signer.sign(_ENVELOPE_DOMAIN + envelope)
         if not isinstance(signature, bytes) or len(signature) != 64:
             raise ValueError("signer returned an invalid Ed25519 signature")
+        VerifyKey(public_key).verify(_ENVELOPE_DOMAIN + envelope, signature)
     except Exception:  # noqa: BLE001 -- signer/provider failures fail closed
         raise HTTPException(
             status_code=503, detail={"error": "knowledge_context_signing_unavailable"}

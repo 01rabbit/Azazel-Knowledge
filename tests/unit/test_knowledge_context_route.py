@@ -6,6 +6,8 @@ import json
 from datetime import timedelta
 
 import pytest
+pytest.importorskip("azazel_fabric.knowledge_context")
+
 from fastapi import HTTPException
 from nacl.signing import SigningKey
 from starlette.requests import Request
@@ -352,6 +354,19 @@ def test_endpoint_returns_signed_bounded_partial_snapshot(tmp_path):
     assert at_cap.status_code == 200
     at_cap_signature, at_cap_payload = at_cap.content[:64], at_cap.content[64:]
     signer.key.verify_key.verify(_DOMAIN + at_cap_payload, at_cap_signature)
+
+
+def test_endpoint_rejects_a_64_byte_but_invalid_signature(tmp_path):
+    client, settings, _local_db, _data = make_client(tmp_path)
+    signer = _configure(settings)
+    signer.sign = lambda _message: bytes(64)
+
+    response = client.post("/v1/knowledge-context", json=_request())
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {"error": "knowledge_context_signing_unavailable"}
+    }
 
 
 def test_existing_context_response_does_not_expose_private_snapshot_binding(tmp_path):

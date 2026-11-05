@@ -450,28 +450,22 @@ def test_the_api_surface_uses_no_ambiguous_mode_field(tmp_path):
 def test_the_pinned_fabric_carries_the_canonical_vocabulary():
     """The pin must carry DefensiveState and may only use an allowed ref form."""
     import tomllib
-    import re
 
     from azazel_fabric.schema.defensive_state import DefensiveState
 
     manifest = tomllib.loads(
         (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text("utf-8")
     )
-    pins = [d for d in manifest["project"]["optional-dependencies"]["api"] if "azazel-fabric" in d]
-    assert len(pins) == 1, f"Expected exactly one Fabric api-extra pin: {pins}"
-    reference = pins[0].rsplit("@", 1)[-1]
-    if re.fullmatch(r"v\d+\.\d+\.\d+(?:rc\d+)?", reference):
-        pass
-    else:
-        assert re.fullmatch(r"[0-9a-f]{40}", reference), (
-            f"Fabric reference must be an exact version tag or immutable commit: {reference}"
-        )
-        project = Path(__file__).resolve().parents[2]
-        pyproject_text = (project / "pyproject.toml").read_text("utf-8")
-        adr_text = (project / "docs/adr/0020-fabric-dev-commit-pin-knowledge-context.md").read_text("utf-8")
-        assert "DEVELOPMENT-ONLY" in pyproject_text
-        assert f"`{reference}`" in adr_text
-        assert "not a shippable install" in re.sub(r"\s+", " ", adr_text)
+    extras = manifest["project"]["optional-dependencies"]
+    stable = [d for d in extras["api"] if "azazel-fabric" in d]
+    candidate = [d for d in extras["api-context-candidate"] if "azazel-fabric" in d]
+    assert len(stable) == 1, f"Expected exactly one stable Fabric api-extra pin: {stable}"
+    assert stable[0].endswith("@v0.9.0"), stable
+    assert len(candidate) == 1, f"Expected exactly one candidate Fabric pin: {candidate}"
+    assert candidate[0].endswith("@ec31f7eb9989779594d51b265d3c4dcd78350bbc"), candidate
+    adr_path = Path(__file__).resolve().parents[2] / "docs/adr/0022-knowledge-context-candidate-profile.md"
+    adr = adr_path.read_text("utf-8")
+    assert "instead of `api`" in adr
 
     assert {member.value for member in DefensiveState} == {
         "OBSERVE",

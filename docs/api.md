@@ -79,7 +79,14 @@ Fixed error responses (bodies are constant and never echo request content):
 | `401` | `peer_authentication_failed` | Peer not authenticated (no body read) |
 | `413` | `context_request_too_large` | Body exceeds the cap |
 | `422` | `invalid_knowledge_context_request` | Malformed JSON, deeply nested JSON, schema-invalid body, or missing/unsupported `Content-Type` |
+| `422` | `knowledge_context_request_unrepresentable` | A valid Fabric request cannot be represented by Knowledge's query model |
 | `403` | `peer_profile_mismatch` | Valid request whose `source_product` is not `azazel_nexus` |
+| `503` | `context_busy` / `context_timeout` | Bounded application concurrency is full or the absolute connection deadline expires |
+| `503` | `audit_unavailable` | The ordinary Knowledge audit path cannot append the request result |
+| `503` | `snapshot_metadata_unavailable` | The ordinary query response lacks required snapshot metadata |
+| `503` | `knowledge_context_projection_unavailable` | The result cannot be faithfully represented by the candidate contract |
+| `503` | `knowledge_context_signing_unavailable` | The commissioned signer or signature verification fails |
+| `503` | `knowledge_context_unavailable` | The isolated listener or application path fails closed |
 
 The success response and the rest of the endpoint contract are unchanged.
 
@@ -89,7 +96,9 @@ peer authenticator bound to one expected Nexus peer ID, an Ed25519 signing
 provider whose key identifier is the SHA-256 fingerprint of its public key,
 and an explicit maximum TTL from 1 through 30 seconds. There is no
 environment-variable switch, default signer,
-default peer, certificate loader, or TLS listener change. Peer authentication
+default peer, or default certificate loader. An explicitly constructed optional
+mTLS listener serves only this route and is never started by installation or
+ordinary application startup. Peer authentication
 must come from the trusted listener boundary; caller-provided headers are not a
 valid certificate identity source. Without this complete configuration the
 route returns unavailable and makes no outbound connection.

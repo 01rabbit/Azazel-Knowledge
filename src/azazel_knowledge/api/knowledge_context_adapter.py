@@ -2,19 +2,21 @@
 
 Scope and limits (read these before reusing this module):
 
-* **Pure conversion.** No clock, no filesystem, no SQLite, no network, no
-  randomness, no route, no signature, no mTLS. Every value that is not derivable
-  from the two input models is an explicit argument (ids, timestamps, provider,
-  snapshot). Nothing here runs at request time.
-* **Not wired.** This module is not connected to any HTTP route, runtime or
-  worker. It does not authenticate, sign, or open a live connection to a Fabric
-  node. Invoking the existing ``/v1/context`` router can still derive
-  ``auth.key_id`` and perform local enrichment; this module does not prevent or
-  control that, and it is not a substitute for those controls.
+* **Pure conversion.** No clock, filesystem, SQLite, network, randomness,
+  authentication, signature, or mTLS lives in this module. Every value that is
+  not derivable from the two input models is an explicit argument (ids,
+  timestamps, provider, snapshot).
+* **Optional route caller.** The candidate-only
+  ``/v1/knowledge-context`` route calls this adapter after its authentication and
+  request gates, then signs the projected response. The adapter itself does not
+  authenticate, sign, or open a connection. The route is not mounted with the
+  published Fabric ``v0.9.0`` profile and remains unavailable until an enabled
+  transport is explicitly configured.
 * **Caller-supplied claims.** ``snapshot_*``, ``provider_id``, ``generated_at``
   and ``expires_at`` are caller-supplied claims, not facts this adapter verified.
   The adapter does not check current freshness, the snapshot's age, or any
-  maximum TTL. Therefore no live route is permitted by this slice.
+  maximum TTL. The candidate route supplies generated timestamps and enforces
+  the configured maximum response TTL before signing.
 
 Mapping rules this adapter enforces:
 

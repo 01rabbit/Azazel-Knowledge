@@ -6,6 +6,7 @@ Nothing here touches production credentials or listens on a non-loopback address
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -16,10 +17,13 @@ import time
 import ssl
 import subprocess
 import sys
+import threading
 import textwrap
 from pathlib import Path
 
 import pytest
+pytest.importorskip("azazel_fabric.knowledge_context")
+
 from nacl.signing import SigningKey, VerifyKey
 from starlette.requests import Request
 
@@ -419,4 +423,52 @@ def test_slow_incomplete_headers_hit_the_connection_deadline(tmp_path, pki):
         assert b" 503 " in reply.split(b"\r\n", 1)[0] or reply.startswith(b"HTTP/1.0 503") \
             or b"Error" in reply or b"Errno" in reply, reply
     finally:
+        listener.stop()
+
+
+def test_stalled_tls_handshake_uses_deadline_and_releases_connection_slot(tmp_path, pki):
+    listener, _ = _start(tmp_path, pki, deadline_seconds=1.0, max_concurrency=1)
+    host, port = listener.address
+    stalled = socket.create_connection((host, port), timeout=2)
+    try:
+        time.sleep(1.3)
+        assert _client(listener, pki, tmp_path)["status"] == 200
+    finally:
+        stalled.close()
+        listener.stop()
+
+
+def test_timed_out_app_keeps_its_concurrency_slot_until_worker_finishes(tmp_path, pki):
+    listener, _ = _start(tmp_path, pki, max_concurrency=1)
+    release = threading.Event()
+    calls = 0
+
+    async def slow_once(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.to_thread(release.wait)
+        return 200, [("Content-Type", "application/json")], b"{}"
+
+    listener._call_app = slow_once
+    args = {
+        "method": "POST", "headers": [], "body": b"{}", "peer": None,
+        "client": ("127.0.0.1", 1),
+    }
+    try:
+        first = listener._dispatch(**args, timeout=0.02)
+        assert first[0] == 503
+        assert json.loads(first[2]) == {"detail": {"error": "context_timeout"}}
+        busy = listener._dispatch(**args, timeout=0.1)
+        assert busy[0] == 503
+        assert json.loads(busy[2]) == {"detail": {"error": "context_busy"}}
+        release.set()
+        deadline = time.monotonic() + 2
+        result = busy
+        while result[0] == 503 and time.monotonic() < deadline:
+            time.sleep(0.01)
+            result = listener._dispatch(**args, timeout=0.2)
+        assert result[0] == 200
+    finally:
+        release.set()
         listener.stop()

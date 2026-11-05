@@ -68,7 +68,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install stable API dependencies
-        run: pip install -e ".[api]"
+        run: pip install -e ".[api,dev]"
 
       - name: Verify stable Fabric install starts without the candidate endpoint
         run: |
@@ -76,3 +76,6 @@ jobs:
           from azazel_knowledge.api.app import app
           assert "/v1/knowledge-context" not in {route.path for route in app.routes}
           PY
+
+      - name: Run unit tests with the published Fabric profile
+        run: python -m pytest tests/unit -q

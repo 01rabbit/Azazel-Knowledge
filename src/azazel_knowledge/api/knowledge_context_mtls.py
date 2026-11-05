@@ -24,6 +24,7 @@ import hashlib
 import http.server
 import ipaddress
 import json
+import select
 import socket
 import ssl
 import threading
@@ -170,21 +171,41 @@ class _Server(http.server.ThreadingHTTPServer):
 
     def finish_request(self, request, client_address):  # type: ignore[override]
         cfg = self.listener.config
-        request.settimeout(cfg.deadline_seconds)
+        deadline = time.monotonic() + cfg.deadline_seconds
+        request.settimeout(max(0.001, deadline - time.monotonic()))
         try:
             tls = self.listener.ssl_context.wrap_socket(
                 request, server_side=True, do_handshake_on_connect=False
             )
-            tls.do_handshake()
-        except (OSError, ssl.SSLError):
+            tls.setblocking(False)
+            self._handshake_until(tls, deadline)
+        except (OSError, ssl.SSLError, TimeoutError):
             return  # handshake refused (incl. no/invalid client cert): no response
         try:
-            _Handler(tls, client_address, self, deadline=time.monotonic() + cfg.deadline_seconds)
+            _Handler(tls, client_address, self, deadline=deadline)
         finally:
             try:
                 tls.close()
             except OSError:
                 pass
+
+    @staticmethod
+    def _handshake_until(tls: ssl.SSLSocket, deadline: float) -> None:
+        """Complete TLS under the same absolute deadline used for the HTTP request."""
+        while True:
+            try:
+                tls.do_handshake()
+                return
+            except ssl.SSLWantReadError:
+                readable, writable = [tls], []
+            except ssl.SSLWantWriteError:
+                readable, writable = [], [tls]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TLS handshake deadline")
+            ready_read, ready_write, _ = select.select(readable, writable, [], remaining)
+            if not ready_read and not ready_write:
+                raise TimeoutError("TLS handshake deadline")
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -336,6 +357,7 @@ class KnowledgeContextMtlsListener:
         self.config = config
         self.ssl_context = build_server_ssl_context(config)
         self._slots = threading.BoundedSemaphore(config.max_concurrency)
+        self._app_slots = threading.BoundedSemaphore(config.max_concurrency)
         self._server: _Server | None = None
         self._threads: list[threading.Thread] = []
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -377,13 +399,21 @@ class KnowledgeContextMtlsListener:
 
     def _dispatch(self, *, method, headers, body, peer, client, timeout):
         assert self._loop is not None
-        future = asyncio.run_coroutine_threadsafe(
-            self._call_app(method, headers, body, peer, client), self._loop
-        )
+        if not self._app_slots.acquire(blocking=False):
+            return _json(503, "context_busy")
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._call_app(method, headers, body, peer, client), self._loop
+            )
+        except Exception:
+            self._app_slots.release()
+            return _json(503, "knowledge_context_unavailable")
+        future.add_done_callback(lambda _future: self._app_slots.release())
         try:
             return future.result(timeout=timeout)
         except (TimeoutError, asyncio.TimeoutError):
-            future.cancel()
+            # Cancelling the asyncio wrapper cannot stop a synchronous endpoint
+            # already running in a worker thread. Hold the slot until completion.
             return _json(503, "context_timeout")
         except Exception:  # noqa: BLE001
             return _json(503, "knowledge_context_unavailable")
