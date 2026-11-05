@@ -205,9 +205,10 @@ def post_knowledge_context(
         raise HTTPException(
             status_code=503, detail={"error": "knowledge_context_request_unavailable"}
         ) from None
-    auth = AuthContext(key_id=peer_id, scopes=frozenset({Scope.QUERY}))
+    auth = AuthContext(key_id=f"mtls:{peer_id}", scopes=frozenset({Scope.QUERY}))
     # Reuse the ordinary query path so cold-cache, deadline, audit and spool
-    # behavior are identical. The peer ID is a commissioned non-secret label.
+    # behavior are identical. Namespace the commissioned peer ID so it cannot
+    # collide with a local API key ID in audit attribution or spool accounting.
     context_response: ContextResponse = post_context(
         request, context_request, raw_body=raw_body, auth=auth
     )

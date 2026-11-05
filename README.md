@@ -154,11 +154,14 @@ under `azazel_knowledge.api`; the core dependency set (stdlib + PyYAML + idna
 
 The Nexus-specific full-node Knowledge Context v1 producer is an experimental
 candidate under [ADR-0023](docs/adr/0023-knowledge-context-candidate-profile.md).
-The normal `[api]` install currently follows ADR-0022 and uses published
-pre-release Fabric `v0.10.0rc1`. When its contract is present the route is
-registered, but it remains unavailable unless an explicit transport profile
-is injected. Tests against the exact Fabric #76 candidate can use the separate
-`api-context-candidate` extra. This is not a released integration.
+The normal `[api]` install uses published pre-release Fabric `v0.10.0rc1`;
+stable `v0.9.0` does not contain this contract. The separate
+`api-context-candidate` extra pins source commit `33aa79c…` for reproducible
+isolated tests. Its contract module is byte-identical to rc1, but that commit
+does not carry rc1's release digest/signature artifacts, so the candidate pin
+is not suitable as a shipped dependency. When the contract is present the route
+is registered, but it remains unavailable unless an explicit transport profile
+is injected. This is not a released integration.
 
 ## Documentation
 

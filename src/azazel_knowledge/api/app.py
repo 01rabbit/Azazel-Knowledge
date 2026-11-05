@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -278,10 +279,22 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
     app.include_router(ingest.router)
     app.include_router(lookup.router)
     app.include_router(context.router)
-    if importlib.util.find_spec("azazel_fabric.knowledge_context") is not None:
-        from azazel_knowledge.api.routers import knowledge_context
+    try:
+        context_contract_available = (
+            importlib.util.find_spec("azazel_fabric.knowledge_context") is not None
+        )
+    except (ImportError, ValueError):
+        context_contract_available = False
 
-        app.include_router(knowledge_context.router)
+    if context_contract_available:
+        try:
+            from azazel_knowledge.api.routers import knowledge_context
+
+            app.include_router(knowledge_context.router)
+        except (ImportError, RuntimeError, TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "Optional Knowledge Context route disabled: incompatible Fabric contract"
+            )
     app.include_router(reads.router)
     app.include_router(admin.router)
     app.include_router(deception.router)

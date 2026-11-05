@@ -32,11 +32,14 @@ The CTI node must never be a synchronous dependency of the arbiter.
 
 ## Optional Nexus Knowledge Context v1 profile
 
-This is a Draft integration profile and is absent from published Fabric
+This is an experimental integration profile and is absent from stable Fabric
 `v0.9.0`. The ordinary `[api]` extra currently uses published pre-release Fabric
 `v0.10.0rc1` per [ADR-0022](adr/0022-fabric-pin-v0-10-0rc1.md). Isolated tests
 for the exact Fabric #76 candidate may instead use the separate
 `api-context-candidate` extra pinned by [ADR-0023](adr/0023-knowledge-context-candidate-profile.md).
+The candidate commit is the direct parent of rc1 and its Context module is
+byte-identical, but the candidate commit lacks rc1's release digest/signature
+artifacts; the separate pin is for reproducible isolated testing only.
 When the contract package is present the route is registered, but explicit
 transport configuration is still required to make it available.
 
@@ -117,6 +120,14 @@ ordinary application startup. Peer authentication
 must come from the trusted listener boundary; caller-provided headers are not a
 valid certificate identity source. Without this complete configuration the
 route returns unavailable and makes no outbound connection.
+
+Binding to an explicit IP is not a network access control. The listener
+reserves a bounded connection slot before client-certificate authentication;
+the current defaults allow four concurrent connections and a ten-second
+absolute deadline (maximum 60 seconds). Any deployment that enables this
+optional endpoint must restrict the listener port to the commissioned Nexus
+peer with a network ACL/firewall. This is an operational prerequisite, not
+configured or enabled by this candidate.
 
 Proposed pre-connection lifecycle: the Knowledge node operator owns its
 server certificate and renews it at least 14 days before its 90-day maximum

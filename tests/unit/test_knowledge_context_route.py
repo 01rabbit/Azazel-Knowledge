@@ -323,6 +323,14 @@ def test_endpoint_returns_signed_bounded_partial_snapshot(tmp_path):
     }
     assert semantic["unknowns"]
 
+    client_ids = list((settings.spool_root / "advisory").glob("*.client"))
+    assert len(client_ids) == 1
+    assert client_ids[0].read_text(encoding="utf-8") == "mtls:nexus-lab"
+    client.app.state.audit.flush()
+    audit_path = settings.audit_dir / "test-proc.test-boot.jsonl"
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])["event"]
+    assert audit_event["actor_key"] == "mtls:nexus-lab"
+
     # The same valid request sent as raw application/json bytes is signed identically.
     valid_body = _canonical(_request())
     raw_response = _post_raw(client, valid_body)

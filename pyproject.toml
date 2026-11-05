@@ -29,8 +29,10 @@ api = [
     # design-principles §6.
     "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0",
 ]
-# Experimental Nexus Knowledge Context profile. Install this instead of `api`
-# for candidate-contract tests; do not combine the two extras or ship this pin.
+# Experimental Nexus Knowledge Context profile. Its immutable source pin carries
+# the same contract module bytes as v0.10.0rc1, but lacks that tag's release
+# digest/signature artifacts. Use instead of `api` for isolated tests only; do
+# not combine the extras or ship this pin.
 api-context-candidate = [
     "fastapi>=0.115,<1",
     "pydantic>=2,<3",
