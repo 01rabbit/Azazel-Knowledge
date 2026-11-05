@@ -412,9 +412,9 @@ def test_unexpected_request_conversion_error_is_fixed_and_private(tmp_path, monk
     monkeypatch.setattr(route, "from_knowledge_context_request", fail_request_conversion)
     response = client.post("/v1/knowledge-context", json=_request())
 
-    assert response.status_code == 422
+    assert response.status_code == 503
     assert response.json() == {
-        "detail": {"error": "knowledge_context_request_unrepresentable"}
+        "detail": {"error": "knowledge_context_request_unavailable"}
     }
     assert "private input detail" not in response.text
 

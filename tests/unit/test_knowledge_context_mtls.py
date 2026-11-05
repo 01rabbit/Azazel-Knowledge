@@ -19,6 +19,8 @@ import subprocess
 import sys
 import threading
 import textwrap
+import fcntl
+import resource
 from pathlib import Path
 
 import pytest
@@ -153,10 +155,11 @@ def _start(tmp_path, pki, *, signer=None, revoked=frozenset(), now=None, **cfg):
         ),
         signer=signer, max_ttl_seconds=30, expected_peer_id="nexus-lab", enabled=True,
     )
+    bind_host = cfg.pop("bind_host", "127.0.0.1")
     listener = KnowledgeContextMtlsListener(
         app,
         MtlsListenerConfig(
-            bind_host="127.0.0.1", bind_port=0,
+            bind_host=bind_host, bind_port=0,
             server_cert_file=pki / "server.pem", server_key_file=pki / "server.key",
             client_ca_file=pki / "ca.pem", **cfg,
         ),
@@ -441,6 +444,74 @@ def test_stalled_tls_handshake_uses_deadline_and_releases_connection_slot(tmp_pa
     finally:
         stalled.close()
         listener.stop()
+
+
+def test_response_selector_supports_descriptors_above_fd_setsize():
+    if resource.getrlimit(resource.RLIMIT_NOFILE)[0] <= 1024:
+        pytest.skip("process descriptor limit is below 1025")
+    sender, receiver = socket.socketpair()
+    high_sender = None
+    try:
+        sender.setblocking(False)
+        while True:
+            try:
+                sender.send(b"x" * 65536)
+            except BlockingIOError:
+                break
+        high_fd = fcntl.fcntl(sender.fileno(), fcntl.F_DUPFD, 1024)
+        high_sender = socket.socket(fileno=high_fd)
+        with pytest.raises(TimeoutError, match="response write deadline"):
+            _send_until(high_sender, b"x", time.monotonic() + 0.05)
+    finally:
+        if high_sender is not None:
+            high_sender.close()
+        sender.close()
+        receiver.close()
+
+
+def test_ipv6_loopback_bind_does_not_use_reverse_dns(tmp_path, pki, monkeypatch):
+    def no_reverse_lookup(*_args, **_kwargs):
+        raise AssertionError("listener startup attempted reverse DNS")
+
+    monkeypatch.setattr(socket, "getfqdn", no_reverse_lookup)
+    try:
+        listener, _ = _start(tmp_path, pki, bind_host="::1")
+    except OSError as exc:
+        pytest.skip(f"IPv6 loopback is unavailable: {exc}")
+    try:
+        assert listener.address[0] == "::1"
+    finally:
+        listener.stop()
+
+
+def test_bind_failure_does_not_start_or_leak_listener_threads(tmp_path, pki):
+    first, _ = _start(tmp_path, pki)
+    try:
+        app, settings, _db, _data = build_app(tmp_path / "second")
+        signer = _Signer()
+        settings.knowledge_context_transport = KnowledgeContextTransportConfig(
+            peer_authenticator=PinnedCertificatePeerAuthenticator(
+                peer_id="nexus-lab", cert_sha256=_fingerprint(pki / "nexus.pem"),
+                is_revoked=lambda _fingerprint: False,
+            ),
+            signer=signer, max_ttl_seconds=30,
+            expected_peer_id="nexus-lab", enabled=True,
+        )
+        second = KnowledgeContextMtlsListener(
+            app,
+            MtlsListenerConfig(
+                bind_host="127.0.0.1", bind_port=first.address[1],
+                server_cert_file=pki / "server.pem", server_key_file=pki / "server.key",
+                client_ca_file=pki / "ca.pem",
+            ),
+        )
+        with pytest.raises(OSError):
+            second.start()
+        assert second._loop is None
+        assert second._server is None
+    finally:
+        first.stop()
+    assert first._loop is None
 
 
 def test_response_write_stops_at_the_absolute_deadline():

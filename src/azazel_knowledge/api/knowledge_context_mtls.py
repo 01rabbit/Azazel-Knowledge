@@ -44,6 +44,7 @@ ROUTE_PATH = "/v1/knowledge-context"
 _SCOPE_KEY = "azazel.knowledge_context.tls_peer"
 _MAX_HEADER_BYTES = 16 * 1024
 _MAX_HEADER_COUNT = 64
+_RESPONSE_WRITE_RESERVE_SECONDS = 0.25
 _SHA256_HEX = frozenset("0123456789abcdef")
 
 
@@ -145,6 +146,8 @@ def _send_until(sock: socket.socket, data: bytes, deadline: float) -> None:
     sock.setblocking(False)
     pending = memoryview(data)
     while pending:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("response write deadline")
         try:
             written = sock.send(pending)
             if written <= 0:
@@ -177,8 +180,12 @@ class _Server(http.server.ThreadingHTTPServer):
             self.socket.close()
             self.address_family = socket.AF_INET6
             self.socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        self.server_bind()
-        self.server_activate()
+        try:
+            self.server_bind()
+            self.server_activate()
+        except BaseException:
+            self.server_close()
+            raise
 
     def server_bind(self) -> None:
         # Avoid HTTPServer.server_bind's socket.getfqdn(), which can trigger DNS.
@@ -362,13 +369,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             body += chunk
 
         peer = self._verified_peer(listener)
+        remaining = self._remaining()
+        reserve = min(_RESPONSE_WRITE_RESERVE_SECONDS, remaining / 2)
         status, out_headers, payload = listener._dispatch(
             method="POST",
             headers=[(k.encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()],
             body=bytes(body),
             peer=peer,
             client=self.client_address,
-            timeout=self._remaining(),
+            timeout=remaining - reserve,
         )
         self._reply(status, out_headers, payload)
 
@@ -412,26 +421,69 @@ class KnowledgeContextMtlsListener:
         return self._server.server_address[:2]  # type: ignore[return-value]
 
     def start(self) -> None:
-        if self._server is not None:
+        if self._server is not None or self._loop is not None:
             raise RuntimeError("listener already started")
+        server = _Server(self)
         loop = asyncio.new_event_loop()
         self._loop = loop
         loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
-        loop_thread.start()
-        self._server = _Server(self)
-        serve = threading.Thread(target=self._server.serve_forever, daemon=True)
-        serve.start()
+        serve = threading.Thread(target=server.serve_forever, daemon=True)
+        self._server = server
         self._threads = [loop_thread, serve]
+        try:
+            loop_thread.start()
+            serve.start()
+        except BaseException:
+            if serve.is_alive():
+                server.shutdown()
+            server.server_close()
+            if loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+                loop_thread.join(timeout=5)
+            loop.close()
+            self._server = None
+            self._loop = None
+            self._threads = []
+            raise
 
     def stop(self) -> None:
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
+            self._threads[1].join(timeout=5)
+            if self._threads[1].is_alive():
+                raise TimeoutError("Knowledge Context listener thread did not stop")
             self._server = None
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            drain_deadline = time.monotonic() + self.config.deadline_seconds + 1.0
+            while not self._all_slots_free():
+                if time.monotonic() >= drain_deadline:
+                    raise TimeoutError("listener stopped accepting but active requests did not drain")
+                time.sleep(0.01)
+            loop = self._loop
+            loop.call_soon_threadsafe(loop.stop)
             self._threads[0].join(timeout=5)
+            if self._threads[0].is_alive():
+                raise TimeoutError("Knowledge Context event loop did not stop")
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                raise RuntimeError("Knowledge Context event loop stopped with pending tasks")
+            loop.close()
             self._loop = None
+            self._threads = []
+
+    def _all_slots_free(self) -> bool:
+        acquired: list[threading.BoundedSemaphore] = []
+        for semaphore in (self._slots, self._app_slots):
+            for _ in range(self.config.max_concurrency):
+                if not semaphore.acquire(blocking=False):
+                    for held in acquired:
+                        held.release()
+                    return False
+                acquired.append(semaphore)
+        for held in acquired:
+            held.release()
+        return True
 
     def __enter__(self) -> "KnowledgeContextMtlsListener":
         self.start()

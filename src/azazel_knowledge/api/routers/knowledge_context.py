@@ -18,6 +18,7 @@ from azazel_fabric.knowledge_context import (
 from azazel_knowledge.api import limits
 from azazel_knowledge.api.app import AuthContext
 from azazel_knowledge.api.knowledge_context_adapter import (
+    KnowledgeContextAdaptationError,
     from_knowledge_context_request,
     to_knowledge_context_response,
 )
@@ -196,9 +197,13 @@ def post_knowledge_context(
 
     try:
         context_request = from_knowledge_context_request(body)
-    except Exception:  # noqa: BLE001 -- request conversion fails closed without echoing input
+    except (KnowledgeContextAdaptationError, ValidationError, TypeError, ValueError):
         raise HTTPException(
             status_code=422, detail={"error": "knowledge_context_request_unrepresentable"}
+        ) from None
+    except Exception:  # noqa: BLE001 -- internal adapter faults fail closed without echoing input
+        raise HTTPException(
+            status_code=503, detail={"error": "knowledge_context_request_unavailable"}
         ) from None
     auth = AuthContext(key_id=peer_id, scopes=frozenset({Scope.QUERY}))
     # Reuse the ordinary query path so cold-cache, deadline, audit and spool
