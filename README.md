@@ -152,16 +152,14 @@ unchanged, and **there is still no core dependency**: Fabric is imported only
 under `azazel_knowledge.api`; the core dependency set (stdlib + PyYAML + idna
 + PyNaCl) is untouched, per this repo's dependency-minimality constraint.
 
-The Nexus-specific full-node Knowledge Context v1 producer is an experimental
-candidate under [ADR-0023](docs/adr/0023-knowledge-context-candidate-profile.md).
-The normal `[api]` install uses published pre-release Fabric `v0.10.0rc1`;
-stable `v0.9.0` does not contain this contract. The separate
-`api-context-candidate` extra pins source commit `33aa79c…` for reproducible
-isolated tests. Its contract module is byte-identical to rc1, but that commit
-does not carry rc1's release digest/signature artifacts, so the candidate pin
-is not suitable as a shipped dependency. When the contract is present the route
-is registered, but it remains unavailable unless an explicit transport profile
-is injected. This is not a released integration.
+The Nexus-specific full-node Knowledge Context v1 producer uses the
+experimental profile included in published stable Fabric v0.10.0 (the profile
+has no compatibility promise). Both the normal api extra and the isolated
+api-context-candidate test extra use the exact v0.10.0 tag; no development
+commit is required. The Context route is registered when the package is
+present, but it remains unavailable unless an explicit transport profile is
+injected. The software integration is still an optional candidate, not a
+production deployment.
 
 ## Documentation
 

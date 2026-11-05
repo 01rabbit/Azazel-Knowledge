@@ -23,7 +23,7 @@ pip install -e ".[api-context-candidate,dev]" # 候補連携の全suite用
 python -m pytest tests/unit -q # 全緑が完了条件(基準線 1766 本)
 ```
 
-通常のAPI profileは公開pre-release Fabric v0.10.0rc1 を使用する。Fabric v0.9.0 は最新stableでありKnowledge Context契約を含まない。
+通常のAPI profileは公開stable Fabric v0.10.0 を使用する。Knowledge Context v1 はこの版に含まれるが、Fabric上ではexperimentalであり互換性保証はない。
 候補suiteのCIは候補moduleのimportを先に必須化し、module-level skipで緑になることを防ぐ。
 
 基準線テスト数の**単一情報源は `CLAUDE.md`**(§git 規律 / §検証コマンド / §リポジトリ地図)。

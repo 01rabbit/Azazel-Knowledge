@@ -32,16 +32,12 @@ The CTI node must never be a synchronous dependency of the arbiter.
 
 ## Optional Nexus Knowledge Context v1 profile
 
-This is an experimental integration profile and is absent from stable Fabric
-`v0.9.0`. The ordinary `[api]` extra currently uses published pre-release Fabric
-`v0.10.0rc1` per [ADR-0022](adr/0022-fabric-pin-v0-10-0rc1.md). Isolated tests
-for the exact Fabric #76 candidate may instead use the separate
-`api-context-candidate` extra pinned by [ADR-0023](adr/0023-knowledge-context-candidate-profile.md).
-The candidate commit is the direct parent of rc1 and its Context module is
-byte-identical, but the candidate commit lacks rc1's release digest/signature
-artifacts; the separate pin is for reproducible isolated testing only.
-When the contract package is present the route is registered, but explicit
-transport configuration is still required to make it available.
+The Knowledge Context v1 profile is experimental in Fabric v0.10.0 and has
+no compatibility promise. Knowledge pins the exact published stable v0.10.0
+tag for both its normal api extra and isolated Context tests (ADR-0023 and
+ADR-0024). No development commit or floating main reference is used. The route
+is registered when the profile is installed, but explicit transport
+configuration is still required to make it available.
 
 `POST /v1/knowledge-context` accepts the Fabric-owned Knowledge Context v1
 request and returns the Nexus profile's detached Ed25519 envelope as

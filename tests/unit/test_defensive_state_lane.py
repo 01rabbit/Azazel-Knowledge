@@ -460,9 +460,9 @@ def test_the_pinned_fabric_carries_the_canonical_vocabulary():
     stable = [d for d in extras["api"] if "azazel-fabric" in d]
     candidate = [d for d in extras["api-context-candidate"] if "azazel-fabric" in d]
     assert len(stable) == 1, f"Expected exactly one stable Fabric api-extra pin: {stable}"
-    assert stable[0].endswith("@v0.10.0rc1"), stable
+    assert stable[0].endswith("@v0.10.0"), stable
     assert len(candidate) == 1, f"Expected exactly one candidate Fabric pin: {candidate}"
-    assert candidate[0].endswith("@33aa79c79fbabf0bd035e2bbae5bed185a89f9ee"), candidate
+    assert candidate[0].endswith("@v0.10.0"), candidate
     assert {member.value for member in DefensiveState} == {
         "OBSERVE",
         "NOTIFY",

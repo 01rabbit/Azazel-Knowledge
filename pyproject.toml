@@ -29,15 +29,14 @@ api = [
     # design-principles §6.
     "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0",
 ]
-# Experimental Nexus Knowledge Context profile. Its immutable source pin carries
-# the same contract module bytes as v0.10.0rc1, but lacks that tag's release
-# digest/signature artifacts. Use instead of `api` for isolated tests only; do
-# not combine the extras or ship this pin.
+# Test-only installation profile for Nexus Knowledge Context. It uses the
+# exact published stable tag; the profile itself remains experimental in Fabric.
+# Use instead of api for isolated producer-path tests; do not combine extras.
 api-context-candidate = [
     "fastapi>=0.115,<1",
     "pydantic>=2,<3",
     "uvicorn>=0.30,<1",
-    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@33aa79c79fbabf0bd035e2bbae5bed185a89f9ee",
+    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0",
 ]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
 

@@ -15,8 +15,8 @@ Provenance of the captures (see `producer_capture_provenance`):
 * Azazel-Edge        e84af9a8ca7c9668416db41cd085d17264cbd8b9
 * Azazel-Deception   305af8524bc362c3f6f9615d369794f72888e1c4
 
-Availability: the captures arrive with Fabric v0.10.0rc1 and ship in the pin in
-force, v0.10.0 (ADR-0023), so under the pin every test here runs. In an environment with an
+Availability: the captures were introduced with Fabric v0.10.0rc1 and ship in the
+current stable pin, v0.10.0 (ADR-0023), so under the pin every test here runs. In an environment with an
 earlier azazel-fabric (v0.9.0 ships none) the module is skipped, not failed --
 there is nothing to read.
 
@@ -55,7 +55,7 @@ import pytest
 azazel_testing = pytest.importorskip("azazel_fabric.testing")
 if not hasattr(azazel_testing, "producer_capture_names"):
     pytest.skip(
-        "Fabric producer captures arrive with v0.10.0rc1; this environment has an "
+        "Fabric producer captures are included in stable v0.10.0; this environment has an "
         "earlier azazel-fabric (the v0.9.0 pin ships none)",
         allow_module_level=True,
     )
