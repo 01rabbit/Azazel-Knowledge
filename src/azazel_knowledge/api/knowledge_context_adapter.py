@@ -57,9 +57,11 @@ Mapping rules this adapter enforces:
 from __future__ import annotations
 
 import re
+from ipaddress import ip_address, ip_network
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+import idna
 from pydantic import ValidationError
 
 from azazel_fabric.cti_contracts import assert_advisory_only
@@ -120,13 +122,9 @@ APPROXIMATE_UNKNOWN = (
 #: Always appended to ``limitations`` so a consumer can see what this profile
 #: deliberately does not carry. Fixed text: deterministic output.
 MAPPING_LIMITATION = (
-    "knowledge output is mapped exact-only: only exact-tier ioc matches become facts, "
-    "and only when backed by an approved external source group; local-only or "
-    "unrecognized source groups are withheld; "
-    "and CIDR, domain-suffix and other non-exact matches are not represented; "
-    "knowledge scoring, confidence, aggregate raw confidence, recommendation, "
-    "campaign, attack, pattern, history and engagement context are not mapped "
-    "to this semantic profile and carry no score or recommendation"
+    "subject validation withholds ineligible subjects; global status does not establish P0; "
+    "exact-only public-feed matches are mapped; local-only and non-exact matches, "
+    "score, confidence, recommendation and history are not mapped"
 )
 
 _IOC_REQUIRED_KEYS = frozenset({"type", "value", "sources", "match_tier"})
@@ -135,6 +133,42 @@ _IOC_IGNORED_KEYS = frozenset({"agg_raw_confidence"})
 _EXACT_TIER = "exact"
 _SOURCE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _MAX_ADVISORY_DEPTH = 16
+# IANA special-purpose registries, last updated 2025-10-09; supersets include
+# all listed assignments, including globally reachable anycast exceptions.
+_SPECIAL_IP = tuple(ip_network(value) for value in (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+    "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
+    "192.31.196.0/24", "192.52.193.0/24", "192.88.99.0/24", "192.168.0.0/16",
+    "192.175.48.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+    "224.0.0.0/4", "240.0.0.0/4", "::/128", "::1/128", "::ffff:0:0/96",
+    "64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "100:0:0:1::/64",
+    "2001::/23", "2001:db8::/32", "2002::/16", "2620:4f:8000::/48",
+    "3fff::/20", "5f00::/16", "fc00::/7", "fe80::/10", "ff00::/8",
+))
+
+
+def _eligible_subject(entity_type: str, value: str) -> bool:
+    if entity_type == "ip":
+        try:
+            address = ip_address(value)
+        except ValueError:
+            return False
+        if address.version == 6 and address.scope_id is not None:
+            return False
+        return (address.is_global and not address.is_multicast and not address.is_reserved and
+                not any(address in network for network in _SPECIAL_IP if address.version == network.version))
+    if entity_type == "domain":
+        if value != value.strip():
+            return False
+        try:
+            canonical = idna.encode(value, uts46=True).decode("ascii").lower().rstrip(".")
+        except idna.IDNAError:
+            return False
+        labels = canonical.split(".")
+        return (len(labels) >= 2 and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
+                and labels[-1] not in {"test", "example", "invalid", "localhost", "local", "internal", "onion", "arpa"}
+                and not labels[-1].isdigit())
+    return False
 
 
 class KnowledgeContextAdaptationError(ValueError):
@@ -355,6 +389,9 @@ def to_knowledge_context_response(
 
     by_key, unnormalized = _index_requested(request)
 
+    withheld = {index for index, entity in enumerate(request.entities)
+                if not _eligible_subject(entity.entity_type, entity.value)}
+
     facts: list[dict[str, Any]] = []
     exact_for: dict[int, int] = {}
     approximate_seen = False
@@ -369,6 +406,9 @@ def to_knowledge_context_response(
             # A local-only (or not-yet-reviewed) source is not egressable.
             # The requested entity gets a generic unknown below; source class
             # and entity values are not disclosed.
+            continue
+        if any(index in withheld and entity.entity_type == entity_type and entity.value == value
+               for index, entity in enumerate(request.entities)):
             continue
         try:
             key = _canonical_key(entity_type, value)
@@ -385,6 +425,8 @@ def to_knowledge_context_response(
             raise KnowledgeContextAdaptationError(
                 f"ioc_matches[{match_index}] refers to an entity that was not requested"
             )
+        if entity_index in withheld:
+            continue
         if entity_index in exact_for:
             raise KnowledgeContextAdaptationError(
                 f"ioc_matches[{match_index}] duplicates ioc_matches[{exact_for[entity_index]}] "
@@ -394,11 +436,16 @@ def to_knowledge_context_response(
         facts.append(_exact_fact(match_index, request.entities[entity_index]))
 
     unmatched = set(range(len(request.entities))) - set(exact_for)
-    ordinary_unmatched = sorted(unmatched - unnormalized)
+    ordinary_unmatched = sorted(unmatched - unnormalized - withheld)
     generated_unknowns: list[str] = []
     if ordinary_unmatched:
         generated_unknowns.append(
             ABSENT_UNKNOWN.format(indices=", ".join(map(str, ordinary_unmatched)))
+        )
+    if withheld - unnormalized:
+        generated_unknowns.append(
+            "requested entities at indices " + ", ".join(map(str, sorted(withheld - unnormalized)))
+            + " were withheld by subject validation; no fact is asserted"
         )
     if unnormalized:
         generated_unknowns.append(

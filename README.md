@@ -159,7 +159,9 @@ api-context-candidate test extra use the exact v0.10.0 tag; no development
 commit is required. The Context route is registered when the package is
 present, but it remains unavailable unless an explicit transport profile is
 injected. The software integration is still an optional candidate, not a
-production deployment.
+production deployment. The caller remains responsible for P0-public
+classification; the producer withholds facts for ineligible subjects, including
+non-global and special-purpose IPs. See [API](docs/api.md) for the boundary.
 
 ## Documentation
 

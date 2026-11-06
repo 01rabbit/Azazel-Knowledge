@@ -24,7 +24,15 @@ service.
    unless explicit transport configuration is injected.
 4. Fabric signature and schema validation establish signer, integrity, and
    contract shape; they do not establish that a Knowledge claim is true.
-5. This decision adds no production credentials, network configuration,
+5. The caller owns P0-public classification. The producer authenticates the
+   commissioned peer but cannot verify the absent wire privacy label; it trusts
+   the caller to classify the whole input correctly. Independently, it withholds
+   facts for non-global, IANA special-purpose, malformed or scoped
+   IP subjects and unsupported domain syntax. Global IP status or domain syntax
+   is necessary but not sufficient for P0; exact public-feed matching remains
+   required. Both compressed and expanded IPv6 forms are accepted; ambiguous
+   IPv4 and special-purpose transition forms are withheld.
+6. This decision adds no production credentials, network configuration,
    service activation, merge, release, or deployment.
 
 ## Consequences
@@ -33,3 +41,13 @@ Both ordinary API and isolated Context tests resolve Fabric from the published
 v0.10.0 tag. Knowledge keeps the route optional and disabled without explicit
 configuration. A later contract update requires a reviewed exact-tag pin and
 the existing version, lock, and compatibility checks.
+
+## Registry maintenance
+
+The Knowledge maintainers own periodic review of the IANA IPv4 and IPv6
+special-purpose registries. For any changes, update the fixed `_SPECIAL_IP`
+prefix snapshot and its registry date in `api/knowledge_context_adapter.py`,
+add relevant positive and negative adapter/route tests, and update this ADR
+and `docs/api.md` when the policy or documented snapshot changes. Review the
+full prefix coverage, including globally reachable special-purpose exceptions;
+do not fetch the registries on the query path.

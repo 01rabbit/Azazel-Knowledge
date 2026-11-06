@@ -57,8 +57,8 @@ from azazel_knowledge.api.models import ContextApiRequest, ContextResponse  # no
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADAPTER_PATH = REPO_ROOT / "src" / "azazel_knowledge" / "api" / "knowledge_context_adapter.py"
 
-IP = "198.51.100.7"
-DOMAIN = "example.test"
+IP = "8.8.8.8"
+DOMAIN = "example.com"
 
 REQ_KW = {
     "request_id": "req-0001",
@@ -284,7 +284,7 @@ def test_request_mapping_does_not_mutate_its_input():
 
 
 def test_request_mapping_carries_the_full_entity_cap():
-    at_cap = tuple(("ip", f"198.51.100.{i}") for i in range(MAX_ENTITIES))
+    at_cap = tuple(("ip", f"8.8.8.{i}") for i in range(MAX_ENTITIES))
     request = _fabric_request(entities=at_cap)
     mapped = from_knowledge_context_request(request)
     assert len(mapped.entities) == MAX_ENTITIES
@@ -322,18 +322,18 @@ def test_explicit_snapshot_and_provider_are_carried_verbatim():
 
 
 def test_domain_case_difference_binds_exact_match_to_original_requested_value():
-    request = _fabric_request(entities=(("domain", "Example.TEST"),))
-    response = _response(_api_response([_match("example.test", "domain")]), request)
+    request = _fabric_request(entities=(("domain", "Example.COM"),))
+    response = _response(_api_response([_match("example.com", "domain")]), request)
     assert len(response.facts) == 1
     subject = response.facts[0].subject
-    assert (subject.entity_type, subject.value) == ("domain", "Example.TEST")
+    assert (subject.entity_type, subject.value) == ("domain", "Example.COM")
     assert response.unknowns == ()
 
 
 def test_ipv6_canonical_form_binds_exact_match_to_original_requested_value():
-    raw = "2001:DB8:0:0:0:0:0:1"
+    raw = "2606:4700:4700:0000:0000:0000:0000:1111"
     request = _fabric_request(entities=(("ip", raw),))
-    response = _response(_api_response([_match("2001:db8::1", "ip")]), request)
+    response = _response(_api_response([_match("2606:4700:4700::1111", "ip")]), request)
     assert len(response.facts) == 1
     assert response.facts[0].subject.value == raw
     assert_response_correlates(request, response)
@@ -351,9 +351,9 @@ def test_cidr_containment_match_is_an_unknown_and_produces_no_fact():
 
 
 def test_domain_suffix_match_makes_no_host_claim():
-    request = _fabric_request(entities=(("domain", "host.example.test"),))
+    request = _fabric_request(entities=(("domain", "host.example.com"),))
     api_response = _api_response(
-        [_match("example.test", "domain", tier="domain_suffix")]
+        [_match("example.com", "domain", tier="domain_suffix")]
     )
     response = _response(api_response, request)
     assert response.facts == ()
@@ -388,9 +388,9 @@ def test_match_with_a_mismatched_type_is_unbound_and_refused():
 
 
 def test_duplicate_normalized_requests_are_refused_not_bound_twice():
-    request = _fabric_request(entities=(("domain", "Example.test"), ("domain", "example.TEST")))
+    request = _fabric_request(entities=(("domain", "Example.com"), ("domain", "example.COM")))
     with pytest.raises(KnowledgeContextAdaptationError, match="normalize to the same entity"):
-        _response(_api_response([_match("example.test", "domain")]), request)
+        _response(_api_response([_match("example.com", "domain")]), request)
 
 
 def test_duplicate_exact_matches_for_one_entity_are_refused():
@@ -683,7 +683,7 @@ def test_unknowns_over_bound_fail_closed_not_truncated():
 
 
 def test_maximum_profile_stays_within_the_shared_size_bound():
-    entities = tuple(("ip", f"198.51.100.{i}") for i in range(MAX_ENTITIES))
+    entities = tuple(("ip", f"8.8.8.{i}") for i in range(MAX_ENTITIES))
     request = _fabric_request(entities=entities)
     count = min(MAX_ENTITIES, adapter.MAX_FACTS)
     matches = [
@@ -693,3 +693,40 @@ def test_maximum_profile_stays_within_the_shared_size_bound():
     response = _response(_api_response(matches), request)
     assert len(response.facts) == count
     assert len(canonical_knowledge_context_bytes(response)) <= 128 * 1024
+
+
+@pytest.mark.parametrize("kind,value", [
+    ("ip", "10.23.45.67"), ("ip", "127.0.0.1"), ("ip", "169.254.2.3"),
+    ("ip", "100.64.1.2"), ("ip", "192.0.0.9"), ("ip", "192.31.196.1"),
+    ("ip", "198.51.100.7"), ("ip", "224.0.0.1"), ("ip", "not-an-ip"),
+    ("ip", "8.8.8"), ("ip", "10.1"), ("ip", "0x08080808"),
+    ("ip", "010.0.0.1"), ("ip", "134744072"),
+    ("ip", "::ffff:8.8.8.8"), ("ip", "::8.8.8.8"),
+    ("ip", "2002:0808:0808::1"), ("ip", "2001:0000:0000:0000:0000:0000:0000:0001"),
+    ("ip", "2606:4700:4700::1111%eth0"),
+    ("ip", "fe80:0000:0000:0000:0000:0000:0000:0001%en0"),
+    ("ip", "fc00:0000:0000:0000:0000:0000:0000:0001"),
+    ("ip", "2001:0001:0000:0000:0000:0000:0000:0001"),
+    ("ip", "4000:0000:0000:0000:0000:0000:0000:0001"),
+    ("domain", "host.local"), ("domain", "bad name.example"),
+    ("domain", "example[.]com"),
+])
+def test_subject_validation_withholds_unacceptable_matches(kind, value):
+    request = _fabric_request(entities=((kind, value),))
+    result = _response(_api_response([_match(value, kind)]), request)
+    assert not result.facts
+    assert result.unknowns
+    assert value not in str(result.unknowns)
+    assert "subject validation" in " ".join(result.limitations)
+
+
+@pytest.mark.parametrize("kind,value", [
+    ("ip", "8.8.8.8"),
+    ("ip", "2606:4700:4700:0000:0000:0000:0000:1111"),
+    ("ip", "2606:4700:4700::1111"),
+    ("domain", "example.com"), ("domain", "example.com."),
+])
+def test_eligible_subject_still_requires_public_feed_and_exact_match(kind, value):
+    request = _fabric_request(entities=((kind, value),))
+    assert len(_response(_api_response([_match(value, kind)]), request).facts) == 1
+    assert not _response(_api_response([_match(value, kind, ("edge_reported",))]), request).facts

@@ -117,6 +117,17 @@ must come from the trusted listener boundary; caller-provided headers are not a
 valid certificate identity source. Without this complete configuration the
 route returns unavailable and makes no outbound connection.
 
+P0-public classification belongs to the caller and upstream Nexus policy. The
+wire request has no privacy class; an authenticated Nexus peer is trusted to send
+only data authorized as P0, and authentication does not prove that classification.
+The producer independently withholds facts for invalid, non-global, special-purpose
+or unsupported subjects, and reports unknowns without echoing them. IP subjects
+must be unscoped; compressed and expanded IPv6 are accepted, while ambiguous
+IPv4 and special-purpose transition addresses are withheld. Domain syntax cannot establish that
+a name or its context is public. Global routing alone does not establish P0. Exact
+matching and the approved external-feed requirement still apply. The offline IP
+registry snapshot requires periodic review; no DNS or network lookup is performed.
+
 Binding to an explicit IP is not a network access control. The listener
 reserves a bounded connection slot before client-certificate authentication;
 the current defaults allow four concurrent connections and a ten-second

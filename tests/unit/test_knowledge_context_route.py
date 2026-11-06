@@ -329,11 +329,8 @@ def test_endpoint_returns_signed_bounded_partial_snapshot(tmp_path):
         semantic["limitations"]
     )
     assert semantic["authority"] == "advisory_only"
-    assert len(semantic["facts"]) == 1
-    assert semantic["facts"][0]["provenance"] == ["knowledge:intel-index"]
-    assert semantic["facts"][0]["subject"] == {
-        "entity_type": "ip", "value": "203.0.113.7"
-    }
+    assert semantic["facts"] == []
+    assert any("withheld by subject validation" in item for item in semantic["unknowns"])
     assert semantic["unknowns"]
 
     client_ids = list((settings.spool_root / "advisory").glob("*.client"))
@@ -487,3 +484,58 @@ def test_transport_config_requires_bounded_ttl_and_fingerprint():
             peer_authenticator=_TestPeer(), signer=signer, max_ttl_seconds=30,
             expected_peer_id="nexus-lab",
         )
+
+
+@pytest.mark.parametrize("value", ["10.23.45.67", "192.0.0.9", "8.8.8", "10.1"])
+def test_withheld_subject_response_remains_signed(tmp_path, monkeypatch, value):
+    from azazel_knowledge.api.routers import knowledge_context as route
+
+    client, settings, _local_db, _data = make_client(tmp_path)
+    signer = _configure(settings)
+    original = route.post_context
+
+    def synthetic_match(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result.threat_context["ioc_matches"] = [{"type": "ip", "value": value,
+            "sources": ["abusech"], "match_tier": "exact"}]
+        return result
+
+    monkeypatch.setattr(route, "post_context", synthetic_match)
+    request = _request()
+    request["entities"] = [{"entity_type": "ip", "value": value}]
+    response = client.post("/v1/knowledge-context", json=request)
+    assert response.status_code == 200
+    signature, payload = response.content[:64], response.content[64:]
+    signer.key.verify_key.verify(_DOMAIN + payload, signature)
+    semantic = json.loads(payload)["payload"]
+    assert semantic["facts"] == []
+    assert semantic["unknowns"]
+    assert value not in str(semantic["unknowns"])
+    assert "subject validation" in " ".join(semantic["limitations"])
+
+
+def test_compressed_global_ipv6_fact_remains_signed(tmp_path, monkeypatch):
+    from azazel_knowledge.api.routers import knowledge_context as route
+
+    client, settings, _local_db, _data = make_client(tmp_path)
+    signer = _configure(settings)
+    original = route.post_context
+    value = "2606:4700:4700::1111"
+
+    def synthetic_match(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result.threat_context["ioc_matches"] = [{"type": "ip",
+            "value": "2606:4700:4700:0000:0000:0000:0000:1111",
+            "sources": ["abusech"], "match_tier": "exact"}]
+        return result
+
+    monkeypatch.setattr(route, "post_context", synthetic_match)
+    request = _request()
+    request["entities"] = [{"entity_type": "ip", "value": value}]
+    response = client.post("/v1/knowledge-context", json=request)
+    assert response.status_code == 200
+    signature, payload = response.content[:64], response.content[64:]
+    signer.key.verify_key.verify(_DOMAIN + payload, signature)
+    facts = json.loads(payload)["payload"]["facts"]
+    assert len(facts) == 1
+    assert facts[0]["subject"] == {"entity_type": "ip", "value": value}
