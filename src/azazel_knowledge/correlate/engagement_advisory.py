@@ -15,7 +15,7 @@ Every output vocabulary already exists too. `behavior_class` is Knowledge's own
 (`simple_scanner` ... `adaptive_probe` ... `disengaged_after_friction`), and
 the posture vocabulary is Azazel-Fabric's MITRE Engage-aligned
 `EngagementObjective` / `EngagementApproach` / `EngagementActivity`, provided
-by the current `v0.9.0rc5` API-extra pin (ADR-0019).
+by the current stable `v0.9.0` API-extra pin (ADR-0021).
 
 Nothing here defines a new vocabulary. A second definition of a shared word
 drifts from the first, and the drift is invisible until a consumer compares

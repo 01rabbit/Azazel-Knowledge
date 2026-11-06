@@ -29,6 +29,15 @@ api = [
     # design-principles §6.
     "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0",
 ]
+# Test-only installation profile for Nexus Knowledge Context. It uses the
+# exact published stable tag; the profile itself remains experimental in Fabric.
+# Use instead of api for isolated producer-path tests; do not combine extras.
+api-context-candidate = [
+    "fastapi>=0.115,<1",
+    "pydantic>=2,<3",
+    "uvicorn>=0.30,<1",
+    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0",
+]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
 
 [tool.setuptools.packages.find]

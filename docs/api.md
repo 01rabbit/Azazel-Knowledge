@@ -30,6 +30,127 @@ Everything else flows asynchronously via `POST /v1/events`. Edge enforces a
 query timeout (default 250 ms) and proceeds without the answer on expiry.
 The CTI node must never be a synchronous dependency of the arbiter.
 
+## Optional Nexus Knowledge Context v1 profile
+
+The Knowledge Context v1 profile is experimental in Fabric v0.10.0 and has
+no compatibility promise. Knowledge pins the exact published stable v0.10.0
+tag for both its normal api extra and isolated Context tests (ADR-0023 and
+ADR-0024). No development commit or floating main reference is used. The route
+is registered when the profile is installed, but explicit transport
+configuration is still required to make it available.
+
+`POST /v1/knowledge-context` accepts the Fabric-owned Knowledge Context v1
+request and returns the Nexus profile's detached Ed25519 envelope as
+`application/octet-stream` (`signature || canonical-envelope`). It reuses the
+same warm-cache, query, audit, and deadline path as `/v1/context`. The response
+is advisory-only and marks the snapshot `partial`: the current Knowledge API
+does not expose source-level freshness deadlines in this projection.
+
+Request media type: the body is JSON. `application/json` and
+`application/*+json` (with optional parameters) are accepted. Optional
+parameters do not select a decoder; the route parses the request body bytes
+with the JSON decoder. The OpenAPI document advertises the canonical
+`application/json` content type. A missing
+`Content-Type` header, or any other media type, is rejected with a fixed `422`
+(`invalid_knowledge_context_request`), even when the body is valid JSON. The
+OpenAPI `requestBody` schema is generated from the Fabric
+`KnowledgeContextRequestV1` model.
+
+Gate order: a disabled profile returns `404`, and an unauthenticated peer
+returns `401`, both before any body byte is read. An authenticated, enabled
+request is streamed into a buffer capped at 256 KiB. The cap is enforced on the
+bytes actually received, so an under-declared `Content-Length` cannot bypass it.
+A `Content-Length` is compared as an ASCII decimal numeral, without `int()`, so an
+arbitrarily long one (e.g. 5000 digits) is safely early-rejected with `413` when it
+exceeds the cap. Only values that are not ASCII decimal (such as Unicode digit
+look-alikes) are ignored by the early reject and fall through to the streamed cap,
+which decides; they never cause an error.
+The body is parsed only after these gates pass.
+For an enabled authenticated peer, the declared-length check and streamed byte
+cap run before media-type validation. An oversized body therefore returns `413`
+even if its `Content-Type` is missing or unsupported.
+
+Fixed error responses (bodies are constant and never echo request content):
+
+| Status | `detail.error` | Cause |
+| --- | --- | --- |
+| `404` | `knowledge_context_unavailable` | Profile disabled or not configured (no body read) |
+| `401` | `peer_authentication_failed` | Peer not authenticated (no body read) |
+| `413` | `context_request_too_large` | Body exceeds the byte cap or request has too many entities |
+| `422` | `invalid_knowledge_context_request` | Malformed JSON, deeply nested JSON, schema-invalid body, or missing/unsupported `Content-Type` |
+| `422` | `knowledge_context_request_unrepresentable` | A valid Fabric request cannot be represented by Knowledge's query model |
+| `403` | `peer_profile_mismatch` | Valid request whose `source_product` is not `azazel_nexus` |
+| `503` | `cache_state_cold` | No current intel generation is available yet; includes `Retry-After` |
+| `503` | `knowledge_context_request_unavailable` | Internal request-adapter fault; no request details are returned |
+| `503` | `context_busy` / `context_timeout` | Bounded application concurrency is full, the query deadline expires, or dispatch reaches its reserved response deadline |
+| `503` | `audit_unavailable` | The ordinary Knowledge audit path cannot append the request result |
+| `503` | `snapshot_metadata_unavailable` | The ordinary query response lacks required snapshot metadata |
+| `503` | `knowledge_context_projection_unavailable` | The result cannot be faithfully represented by the candidate contract |
+| `503` | `knowledge_context_signing_unavailable` | The commissioned signer or signature verification fails |
+| `503` | `knowledge_context_unavailable` | The isolated listener or application path fails closed |
+| `500` | `advisory_invariant_violation` | The ordinary Knowledge query response violates its advisory-only invariant |
+
+The HTTP parser also emits fixed `400`, `411`, `404` and `431` errors for malformed
+or unsupported framing, missing length, unknown paths, and oversized headers.
+Connections dropped before TLS when the listener is at capacity, or when the
+TLS handshake cannot be completed, receive no HTTP response. Exhausting the
+absolute transport deadline closes the connection without promising a final
+HTTP response. Dispatch reserves up to 250 ms of the transport budget for its
+fixed `context_timeout` response; the ordinary query path can also return that
+bounded 503 earlier.
+If a client has already received `503 context_timeout`, the synchronous query
+worker may still finish its audit and spool writes; its bounded application slot
+remains reserved until that work completes.
+
+The success response and the rest of the endpoint contract are unchanged.
+
+This endpoint is unavailable unless an application integrator explicitly injects
+`Settings.knowledge_context_transport` with an enabled profile, a trusted mTLS
+peer authenticator bound to one expected Nexus peer ID, an Ed25519 signing
+provider whose key identifier is the SHA-256 fingerprint of its public key,
+and an explicit maximum TTL from 1 through 30 seconds. There is no
+environment-variable switch, default signer,
+default peer, or default certificate loader. An explicitly constructed optional
+mTLS listener serves only this route and is never started by installation or
+ordinary application startup. Peer authentication
+must come from the trusted listener boundary; caller-provided headers are not a
+valid certificate identity source. Without this complete configuration the
+route returns unavailable and makes no outbound connection.
+
+P0-public classification belongs to the caller and upstream Nexus policy. The
+wire request has no privacy class; an authenticated Nexus peer is trusted to send
+only data authorized as P0, and authentication does not prove that classification.
+The producer independently withholds facts for invalid, non-global, special-purpose
+or unsupported subjects, and reports unknowns without echoing them. IP subjects
+must be unscoped; compressed and expanded IPv6 are accepted, while ambiguous
+IPv4 and special-purpose transition addresses are withheld. Domain syntax cannot establish that
+a name or its context is public. Global routing alone does not establish P0. Exact
+matching and the approved external-feed requirement still apply. The offline IP
+registry snapshot requires periodic review; no DNS or network lookup is performed.
+
+Binding to an explicit IP is not a network access control. The listener
+reserves a bounded connection slot before client-certificate authentication;
+the current defaults allow four concurrent connections and a ten-second
+absolute deadline (maximum 60 seconds). Any deployment that enables this
+optional endpoint must restrict the listener port to the commissioned Nexus
+peer with a network ACL/firewall. This is an operational prerequisite, not
+configured or enabled by this candidate.
+
+Proposed pre-connection lifecycle: the Knowledge node operator owns its
+server certificate and renews it at least 14 days before its 90-day maximum
+validity; the Nexus security/commissioning operator owns the Nexus-only client
+certificate, Ed25519 response-signing key, and the signed registry that binds
+their identities, with the same 90-day maximum and 14-day planned-rotation
+overlap. Nexus security is the revocation authority. Suspected compromise
+immediately disables the Knowledge profile, revokes the affected certificate
+or signing key in the relevant trust registry, and blocks requests until the
+new trust state is installed. Recovery requires new credentials, registry
+refresh, and a passing isolated mTLS/signature interop check; no bearer-only or
+unsigned fallback is allowed. Production use remains disabled until the named
+operators and notification path are recorded. Tests may inject ephemeral
+credentials; production credentials and TLS settings are not part of this
+change.
+
 ## Read surfaces (operator-facing, advisory-only)
 
 These endpoints are `Scope.READ` only, return plain JSON, and stay on the

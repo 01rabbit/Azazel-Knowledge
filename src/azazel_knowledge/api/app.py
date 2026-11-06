@@ -13,7 +13,9 @@ them (and they can import back from here without a cycle).
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -41,6 +43,7 @@ from azazel_knowledge.security.auth import (
 )
 from azazel_knowledge.security.redact import SecretRegistry
 from azazel_knowledge.worker import WorkerPaths
+from azazel_knowledge.api.knowledge_context_transport import KnowledgeContextTransportConfig
 
 
 @dataclass
@@ -57,6 +60,9 @@ class Settings:
     pool_size: int = 4
     ingest_quota_bytes: int = DEFAULT_QUOTA_BYTES
     context_deadline_ms: int | None = None
+    # Optional Nexus-specific Knowledge Context endpoint. It is disabled unless
+    # an explicitly commissioned transport profile is injected by the caller.
+    knowledge_context_transport: KnowledgeContextTransportConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -273,6 +279,27 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
     app.include_router(ingest.router)
     app.include_router(lookup.router)
     app.include_router(context.router)
+    try:
+        context_contract_available = (
+            importlib.util.find_spec("azazel_fabric.knowledge_context") is not None
+        )
+    except (ImportError, ValueError) as exc:
+        context_contract_available = False
+        logging.getLogger(__name__).warning(
+            "Optional Knowledge Context route disabled: contract discovery failed (%s)",
+            type(exc).__name__,
+        )
+
+    if context_contract_available:
+        try:
+            from azazel_knowledge.api.routers import knowledge_context
+
+            app.include_router(knowledge_context.router)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Optional Knowledge Context route disabled: incompatible Fabric contract (%s)",
+                type(exc).__name__,
+            )
     app.include_router(reads.router)
     app.include_router(admin.router)
     app.include_router(deception.router)

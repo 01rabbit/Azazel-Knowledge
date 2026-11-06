@@ -134,7 +134,9 @@ def post_context(
     state.metrics["context_total"] += 1
 
     advisory_id = new_advisory_ulid()
-    created_at = to_rfc3339(clock.query_as_of())
+    # Keep response/audit metadata on the same instant the scoring pipeline
+    # captured for this query; do not read a second query_as_of value here.
+    created_at = result.determinism["query_as_of"]
     advisory_event = {
         "type": "advisory",
         "advisory_id": advisory_id,
@@ -281,7 +283,7 @@ def post_context(
             status_code=500, detail={"error": "advisory_invariant_violation"}
         )
 
-    return ContextResponse(
+    response = ContextResponse(
         threat_context=result.threat_context,
         threat_score=result.threat_score,
         confidence=result.confidence,
@@ -298,3 +300,11 @@ def post_context(
         engagement_advisory=engagement_advisory,
         engagement_repeatability_score=engagement_repeatability,
     )
+    # These private attributes bind the optional Fabric projection to the exact
+    # index generation and query instant used by this invocation. They are not
+    # part of the existing `/v1/context` public response.
+    response._knowledge_snapshot_ref = (
+        f"knowledge:intel-generation:{result.determinism['intel_generation']}"
+    )
+    response._knowledge_snapshot_as_of = result.determinism["query_as_of"]
+    return response

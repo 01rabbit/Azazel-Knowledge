@@ -15,6 +15,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      AZAZEL_REQUIRE_FULL_CANDIDATE_SUITE: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -27,7 +29,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: pip install -e ".[api,dev]"
+        run: pip install -e ".[api-context-candidate,dev]"
+
+      - name: Require the published stable Fabric Knowledge Context contract
+        run: python -c "import azazel_fabric.knowledge_context"
+
+      - name: Require OpenSSL for isolated mTLS tests
+        run: openssl version
 
       - name: Run unit tests
         run: python -m pytest tests/unit -q
@@ -53,3 +61,54 @@ jobs:
 
       - name: Docs sync check (allowlisted drift warns now, fails after T3 ratification)
         run: python tools/docs-sync-check.py
+
+  normal-api-disabled-route-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install normal API dependencies
+        run: pip install -e ".[api,dev]"
+
+      - name: Verify normal API route remains unavailable without transport configuration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from fastapi.testclient import TestClient
+          from azazel_knowledge.api.app import Settings, create_app
+
+          with TemporaryDirectory() as root:
+              base = Path(root)
+              app = create_app(
+                  Settings(
+                      config_dir=Path("config"),
+                      local_db_path=base / "local.db",
+                      data_db_dir=base / "generations",
+                      spool_root=base / "spool",
+                      audit_dir=base / "audit",
+                  ),
+                  eager_runtime=False,
+              )
+              with TestClient(app) as client:
+                  response = client.post(
+                      "/v1/knowledge-context",
+                      content=b"not-read-while-disabled",
+                      headers={"content-type": "application/json"},
+                  )
+              assert response.status_code == 404, response.text
+              assert response.json() == {
+                  "detail": {"error": "knowledge_context_unavailable"}
+              }
+          PY
+
+      - name: Run unit tests with the normal API dependency profile
+        run: python -m pytest tests/unit -q

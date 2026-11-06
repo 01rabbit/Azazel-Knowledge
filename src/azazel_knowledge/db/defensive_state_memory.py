@@ -15,7 +15,7 @@ prevent. So Knowledge stores what it was told, records the vocabulary it was
 told in, and leaves the meaning where it belongs.
 
 The API boundary classifies against Fabric's canonical enum in
-`api/contracts.py` (Knowledge#65 AC-6). Fabric `v0.9.0rc5` supplies that enum.
+`api/contracts.py` (Knowledge#65 AC-6). The stable Fabric `v0.9.0` API extra supplies that enum.
 This module remains framework-free: it stores the reported value unchanged
 and does not choose or rewrite a state.
 

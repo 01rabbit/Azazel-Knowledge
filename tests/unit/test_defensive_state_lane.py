@@ -448,7 +448,7 @@ def test_the_api_surface_uses_no_ambiguous_mode_field(tmp_path):
 
 
 def test_the_pinned_fabric_carries_the_canonical_vocabulary():
-    """The precondition AC-6 waited on. Pinned so a re-pin backwards is loud."""
+    """The pin must carry DefensiveState and may only use an allowed ref form."""
     import tomllib
 
     from azazel_fabric.schema.defensive_state import DefensiveState
@@ -456,9 +456,13 @@ def test_the_pinned_fabric_carries_the_canonical_vocabulary():
     manifest = tomllib.loads(
         (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text("utf-8")
     )
-    pins = [d for d in manifest["project"]["optional-dependencies"]["api"] if "azazel-fabric" in d]
-    assert len(pins) == 1 and "@v" in pins[0], f"Fabric must be pinned to an exact tag: {pins}"
-
+    extras = manifest["project"]["optional-dependencies"]
+    stable = [d for d in extras["api"] if "azazel-fabric" in d]
+    candidate = [d for d in extras["api-context-candidate"] if "azazel-fabric" in d]
+    assert len(stable) == 1, f"Expected exactly one stable Fabric api-extra pin: {stable}"
+    assert stable[0].endswith("@v0.10.0"), stable
+    assert len(candidate) == 1, f"Expected exactly one candidate Fabric pin: {candidate}"
+    assert candidate[0].endswith("@v0.10.0"), candidate
     assert {member.value for member in DefensiveState} == {
         "OBSERVE",
         "NOTIFY",
