@@ -190,7 +190,9 @@ gates and LUKS/Adiantum disk encryption are not yet verified on hardware
 Fabric v0.10.0 includes the experimental `knowledge_context` contract, but the
 full-node producer in [Knowledge #116](https://github.com/01rabbit/Azazel-Knowledge/pull/116)
 and the consumer in [MIO #47](https://github.com/01rabbit/Azazel-MIO/pull/47)
-are not merged. The stable Fabric pin and producer-capture fixtures do not show
+are merged software integrations. The producer remains unavailable without an
+explicit transport profile, and the Nexus Context broker is default-disabled
+and uncommissioned. The stable Fabric pin and producer-capture fixtures do not show
 that a product-to-product Context connection is operational.
 
 ## Relationship to Azazel-Edge roadmap
@@ -238,7 +240,7 @@ has no compatibility promise). Both the normal api extra and the isolated
 api-context-candidate test extra use the exact v0.10.0 tag; no development
 commit is required. The Context route is registered when the package is
 present, but it remains unavailable unless an explicit transport profile is
-injected. The software integration is still an optional candidate, not a
+injected. The software integration is merged and optional; it is not a commissioned
 production deployment. The caller remains responsible for P0-public
 classification; the producer withholds facts for ineligible subjects, including
 non-global and special-purpose IPs. See [API](docs/api.md) for the boundary.
