@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 import hashlib
 import json
@@ -18,6 +18,48 @@ NOW = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
 OBSERVED = datetime(2026, 1, 1, tzinfo=timezone.utc)
 ENVIRONMENT = 'historical-process-roundtrip'
 MAX_BYTES = 1024 * 1024
+
+
+RECORDED_CASE_SHA256 = '6a66230355a24edd7b23ae6c616b845aae69aaee1427f0b3ebceb89e273ffeef'
+RECORDED_PAYLOAD_SHA256 = 'b08d19856629ac9f39fb630c444b7f1f7739009cade021df73f75df57e03db61'
+
+
+def load_recorded_canary(raw: bytes | None = None) -> dict[str, Any]:
+    if raw is None:
+        with (ROOT/'tests/fixtures/recorded_canary_v1.json').open('rb') as source:
+            raw = source.read(MAX_BYTES+1)
+    if len(raw) > MAX_BYTES:
+        raise ValueError('recorded canary case exceeds bound')
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('duplicate recorded canary key')
+            result[key] = value
+        return result
+    case = json.loads(raw, object_pairs_hook=pairs,
+        parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite recorded canary case')))
+    canonical = json.dumps(case, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    if hashlib.sha256(canonical).hexdigest() != RECORDED_CASE_SHA256:
+        raise ValueError('recorded canary case/clock/provenance binding mismatch')
+    payload = json.dumps(case['payload'], sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    if hashlib.sha256(payload).hexdigest() != case['payload_sha256'] or case['payload_sha256'] != RECORDED_PAYLOAD_SHA256:
+        raise ValueError('recorded canary payload binding mismatch')
+    observed = datetime.fromisoformat(case['payload']['items'][0]['observed_at'].replace('Z', '+00:00'))
+    query = datetime.fromisoformat(case['query_as_of'])
+    if query != observed + timedelta(seconds=60):
+        raise ValueError('recorded canary clock relation mismatch')
+    return case
+
+
+def process_context(profile: str | None = None) -> tuple[str, datetime]:
+    selected = profile if profile is not None else os.environ.get('AZAZEL_KNOWLEDGE_TEST_PROFILE', 'historical')
+    if selected == 'historical':
+        return ENVIRONMENT, NOW
+    if selected == 'recorded-canary-v1':
+        case = load_recorded_canary()
+        return case['payload']['environment_id'], datetime.fromisoformat(case['query_as_of'])
+    raise ValueError('unknown fixed process test profile')
 
 
 def emit(value: Any) -> None:
@@ -75,7 +117,7 @@ def serve(root: Path, fd: int) -> None:
     from azazel_knowledge.core.clock import FixedClock
     settings = Settings(config_dir=ROOT/'config', local_db_path=root/'data/local.db',
         data_db_dir=root/'data/db', spool_root=root/'spool', audit_dir=root/'audit',
-        clock=FixedClock(NOW), proc_id='historical-process-api', boot_id='historical-process-boot')
+        clock=FixedClock(process_context()[1]), proc_id='historical-process-api', boot_id='historical-process-boot')
     app = create_app(settings)
     # Existing routes only. PID is recorded from the actual Popen, not a fake API ack.
     channel = socket.socket(fileno=fd)
@@ -95,7 +137,7 @@ def drain(root: Path) -> None:
     writer.open()
     try:
         result = drain_endpoint('deception-observations', SpoolWriter(root/'spool'), writer,
-                                clock=FixedClock(NOW))
+                                clock=FixedClock(process_context()[1]))
         emit(dict(pid=os.getpid(), stats=asdict(result)))
     finally:
         writer.close()
@@ -115,8 +157,9 @@ def readback(root: Path, *, replay: bool) -> None:
     try:
         if replay:
             loader = TrackedConfigLoader(ROOT/'config')
-            summary = summarize_effectiveness(conn, environment_id=ENVIRONMENT, package_id=None,
-                config=loader.deception_effectiveness(), query_as_of=NOW, config_hash=loader.config_hash)
+            environment, query_as_of = process_context()
+            summary = summarize_effectiveness(conn, environment_id=environment, package_id=None,
+                config=loader.deception_effectiveness(), query_as_of=query_as_of, config_hash=loader.config_hash)
             emit(dict(pid=os.getpid(), advisory=build_effectiveness_advisory(summary.advisory)))
         else:
             rows = conn.execute('SELECT observation_uid, raw FROM deception_observation ORDER BY observation_uid').fetchall()
@@ -129,6 +172,9 @@ def main() -> None:
     if len(sys.argv) not in (3, 4):
         raise ValueError('fixed test peer arguments required')
     role, root = sys.argv[1], Path(sys.argv[2])
+    process_context()  # Validate a recorded profile before bootstrap or any socket.
+    if os.environ.get('AZAZEL_KNOWLEDGE_TEST_PROFILE', 'historical') != 'historical' and role in {'produce', 'tamper'}:
+        raise ValueError('recorded profile never generates a new Deception observation')
     if role == 'produce': produce(root, tamper=False)
     elif role == 'tamper': produce(root, tamper=True)
     elif role == 'prepare': prepare(root)
