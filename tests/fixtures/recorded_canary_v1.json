@@ -1,0 +1,70 @@
+{
+  "payload": {
+    "environment_id": "canary-lab-d6008f074a",
+    "items": [
+      {
+        "attempt_count": null,
+        "authority": "descriptive_only",
+        "confounder_tags": [
+          "unknown"
+        ],
+        "dwell_ms": null,
+        "environment_id": "canary-lab-d6008f074a",
+        "evidence_refs": [
+          "interaction:nginx",
+          "presentation:nginx"
+        ],
+        "first_contact_latency_ms": null,
+        "lure_id": "az06-lure-e95754a6999f48d54a650ed6bce77766",
+        "metadata": {
+          "boot_id": "fixture-boot",
+          "event_id": "nginx-touch",
+          "interaction_kind": "follow_through_observed",
+          "limitations": "presentation_and_interaction_evidence_reported_unverified;scanner_prefetch_replay_and_copied_link_are_alternative_explanations;no_AI_identity_malice_belief_or_tactical_verdict",
+          "package_sha256": "baca710857669a1901afaf18f32c44f7b0d18a913c11dad6030a40aa8785de53",
+          "session_id": "fixture-c8c86e7959bc4aa4b52e285418265ede",
+          "surface_ref": "intranet-web-http"
+        },
+        "node_id": "az06-test",
+        "observation_class": "interaction",
+        "observation_id": "canary-lab-d6008f074a-obs-0001",
+        "observed_at": "2026-11-11T08:06:40.190492Z",
+        "package_id": "municipal-linux-v1",
+        "reaction_kind": null,
+        "runtime_context": {
+          "active_components": [
+            "intranet-web"
+          ],
+          "architecture": "amd64",
+          "capability_drift": [],
+          "omitted_components": [
+            "evidence-sidecar-placeholder"
+          ],
+          "resource_saturation": null,
+          "runtime_adapter": "docker_compose",
+          "selected_tier": "lite"
+        },
+        "schema_version": "interaction-observation/v0.1",
+        "surface": "config_breadcrumb"
+      }
+    ]
+  },
+  "payload_sha256": "b08d19856629ac9f39fb630c444b7f1f7739009cade021df73f75df57e03db61",
+  "provenance": {
+    "authority_binding": "fixture_controller_and_hmac_context_not_production_approval_or_runtime_admission",
+    "captured_test_commit": "83d88cbfd97e99b63ac3c6f905a54471da508e3b",
+    "chain_authenticity": "root_reviewed_recorded_extract_hash_not_authenticated_producer_or_root_compromise_proof",
+    "current_live_window": false,
+    "deception_merge_commit": "5bcebb2d75a497fc9c4788b7892ae76221afb04f",
+    "hardware_acceptance": false,
+    "identity_binding": "opaque_fixture_ids_not_verified_actor_session_boot_identity",
+    "image_index_sha256": "c187c4ce32a244a45848bceee7ce9aa5c0146bd42e5dc0e03844e56083e2a043",
+    "original_evidence_sha256": "7446ff969aa2f2b70f0921f0235f7361ce9d38b9f83fe41c2041415a0cce58ff",
+    "producer_fabric_identity_at_capture": "not_recorded",
+    "production_admission": false,
+    "runtime_architecture_binding": "reported_fixture_host_metadata_not_independently_verified_actual_platform",
+    "source_kind": "recorded_actual_nginx_lab_fact_not_live_attacker"
+  },
+  "query_as_of": "2026-11-11T08:07:40.190492+00:00",
+  "schema_version": "azazel-recorded-canary-process-fixture/v1"
+}

@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 
+from _deception_process_peer import process_context
+
 ROOT = Path(__file__).resolve().parents[2]
 PEER = Path(__file__).with_name('_deception_process_peer.py')
 ENVIRONMENT = 'historical-process-roundtrip'
@@ -80,7 +82,9 @@ def _cleanup(process: subprocess.Popen[bytes]) -> None:
 
 
 class Lab:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, profile: str = 'historical') -> None:
+        self.environment_id, self.query_as_of = process_context(profile)
+        self.profile = profile
         self.root = root
         root.chmod(0o700)
         self.children: list[subprocess.Popen[bytes]] = []
@@ -92,8 +96,11 @@ class Lab:
     def spawn(self, role: str, *, fd: int | None = None) -> subprocess.Popen[bytes]:
         if role not in {'produce', 'tamper', 'prepare', 'serve', 'drain', 'readback', 'replay'}:
             raise ValueError('fixed test peer role required')
+        if self.profile != 'historical' and role in {'produce', 'tamper'}:
+            raise ValueError('recorded profile cannot generate new producer observations')
         python = os.environ['AZAZEL_DECEPTION_PYTHON'] if role in {'produce', 'tamper'} else sys.executable
         env = dict(os.environ)
+        env['AZAZEL_KNOWLEDGE_TEST_PROFILE'] = self.profile
         env['PYTHONPATH'] = os.pathsep.join([str(ROOT/'src'), str(ROOT/'tests/unit'), env.get('PYTHONPATH', '')])
         command = [python, str(PEER), role, str(self.root)]
         if fd is not None: command.append(str(fd))
