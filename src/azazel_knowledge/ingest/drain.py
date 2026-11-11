@@ -204,18 +204,30 @@ def _drain_reaction_rows(
 
 
 def _insert_deception_observations(
-    conn: sqlite3.Connection, rows: list[dict[str, Any]], now: datetime
-) -> int:
+    conn: sqlite3.Connection, rows: list[tuple[int, dict[str, Any]]], now: datetime
+) -> tuple[int, list[tuple[int, str]]]:
     """INSERT-only store of AZ-06 deception observations (F-1, ADR-0011).
 
-    Idempotent via `observation_uid UNIQUE` + INSERT OR IGNORE, so a
-    crash-and-replay of the same batch never duplicates a row and never
-    decreases the row count. Returns the number of dedupe no-ops.
+    Identical canonical raw content is a duplicate. Reusing an observation ID
+    with different content is quarantined against its original batch line;
+    the first immutable fact is never overwritten or reported as that conflict.
     """
     duplicates = 0
-    for r in rows:
-        cursor = conn.execute(
-            "INSERT OR IGNORE INTO deception_observation "
+    rejected: list[tuple[int, str]] = []
+    for line_no, r in rows:
+        raw = json.dumps(r["raw"], sort_keys=True)
+        existing = conn.execute(
+            "SELECT raw FROM deception_observation WHERE observation_uid = ?",
+            (r["observation_uid"],),
+        ).fetchone()
+        if existing is not None:
+            if existing[0] == raw:
+                duplicates += 1
+            else:
+                rejected.append((line_no, "observation_id already stored with different content"))
+            continue
+        conn.execute(
+            "INSERT INTO deception_observation "
             "(observation_uid, environment_id, package_id, node_id, edge_id, actor_key, "
             "observed_at, observation_class, surface, reaction_kind, lure_id, "
             "first_contact_latency_ms, dwell_ms, attempt_count, confounder_tags, "
@@ -239,13 +251,11 @@ def _insert_deception_observations(
                 json.dumps(r["confounder_tags"], sort_keys=True),
                 json.dumps(r["runtime_context"], sort_keys=True) if r["runtime_context"] is not None else None,
                 json.dumps(r["evidence_refs"], sort_keys=True),
-                json.dumps(r["raw"], sort_keys=True),
+                raw,
                 to_rfc3339(now),
             ),
         )
-        if cursor.rowcount == 0:
-            duplicates += 1
-    return duplicates
+    return duplicates, rejected
 
 
 def _insert_engagement_events(
@@ -382,18 +392,20 @@ def _drain_outcome_evidence_rows(
 
 def _drain_deception_observation_rows(
     writer_queue: PrioritySingleWriterQueue,
-    rows: list[dict[str, Any]],
+    rows: list[tuple[int, dict[str, Any]]],
     now: datetime,
-) -> int:
-    duplicates = {"count": 0}
+) -> tuple[int, list[tuple[int, str]]]:
+    outcome: dict[str, Any] = {"duplicates": 0, "rejected": []}
 
     def _txn(conn: sqlite3.Connection) -> None:
-        duplicates["count"] = _insert_deception_observations(conn, rows, now)
+        duplicates, rejected = _insert_deception_observations(conn, rows, now)
+        outcome["duplicates"] = duplicates
+        outcome["rejected"] = rejected
 
     if rows:
         writer_queue.submit(P1, _txn)
         writer_queue.process_pending()
-    return duplicates["count"]
+    return int(outcome["duplicates"]), list(outcome["rejected"])
 
 
 def _insert_deception_outcome_envelopes(
@@ -494,9 +506,8 @@ def drain_endpoint(
 
         valid_rows: list[dict[str, Any]] = []
         # Kept alongside `valid_rows` so a row rejected at *write* time can be
-        # reported against the line it came from. Only the outcome-evidence
-        # lane has such rejections today (its chain checks need stored rows),
-        # but the bookkeeping is cheap and endpoint-agnostic.
+        # reported against the line it came from. Identity conflicts and
+        # outcome chain checks require stored rows, not just shape validation.
         valid_line_numbers: list[int] = []
         invalid: list[dict[str, Any]] = []
         for line_no, line in enumerate(lines, start=1):
@@ -512,7 +523,20 @@ def drain_endpoint(
         if endpoint == "reactions":
             duplicates = _drain_reaction_rows(writer_queue, valid_rows, now)
         elif endpoint == "deception-observations":
-            duplicates = _drain_deception_observation_rows(writer_queue, valid_rows, now)
+            duplicates, rejected = _drain_deception_observation_rows(
+                writer_queue, list(zip(valid_line_numbers, valid_rows)), now
+            )
+            if rejected:
+                rejected_lines = {line_no for line_no, _ in rejected}
+                invalid.extend(
+                    {"line_no": line_no, "error": error} for line_no, error in rejected
+                )
+                invalid.sort(key=lambda item: int(item["line_no"]))
+                valid_rows = [
+                    row
+                    for line_no, row in zip(valid_line_numbers, valid_rows)
+                    if line_no not in rejected_lines
+                ]
         elif endpoint == "engagement-events":
             duplicates = _drain_engagement_event_rows(writer_queue, valid_rows, now)
         elif endpoint == "deception-outcome-envelopes":
