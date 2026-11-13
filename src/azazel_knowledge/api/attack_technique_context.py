@@ -224,19 +224,18 @@ def _assess(conn, generated_at, max_age, current_generation, technique_ids, snap
     if len(versions) != 1 or _VERSION_RE.match(next(iter(versions))) is None:
         return _unavailable()
 
+    # Every corpus row must be well formed before any no_match can be issued,
+    # requested or not (fail-closed corpus health).
+    all_rows: dict[str, tuple[str, str, str]] = {}
+    for technique_id, name, tactics, version in conn.execute(
+            "SELECT technique_id, name, tactics, attack_version FROM intel.attack_technique"):
+        if (not isinstance(technique_id, str) or TECHNIQUE_ID_RE.match(technique_id) is None
+                or technique_id in all_rows or not valid_name(name)
+                or parse_tactics(tactics) is None or version not in versions):
+            return _unavailable()
+        all_rows[technique_id] = (name, tactics, version)
     status = "stale" if last_success + max_age <= generated_at else "fresh"
-    rows: dict[str, tuple[str, str, str]] = {}
-    if status == "fresh":
-        for technique_id in technique_ids:
-            row = conn.execute(
-                "SELECT name, tactics, attack_version FROM intel.attack_technique "
-                "WHERE technique_id = ?", (technique_id,)).fetchone()
-            if row is None:
-                continue
-            name, tactics, version = row
-            if not valid_name(name) or parse_tactics(tactics) is None or not isinstance(version, str):
-                return _unavailable()
-            rows[technique_id] = (name, tactics, version)
+    rows = ({t: all_rows[t] for t in technique_ids if t in all_rows} if status == "fresh" else {})
     return Corpus(status, last_success, snapshot_ref, rows)
 
 

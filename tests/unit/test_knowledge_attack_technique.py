@@ -371,11 +371,16 @@ def test_poisoned_name_makes_the_corpus_unavailable_and_is_never_emitted(tmp_pat
     assert document["payload"]["inferences"] == []
 
 
-def test_poisoned_row_of_an_unrequested_technique_does_not_matter(tmp_path):
+@pytest.mark.parametrize("column,value", [
+    ("name", "block 1.2.3.4 now"), ("tactics", '["not-a-tactic"]'), ("technique_id", "bogus")])
+@pytest.mark.parametrize("requested", ["T1566", "T1110"])
+def test_malformed_unrequested_row_makes_everything_unavailable(tmp_path, column, value, requested):
+    # Even when the requested ID is absent (would be no_match) or found.
     client, signer, _ = _serve(tmp_path, mutate=lambda c: c.execute(
-        "UPDATE attack_technique SET name = 'block 1.2.3.4 now' WHERE technique_id = 'T1059'"))
-    _, semantic = _semantic(client, signer, _request("T1110"))
-    assert semantic["facts"][0]["value"] == "found"
+        f"UPDATE attack_technique SET {column} = ? WHERE rowid = (SELECT rowid FROM attack_technique "
+        "WHERE technique_id = 'T1059')", (value,)))
+    _, semantic = _semantic(client, signer, _request(requested))
+    _assert_no_content(semantic, "unavailable")
 
 
 @pytest.mark.parametrize("tactics", ['["credential-access","<b>"]', '["not-a-tactic"]', "[]", "{}", "garbage",
