@@ -204,7 +204,8 @@ def test_malformed_and_mismatched_tls_material_is_refused(env, capsys):
     junk.write_text("not a pem\n")
     junk.chmod(0o644)
     assert "tls" in _run_refusal(_write_cfg(tmp, {**values, "client_ca_file": str(junk)}), capsys)
-    assert "tls" in _run_refusal(_write_cfg(tmp, {**values, "server_cert_file": str(junk)}), capsys)
+    assert "certificate" in _run_refusal(
+        _write_cfg(tmp, {**values, "server_cert_file": str(junk)}), capsys)
     empty = tmp / "empty.pem"
     empty.write_text("")
     empty.chmod(0o644)
@@ -239,6 +240,76 @@ def test_revocation_source_missing_malformed_or_listing_pin_is_refused(env, caps
     rev.unlink()
     assert "revocation" in _run_refusal(_write_cfg(tmp, values), capsys)
     assert not rev.exists()
+
+
+def test_key_separation_fails_closed_when_it_cannot_be_proven(env, capsys, monkeypatch):
+    tmp, _pki, values = env
+    node = Path(values["knowledge_root"]) / "secrets" / "node_signing_key"
+    real_open, real_stat = os.open, os.stat
+
+    def deny_open(path, *a, **kw):
+        if str(path) == str(node):
+            raise PermissionError(13, "denied")
+        return real_open(path, *a, **kw)
+
+    # unreadable node key file
+    monkeypatch.setattr(os, "open", deny_open)
+    assert "cannot be proven" in _run_refusal(_write_cfg(tmp, values), capsys)
+
+    # untraversable secrets directory: the node key looks "missing" but is not proven absent
+    def missing_open(path, *a, **kw):
+        if str(path) == str(node):
+            raise FileNotFoundError(2, "missing")
+        return real_open(path, *a, **kw)
+
+    def deny_stat(path, *a, **kw):
+        if str(path) == str(node.parent):
+            raise PermissionError(13, "denied")
+        return real_stat(path, *a, **kw)
+
+    monkeypatch.setattr(os, "open", missing_open)
+    monkeypatch.setattr(os, "stat", deny_stat)
+    assert "cannot be proven" in _run_refusal(_write_cfg(tmp, values), capsys)
+    monkeypatch.undo()
+
+    # copied seed is still refused; a proven absence is accepted
+    same = _private(tmp / "copy.key", node.read_bytes())
+    assert "node signing key" in _run_refusal(
+        _write_cfg(tmp, {**values, "response_signing_key_file": str(same)}), capsys)
+    node.unlink()
+    entry.FileKeyResponseSigner(values["response_signing_key_file"], forbidden_seed_file=node)
+    node.parent.rmdir()
+    entry.FileKeyResponseSigner(values["response_signing_key_file"], forbidden_seed_file=node)
+
+
+def test_expired_server_certificate_is_refused(env, capsys):
+    tmp, pki, values = env
+    cfg = {**values, "server_cert_file": str(pki / "expired.pem"),
+           "server_key_file": str(pki / "expired.key")}
+    assert "validity" in _run_refusal(_write_cfg(tmp, cfg), capsys)
+
+
+def test_importing_the_entry_touches_no_environment_path(tmp_path):
+    sentinel = tmp_path / "sentinel-must-not-be-touched"
+    script = (
+        "import sys\n"
+        f"S={str(sentinel)!r}\n"
+        "hits=[]\n"
+        "def hook(ev,args):\n"
+        "    if ev in ('open','os.listdir','os.scandir','os.stat') and S in str(args[0]):\n"
+        "        hits.append((ev,str(args[0])))\n"
+        "sys.addaudithook(hook)\n"
+        "import azazel_knowledge.api.knowledge_context_listener as m\n"
+        "import azazel_knowledge.api.app as a\n"
+        "assert 'app' not in vars(a), 'module-level app was built on import'\n"
+        "assert not hits, hits\n"
+        "print('ok')\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120,
+        env={**os.environ, "PYTHONPATH": str(SRC) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+             "AZAZEL_ROOT": str(sentinel), "AZAZEL_CONFIG_DIR": str(sentinel / "cfg")})
+    assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr[-800:]
 
 
 def test_environment_cannot_supply_config_or_trust(env, capsys, monkeypatch):
@@ -356,6 +427,38 @@ def test_console_entry_starts_serves_one_real_mtls_request_and_stops(env):
         for stream in (proc.stdout, proc.stderr):
             stream.close()
     assert proc.returncode == 0
+
+
+def test_revocation_file_unreadable_after_start_denies_real_request(env):
+    tmp, pki, values = env
+    cfg = _write_cfg(tmp, values)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "azazel_knowledge.api.knowledge_context_listener",
+         "--config", str(cfg)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(
+            [str(SRC)] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p])},
+    )
+    rev = Path(values["revocation_file"])
+    try:
+        _read_line(proc)
+        assert _request(values["bind_port"], pki, tmp)["status"] == 200
+        rev.unlink()  # source disappears: unknown revocation state must deny
+        assert _request(values["bind_port"], pki, tmp)["status"] == 401
+        rev.write_text("garbage\n")
+        rev.chmod(0o644)
+        assert _request(values["bind_port"], pki, tmp)["status"] == 401
+        rev.write_text(entry._REVOCATION_HEADER + "\n")
+        assert _request(values["bind_port"], pki, tmp)["status"] == 200  # restored
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            stream.close()
 
 
 def test_pyproject_declares_the_console_script():

@@ -157,9 +157,18 @@ change.
 listener above from an explicit file. It is lab/interop-only until
 commissioning completes. Nothing starts it automatically, and without a config
 that sets `enabled = true` it refuses to run. It needs the `api` extra and
-Python 3.11 or later. It uses the real system clock, never reads environment
-variables or the system trust store, never generates keys, and never prints key
-material (its only output is the bound address and the signing `key_id`).
+Python 3.11 or later. It uses the real system clock, takes every path and
+setting from the config file only (it consults no `AZAZEL_*` variable and
+importing it does not build the environment-configured `app`), trusts only
+`client_ca_file` rather than the system store, never generates keys, and never
+prints key material (its only output is the bound address and the signing
+`key_id`). It refuses to start if the server certificate is outside its
+validity window, and if it cannot prove the response key differs from
+`secrets/node_signing_key` (unreadable or untraversable counts as unproven;
+only a positively absent node key passes). Remaining limitation: file checks
+use the path and the TLS library then reopens cert/key by path, so a writer who
+can replace those files between check and load is outside the guarantee; keep
+the directories owner-only.
 
 The TOML schema is closed: every field below is required, unknown fields are
 refused, and there are no defaults.
