@@ -119,6 +119,66 @@ def read_safe_file(path: object, *, field: str, private: bool, max_bytes: int = 
 # --------------------------------------------------------------------------
 
 
+def _prove_not_node_key(key_file: str, seed: bytes, node_key: Path) -> None:
+    """Refuse unless it is proven that ``seed`` is not the node signing key.
+
+    Proven means: the node key was read and differs, or it is positively absent
+    (ENOENT at the final component while its directory is traversable). Any
+    other error (permissions, loops, not-a-directory, I/O) refuses to start.
+    """
+    if os.path.realpath(key_file) == os.path.realpath(node_key):
+        raise _refuse("response_signing_key_file: must not be the node signing key")
+    try:
+        fd = os.open(node_key, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        try:
+            os.stat(node_key.parent)  # absence is only proven if the directory is traversable
+        except FileNotFoundError:
+            return  # no secrets directory at all: no node key can exist
+        except OSError:
+            raise _refuse("node signing key separation cannot be proven") from None
+        try:
+            os.lstat(node_key)
+        except FileNotFoundError:
+            return
+        except OSError:
+            raise _refuse("node signing key separation cannot be proven") from None
+        raise _refuse("node signing key separation cannot be proven")
+    except OSError:
+        raise _refuse("node signing key separation cannot be proven") from None
+    try:
+        other = b""
+        while len(other) <= 4096:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            other += chunk
+    except OSError:
+        raise _refuse("node signing key separation cannot be proven") from None
+    finally:
+        os.close(fd)
+    if other == seed:
+        raise _refuse("response_signing_key_file: must not reuse the node signing key")
+
+
+def _check_cert_window(pem: bytes, field: str) -> None:
+    import ssl
+    import tempfile
+    import time
+
+    try:
+        with tempfile.NamedTemporaryFile("wb", suffix=".pem") as fh:
+            fh.write(pem)
+            fh.flush()
+            info = ssl._ssl._test_decode_cert(fh.name)  # type: ignore[attr-defined]
+        not_before = ssl.cert_time_to_seconds(info["notBefore"])
+        not_after = ssl.cert_time_to_seconds(info["notAfter"])
+    except Exception:  # noqa: BLE001
+        raise _refuse(f"{field}: certificate cannot be parsed") from None
+    if not not_before <= time.time() < not_after:
+        raise _refuse(f"{field}: certificate is outside its validity window")
+
+
 class FileKeyResponseSigner:
     """Ed25519 response signer loaded from a dedicated 32-byte raw seed file.
 
@@ -133,15 +193,7 @@ class FileKeyResponseSigner:
         if len(seed) != 32:
             raise _refuse("response_signing_key_file: expected a 32-byte raw Ed25519 seed")
         if forbidden_seed_file is not None:
-            if os.path.realpath(str(key_file)) == os.path.realpath(str(forbidden_seed_file)):
-                raise _refuse("response_signing_key_file: must not be the node signing key")
-            if os.path.isfile(forbidden_seed_file):
-                try:
-                    other = Path(forbidden_seed_file).read_bytes()
-                except OSError:
-                    other = b""
-                if other == seed:
-                    raise _refuse("response_signing_key_file: must not reuse the node signing key")
+            _prove_not_node_key(str(key_file), seed, Path(forbidden_seed_file))
         self._key = SigningKey(seed)
         self.public_key: bytes = bytes(self._key.verify_key)
         self.key_id: str = "sha256:" + hashlib.sha256(self.public_key).hexdigest()
@@ -295,7 +347,10 @@ def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
     _check_dir(cfg.knowledge_root, "knowledge_root")
     _check_dir(cfg.config_dir, "config_dir")
     # Validate TLS material files before handing them to the ssl module.
-    read_safe_file(cfg.server_cert_file, field="server_cert_file", private=False)
+    _check_cert_window(
+        read_safe_file(cfg.server_cert_file, field="server_cert_file", private=False),
+        "server_cert_file",
+    )
     read_safe_file(cfg.server_key_file, field="server_key_file", private=True)
     read_safe_file(cfg.client_ca_file, field="client_ca_file", private=False)
 
