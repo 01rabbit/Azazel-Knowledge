@@ -49,10 +49,16 @@ class KnowledgeContextTransportConfig:
     max_ttl_seconds: int
     expected_peer_id: str
     enabled: bool = False
+    #: Freshness deadline of the ATT&CK corpus for technique lookups. Operations
+    #: decide the production value; the default is a conservative two weeks.
+    attack_max_age_seconds: int = 14 * 24 * 3600
 
     def __post_init__(self) -> None:
         if type(self.max_ttl_seconds) is not int or not 1 <= self.max_ttl_seconds <= 30:
             raise ValueError("max_ttl_seconds must be between 1 and 30")
+        if (type(self.attack_max_age_seconds) is not int
+                or not 60 <= self.attack_max_age_seconds <= 366 * 24 * 3600):
+            raise ValueError("attack_max_age_seconds must be between 60 and 31622400")
         if not isinstance(self.expected_peer_id, str) or not _PEER_ID.fullmatch(
             self.expected_peer_id
         ):

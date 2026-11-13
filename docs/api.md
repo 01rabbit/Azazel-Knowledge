@@ -202,6 +202,69 @@ The response key is created by the operator out of band (for example
 `head -c 32 /dev/urandom > key; chmod 600 key`) and its public key is
 registered in Nexus's signed Knowledge registry; the entry point only loads it.
 
+### ATT&CK technique reference (`attack-technique/v1`, reserved namespace)
+
+Entities whose `entity_type` starts with `attack-technique/` (compared
+case-insensitively) are reserved. Only `attack-technique/v1` is accepted, and
+only on its own: another version, a spelling variant or a mix with `ip`,
+`domain`, `question` or any other type is refused with `422`
+`{"detail":{"error":"attack_technique_request_invalid"}}` and **no signed
+envelope**. Values must match `\AT[0-9]{4}(?:\.[0-9]{3})?\Z`, be unique and
+sorted ascending, 1 to 8 per request. Requests that use no reserved type take
+the existing path unchanged.
+
+The answer is read from the official ATT&CK tables of the live intel
+generation (`attack_technique`, `attack_mitigation`, `attack_relation`,
+`feed_state`), which arrive only through a signed bundle imported with
+`bundle/importer.py`. Per technique, in request order:
+
+| fact (`fact_id`) | predicate | value | provenance |
+|---|---|---|---|
+| `tq-{i}-0` | `coverage` | `found` / `no_match` / `stale` / `unavailable` | `knowledge:attack-coverage` |
+| `tq-{i}-1..3` (only when `found`) | `technique_name`, `tactics`, `attack_version` | name (1-120 chars), sorted comma-joined ATT&CK tactic shortnames, `N.N` | `knowledge:attack-stix` |
+
+`coverage` is Knowledge's own evaluation, not an ATT&CK claim. `snapshot.ref` is `attack-stix@<version>` (`attack-stix@none` when no technique is
+`found`); the live-generation consistency check is internal. `inferences` is
+always empty and `limitations` always carries "not evidence of occurrence" and
+"not an instruction". One `unknowns` entry is added when any technique is
+`no_match`.
+
+| situation | `snapshot.state` | `snapshot.as_of` | `expires_at` | coverage |
+|---|---|---|---|---|
+| corpus fresh, all found | `complete` | `feed_state.last_success` | `min(generated + ttl, last_success + attack_max_age)` | found |
+| corpus fresh, any `no_match` | `partial` | `last_success` | same | found / no_match |
+| `last_success + attack_max_age <= generated` | `stale` | `last_success` | `generated + ttl` | stale (no content) |
+| corpus unusable | `stale` | `generated_at` | `generated + ttl` | unavailable (no content) |
+
+The corpus is unusable, never `no_match`, when: the `attack` `feed_state` row is
+missing, disabled (`enabled=0`) or has a malformed or future `last_success`;
+the tables are empty or disagree with `feed_state.item_count`; more than one
+`attack_version` exists or it is not `N.N`; `stats_meta.intel_generation`, the
+live generation directory and `snapshot.ref` disagree; or **any** row of
+`attack_technique` (requested or not) fails validation: technique ID grammar,
+duplicate ID, name, tactics or a version different from the corpus version. The
+name check is purely structural and identical to the Nexus grammar: 1 to 120
+characters, letters and digits of any script, space and `: , ( ) ' & + / . -`,
+no control characters, no leading, trailing or doubled space, no `://` or
+`www.`, no IPv4/IPv6 literal, no domain-like token. There is no word list:
+real ATT&CK names such as `Registry Run Keys / Startup Folder`,
+`.bash_profile and .bashrc` and `Elevated Execution with Prompt` are served
+as they are, and wording is judged for display by the consumer. Tactics must be
+in the ATT&CK tactic list. Such values are refused, never truncated or edited.
+
+`attack_max_age_seconds` is a field of the transport profile (default 14 days,
+60 s to 366 days). The `EGRESSIBLE_SOURCE_GROUPS` policy for IOC facts is not
+involved. A technique lookup does not pass through `post_context`: it reads
+the live generation directly, so the context deadline, the advisory spool and
+the per-key accounting of the normal path do not apply to it (only the
+transport gates, body cap and peer authentication do). Each lookup appends an audit event of type `technique_context`
+(coverage list only).
+
+Lab use: `tools/build_lab_attack_bundle.py` builds a signed **synthetic** bundle
+(`--technique "ID|Name|tactic"`, `--last-success`, `--feed-disabled`,
+`--attack-version`) with the official `tools/bundle_build.py`. Lab only; never
+import it into a production node.
+
 ## Read surfaces (operator-facing, advisory-only)
 
 These endpoints are `Scope.READ` only, return plain JSON, and stay on the
