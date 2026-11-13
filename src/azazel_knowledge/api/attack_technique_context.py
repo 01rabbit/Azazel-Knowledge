@@ -51,25 +51,23 @@ PROVENANCE_STIX = "knowledge:attack-stix"
 TECHNIQUE_SOURCE_GROUPS = frozenset({"mitre"})
 
 COVERAGE_STATES = ("found", "no_match", "stale", "unavailable")
+# Verbatim contract with the Nexus validator (azazel_nexus.technique_knowledge).
 LIMITATIONS = (
-    "ATT&CK technique reference data; not evidence of occurrence",
-    "reference information only; not an instruction",
+    "ATT&CK technique labels are reference information and not evidence that the technique occurred.",
+    "ATT&CK technique labels are not instructions for any response action.",
 )
-NO_MATCH_UNKNOWN = (
-    "techniques with coverage no_match are absent from the loaded ATT&CK corpus; "
-    "absence is not a verdict"
-)
+NO_MATCH_UNKNOWN = "At least one requested technique has no entry in the ATT&CK corpus."
+SNAPSHOT_REF_PREFIX = "attack-stix@"
 
-#: ATT&CK tactic shortnames (enterprise). ``stealth`` and ``defense-impairment``
-#: are accepted for newer releases (unverified against the official list).
+#: ATT&CK tactic shortnames (enterprise); identical to the Nexus enumeration.
 TACTICS = frozenset({
     "reconnaissance", "resource-development", "initial-access", "execution",
     "persistence", "privilege-escalation", "defense-evasion", "credential-access",
     "discovery", "lateral-movement", "collection", "command-and-control",
-    "exfiltration", "impact", "stealth", "defense-impairment",
+    "exfiltration", "impact",
 })
 
-_VERSION_RE = re.compile(r"\A[0-9]{1,4}\.[0-9]{1,4}\Z", re.ASCII)
+_VERSION_RE = re.compile(r"\A[0-9]{1,3}\.[0-9]{1,3}\Z", re.ASCII)
 _RFC3339_RE = re.compile(
     r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})\Z",
     re.ASCII,
@@ -126,8 +124,16 @@ _NAME_POISON = (
 )
 
 
+# Closed name grammar shared with Nexus: letters/digits of any script, spaces and
+# ``: , ( ) ' & + -``; a slash only between two letters. No dot, so no address,
+# host name or file name. A name outside it would make Nexus refuse the response.
+_NAME_CHARS = re.compile(r"(?:[^\W_]|[ :,()'&+-]|(?<=[^\W_])/(?=[^\W_]))+")
+
+
 def valid_name(name: object) -> bool:
     if not isinstance(name, str) or not 1 <= len(name) <= MAX_NAME_LENGTH:
+        return False
+    if _NAME_CHARS.fullmatch(name) is None:
         return False
     if name != name.strip() or "  " in name:
         return False
@@ -240,7 +246,6 @@ def _assess(conn, generated_at, max_age, current_generation, technique_ids, snap
 def build_response(
     request: KnowledgeContextRequestV1, corpus: Corpus, *, provider_id: str,
     generated_at: datetime, response_ttl: timedelta, max_age: timedelta,
-    fallback_snapshot_ref: str,
 ) -> KnowledgeContextResponseV1:
     facts: list[dict[str, Any]] = []
     states: list[str] = []
@@ -261,6 +266,8 @@ def build_response(
                 facts.append({"fact_id": f"tq-{i}-{n}", "subject": subject, "predicate": predicate,
                               "value": value, "provenance": [PROVENANCE_STIX]})
 
+    versions = ({corpus.rows[e.value][2] for e in request.entities if e.value in corpus.rows}
+                if corpus.status == "fresh" else set())
     expires = generated_at + response_ttl
     if corpus.status == "fresh":
         # Fresh data must not outlive its freshness deadline (7.2).
@@ -278,7 +285,7 @@ def build_response(
         "source_product": request.source_product,
         "source_ref": request.source_ref,
         "provider_id": provider_id,
-        "snapshot": {"ref": corpus.snapshot_ref or fallback_snapshot_ref,
+        "snapshot": {"ref": SNAPSHOT_REF_PREFIX + (versions.pop() if len(versions) == 1 else "none"),
                      "state": snapshot_state, "as_of": to_rfc3339(as_of)},
         "facts": facts,
         "inferences": [],

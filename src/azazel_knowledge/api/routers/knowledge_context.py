@@ -256,7 +256,6 @@ def _technique_response(request, body, config, peer_id):
         semantic = attack_ctx.build_response(
             body, corpus, provider_id="azazel-knowledge", generated_at=generated,
             response_ttl=timedelta(seconds=config.max_ttl_seconds), max_age=max_age,
-            fallback_snapshot_ref=snapshot_ref,
         )
     except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
         raise HTTPException(

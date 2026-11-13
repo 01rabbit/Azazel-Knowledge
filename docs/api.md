@@ -223,7 +223,11 @@ generation (`attack_technique`, `attack_mitigation`, `attack_relation`,
 | `tq-{i}-0` | `coverage` | `found` / `no_match` / `stale` / `unavailable` | `knowledge:attack-coverage` |
 | `tq-{i}-1..3` (only when `found`) | `technique_name`, `tactics`, `attack_version` | name (1-120 chars), sorted comma-joined ATT&CK tactic shortnames, `N.N` | `knowledge:attack-stix` |
 
-`coverage` is Knowledge's own evaluation, not an ATT&CK claim. `inferences` is
+`coverage` is Knowledge's own evaluation, not an ATT&CK claim. `snapshot.ref` is `attack-stix@<version>` (`attack-stix@none` when no technique is
+`found`); the live-generation consistency check is internal. Names use a closed
+grammar (letters, digits, spaces, `: , ( ) \' & + -`, a slash only between letters;
+no dot, so `.bash_profile`-style names are refused) shared with the Nexus
+validator. `inferences` is
 always empty and `limitations` always carries "not evidence of occurrence" and
 "not an instruction". One `unknowns` entry is added when any technique is
 `no_match`.

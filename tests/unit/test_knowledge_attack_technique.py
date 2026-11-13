@@ -200,7 +200,7 @@ def test_ioc_egress_policy_constants_are_unchanged_and_disjoint():
 def test_found_response_has_coverage_and_content_facts(tmp_path):
     client, signer, _ = _serve(tmp_path)
     document, semantic = _semantic(client, signer, _request("T1110", "T1595.002"))
-    assert semantic["snapshot"] == {"ref": "knowledge:intel-generation:1", "state": "complete",
+    assert semantic["snapshot"] == {"ref": "attack-stix@15.1", "state": "complete",
                                     "as_of": FRESH}
     assert [(f["fact_id"], f["subject"]["value"], f["predicate"], f["value"], f["provenance"])
             for f in semantic["facts"]] == [
@@ -403,9 +403,13 @@ def test_name_length_limit_is_inclusive_and_never_truncates(tmp_path):
     assert {f["predicate"]: f["value"] for f in semantic["facts"]}["technique_name"] == name
 
 
+def test_names_outside_the_shared_grammar_are_refused():
+    for name in ["Event Triggered Execution: .bash_profile", "a.b", "x_y", "a//b", "a/ b", "it\"s", "a@b"]:
+        assert not atc.valid_name(name), name
+
+
 def test_legitimate_attack_names_are_accepted():
-    for name in ["Brute Force: Password Guessing", "Event Triggered Execution: .bash_profile and .bashrc",
-                 "Disable or Modify Tools", "Process Doppelgänging", "Command and Scripting Interpreter",
+    for name in ["Brute Force: Password Guessing", "Disable or Modify Tools", "Process Doppelgänging", "Command and Scripting Interpreter",
                  "Steal or Forge Kerberos Tickets: AS-REP Roasting", "Execution Guardrails", "SID-History Injection"]:
         assert atc.valid_name(name), name
 
@@ -436,3 +440,40 @@ def test_technique_lookup_is_audited(tmp_path):
     event = next(e for e in events if e.get("type") == "technique_context")
     assert event["coverage"] == ["found", "no_match"]
     assert event["actor_key"] == "mtls:nexus-lab"
+
+
+# ---- cross-check against the real Nexus validator --------------------------------
+
+
+def _nexus_validator():
+    import os
+    src = os.environ.get("AZAZEL_NEXUS_SRC")
+    if not src or not (Path(src) / "azazel_nexus" / "technique_knowledge.py").is_file():
+        return None
+    sys.path.insert(0, src)
+    try:
+        from azazel_nexus import technique_knowledge
+    finally:
+        sys.path.remove(src)
+    return technique_knowledge
+
+
+@pytest.mark.parametrize("kw,ids,coverages", [
+    ({}, ["T1110", "T1595.002"], ["found", "found"]),
+    ({}, ["T1110", "T1566"], ["found", "no_match"]),
+    ({}, ["T1566"], ["no_match"]),
+    ({"last_success": OLD}, ["T1110", "T1566"], ["stale", "stale"]),
+    ({"feed_disabled": True}, ["T1110", "T1566"], ["unavailable", "unavailable"]),
+    ({"last_success": FUTURE}, ["T1110"], ["unavailable"]),
+])
+def test_responses_pass_the_real_nexus_validator(tmp_path, kw, ids, coverages):
+    nexus = _nexus_validator()
+    if nexus is None:
+        pytest.skip("AZAZEL_NEXUS_SRC not set")
+    client, signer, _ = _serve(tmp_path, **kw)
+    _, semantic = _semantic(client, signer, _request(*ids))
+    result = nexus.validate_technique_response(semantic, ids)
+    assert [t["coverage"] for t in result["techniques"]] == coverages
+    projected = nexus.project_technique_response(semantic, ids)
+    assert [t["useful_content"] for t in projected["techniques"]] == [c == "found" for c in coverages]
+    assert nexus.read_projection(projected) == projected
