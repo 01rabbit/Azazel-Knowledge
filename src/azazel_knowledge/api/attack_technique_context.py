@@ -213,8 +213,8 @@ def _assess(conn, generated_at, max_age, current_generation, technique_ids, snap
         return _unavailable()
     versions = set()
     for table in counts:
-        versions.update(r[0] for r in conn.execute(
-            f"SELECT DISTINCT attack_version FROM intel.{table}").fetchall())
+        versions |= {r[0] for r in conn.execute(
+            f"SELECT DISTINCT attack_version FROM intel.{table}").fetchall()}
     if len(versions) != 1 or _VERSION_RE.match(next(iter(versions))) is None:
         return _unavailable()
 
