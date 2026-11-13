@@ -40,6 +40,9 @@ api-context-candidate = [
 ]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
 
+[project.scripts]
+azazel-knowledge-context-listener = "azazel_knowledge.api.knowledge_context_listener:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
