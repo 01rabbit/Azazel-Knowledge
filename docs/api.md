@@ -224,10 +224,7 @@ generation (`attack_technique`, `attack_mitigation`, `attack_relation`,
 | `tq-{i}-1..3` (only when `found`) | `technique_name`, `tactics`, `attack_version` | name (1-120 chars), sorted comma-joined ATT&CK tactic shortnames, `N.N` | `knowledge:attack-stix` |
 
 `coverage` is Knowledge's own evaluation, not an ATT&CK claim. `snapshot.ref` is `attack-stix@<version>` (`attack-stix@none` when no technique is
-`found`); the live-generation consistency check is internal. Names use a closed
-grammar (letters, digits, spaces, `: , ( ) \' & + -`, a slash only between letters;
-no dot, so `.bash_profile`-style names are refused) shared with the Nexus
-validator. `inferences` is
+`found`); the live-generation consistency check is internal. `inferences` is
 always empty and `limitations` always carries "not evidence of occurrence" and
 "not an instruction". One `unknowns` entry is added when any technique is
 `no_match`.
@@ -243,14 +240,24 @@ The corpus is unusable, never `no_match`, when: the `attack` `feed_state` row is
 missing, disabled (`enabled=0`) or has a malformed or future `last_success`;
 the tables are empty or disagree with `feed_state.item_count`; more than one
 `attack_version` exists or it is not `N.N`; `stats_meta.intel_generation`, the
-live generation directory and `snapshot.ref` disagree; or a requested row has a
-name or tactics that fail validation (instruction-like or causal wording, HTML,
-IP or URL, control characters, over 120 characters, a tactic outside the ATT&CK
-tactic list). Such values are refused, never truncated or edited.
+live generation directory and `snapshot.ref` disagree; or **any** row of
+`attack_technique` (requested or not) fails validation: technique ID grammar,
+duplicate ID, name, tactics or a version different from the corpus version. The
+name check is purely structural and identical to the Nexus grammar: 1 to 120
+characters, letters and digits of any script, space and `: , ( ) ' & + / . -`,
+no control characters, no leading, trailing or doubled space, no `://` or
+`www.`, no IPv4/IPv6 literal, no domain-like token. There is no word list:
+real ATT&CK names such as `Registry Run Keys / Startup Folder`,
+`.bash_profile and .bashrc` and `Elevated Execution with Prompt` are served
+as they are, and wording is judged for display by the consumer. Tactics must be
+in the ATT&CK tactic list. Such values are refused, never truncated or edited.
 
 `attack_max_age_seconds` is a field of the transport profile (default 14 days,
 60 s to 366 days). The `EGRESSIBLE_SOURCE_GROUPS` policy for IOC facts is not
-involved. Each lookup appends an audit event of type `technique_context`
+involved. A technique lookup does not pass through `post_context`: it reads
+the live generation directly, so the context deadline, the advisory spool and
+the per-key accounting of the normal path do not apply to it (only the
+transport gates, body cap and peer authentication do). Each lookup appends an audit event of type `technique_context`
 (coverage list only).
 
 Lab use: `tools/build_lab_attack_bundle.py` builds a signed **synthetic** bundle

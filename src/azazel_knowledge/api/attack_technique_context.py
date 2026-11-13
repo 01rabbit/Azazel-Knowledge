@@ -13,9 +13,10 @@ Reserved entity namespace ``attack-technique/*`` (GX1 design 2.1, 7):
   ``unavailable``. ``no_match`` is only "corpus healthy and fresh, ID absent".
 * Coverage facts are Knowledge's own evaluation (provenance
   ``knowledge:attack-coverage``). Content facts are reported by ATT&CK
-  (provenance ``knowledge:attack-stix``). Names or tactics that look like
-  instructions, causal claims, markup or network indicators make the whole
-  response ``unavailable``; nothing is truncated or silently edited.
+  (provenance ``knowledge:attack-stix``). A name outside the
+  structural grammar (shared with Nexus; no word list), or tactics outside the
+  enumeration, in ANY corpus row make every technique ``unavailable``; nothing is
+  truncated or silently edited.
 
 The IOC egress policy (``EGRESSIBLE_SOURCE_GROUPS``) is not touched here.
 """
@@ -24,7 +25,7 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
+import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -98,48 +99,35 @@ def is_technique_request(request: KnowledgeContextRequestV1) -> bool:
     return True
 
 
-# ---- value validation (poisoned values are refused, never truncated) ----------
+# ---- value validation (structural only; refused values are never truncated) ----
 
-_NAME_POISON = (
-    re.compile(r"[<>`{}\\]"),
-    re.compile(r"&[#A-Za-z0-9]+;"),
-    re.compile(r"://|\bwww\.|\bhttps?\b", re.IGNORECASE),
-    re.compile(r"(?<![0-9])[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9])"),
-    re.compile(r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){2,}[0-9A-Fa-f:]*"),
-    re.compile(
-        r"\b(?:you|your|must|should|please|immediately|now|ignore|disregard|instructions?|"
-        r"assistant|prompt)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:proves?|proved|confirms?|confirmed|indicates?|caused|causes|because|therefore|"
-        r"responsible|attributed)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\A\s*(?:block|isolate|quarantine|kill|ban|blacklist|reboot|shut\s?down|run|execute|"
-        r"sudo|rm|curl|wget|ssh)\b",
-        re.IGNORECASE,
-    ),
-)
+# Mirror of the Nexus structural name grammar (azazel_nexus.technique_knowledge
+# name_grammar_ok). Keep byte-equivalent; there is deliberately no word list:
+# Knowledge emits real ATT&CK names, Nexus decides display-time wording.
+_NAME_ALLOWED = re.compile(r"[^\W]|[ :,()'&+/.-]")
+_NAME_DOMAIN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9-]*[A-Za-z0-9]\.[A-Za-z]{2,}")
+_NAME_ADDRESS = re.compile(r"[0-9A-Fa-f:.]{2,}")
 
 
-# Closed name grammar shared with Nexus: letters/digits of any script, spaces and
-# ``: , ( ) ' & + -``; a slash only between two letters. No dot, so no address,
-# host name or file name. A name outside it would make Nexus refuse the response.
-_NAME_CHARS = re.compile(r"(?:[^\W_]|[ :,()'&+-]|(?<=[^\W_])/(?=[^\W_]))+")
-
-
-def valid_name(name: object) -> bool:
-    if not isinstance(name, str) or not 1 <= len(name) <= MAX_NAME_LENGTH:
+def valid_name(value: object) -> bool:
+    if type(value) is not str or not 1 <= len(value) <= MAX_NAME_LENGTH or value != value.strip():
         return False
-    if _NAME_CHARS.fullmatch(name) is None:
+    if "  " in value or not all(c.isprintable() for c in value):
         return False
-    if name != name.strip() or "  " in name:
+    if not all(_NAME_ALLOWED.fullmatch(c) for c in value):
         return False
-    if any(unicodedata.category(ch)[0] == "C" for ch in name):
+    low = value.lower()
+    if "://" in value or "www." in low:
         return False
-    return not any(p.search(name) for p in _NAME_POISON)
+    for token in _NAME_ADDRESS.findall(value):
+        try:
+            ipaddress.ip_address(token.strip(":.") if token.count(":") < 2 else token)
+        except ValueError:
+            continue
+        return False
+    if re.search(r"(?<![0-9])[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9])", value):
+        return False
+    return _NAME_DOMAIN.search(value) is None
 
 
 def parse_tactics(raw: object) -> str | None:
