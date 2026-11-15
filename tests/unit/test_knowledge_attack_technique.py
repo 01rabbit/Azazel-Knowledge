@@ -80,21 +80,24 @@ def _key_and_anchors(tmp_path):
 
 
 def _serve(tmp_path, *, rows=ROWS, last_success=FRESH, attack_version="15.1", feed_disabled=False,
-           mutate=None, max_age=14 * 24 * 3600, import_bundle=True):
+           mutate=None, max_age=14 * 24 * 3600, import_bundle=True, as_of=QUERY_AS_OF, bundle_path=None):
     """Signed synthetic bundle -> import_full -> real app. Returns (client, signer, settings)."""
     key_path, anchors = _key_and_anchors(tmp_path)
     data_db_dir = tmp_path / "data" / "db"
     local_db = tmp_path / "data" / "local.db"
     make_local_db(local_db)
     if import_bundle:
-        bundle = tmp_path / "lab-attack.tar.gz"
-        argv = ["--out", str(bundle), "--version", "1", "--sign-key", str(key_path),
-                "--attack-version", attack_version, "--last-success", last_success]
-        for row in rows:
-            argv += ["--technique", row]
-        if feed_disabled:
-            argv.append("--feed-disabled")
-        assert _lab_tool().main(argv) == 0
+        if bundle_path is None:
+            bundle = tmp_path / "lab-attack.tar.gz"
+            argv = ["--out", str(bundle), "--version", "1", "--sign-key", str(key_path),
+                    "--attack-version", attack_version, "--last-success", last_success]
+            for row in rows:
+                argv += ["--technique", row]
+            if feed_disabled:
+                argv.append("--feed-disabled")
+            assert _lab_tool().main(argv) == 0
+        else:  # a bundle the caller built (e.g. from the official corpus); signed with `key_path`
+            bundle = bundle_path(key_path)
         import_full(bundle, anchors, tmp_path / "trust" / "state.toml", data_db_dir)
         if mutate is not None:
             conn = sqlite3.connect(generations.intel_db_path(data_db_dir, generations.current_generation(data_db_dir)))
@@ -107,7 +110,7 @@ def _serve(tmp_path, *, rows=ROWS, last_success=FRESH, attack_version="15.1", fe
     settings = Settings(
         config_dir=CONFIG_DIR, local_db_path=local_db, data_db_dir=data_db_dir,
         spool_root=tmp_path / "var" / "ingest", audit_dir=tmp_path / "var" / "audit" / "api",
-        proc_id="test-proc", boot_id="test-boot", clock=FixedClock(QUERY_AS_OF), pool_size=2,
+        proc_id="test-proc", boot_id="test-boot", clock=FixedClock(as_of), pool_size=2,
     )
     settings.knowledge_context_transport = KnowledgeContextTransportConfig(
         peer_authenticator=_Peer(), signer=signer, max_ttl_seconds=30, expected_peer_id="nexus-lab",

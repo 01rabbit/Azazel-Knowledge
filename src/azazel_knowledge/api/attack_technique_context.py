@@ -61,11 +61,13 @@ NO_MATCH_UNKNOWN = "At least one requested technique has no entry in the ATT&CK 
 SNAPSHOT_REF_PREFIX = "attack-stix@"
 
 #: ATT&CK tactic shortnames (enterprise); identical to the Nexus enumeration.
+#: v19 split `defense-evasion` into `stealth` and `defense-impairment`; corpus 20.1
+#: uses only the new two. The old name stays accepted for corpora older than v19.
 TACTICS = frozenset({
     "reconnaissance", "resource-development", "initial-access", "execution",
-    "persistence", "privilege-escalation", "defense-evasion", "credential-access",
-    "discovery", "lateral-movement", "collection", "command-and-control",
-    "exfiltration", "impact",
+    "persistence", "privilege-escalation", "defense-evasion", "defense-impairment",
+    "stealth", "credential-access", "discovery", "lateral-movement", "collection",
+    "command-and-control", "exfiltration", "impact",
 })
 
 _VERSION_RE = re.compile(r"\A[0-9]{1,3}\.[0-9]{1,3}\Z", re.ASCII)
