@@ -484,6 +484,72 @@ def test_ipv6_loopback_bind_does_not_use_reverse_dns(tmp_path, pki, monkeypatch)
         listener.stop()
 
 
+def _time_wait_on_port(port: int) -> int:
+    count = 0
+    for line in Path("/proc/net/tcp").read_text().splitlines()[1:]:
+        fields = line.split()
+        if fields[3] == "06" and int(fields[1].split(":")[1], 16) == port:
+            count += 1
+    return count
+
+
+def test_restart_on_the_same_port_works_while_time_wait_holds_it(tmp_path, pki):
+    """The listener closes each connection first, so the port is in TIME_WAIT after a request.
+
+    A restart in that window used to fail with EADDRINUSE for about 60 seconds. It must bind
+    again at once, and a second listener must still be refused while the first is listening.
+    """
+    if not sys.platform.startswith("linux"):
+        pytest.skip("TIME_WAIT is observed through /proc/net/tcp")
+    first, _ = _start(tmp_path, pki)
+    host, port = first.address
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.load_verify_locations(cafile=str(pki / "ca.pem"))
+    ctx.load_cert_chain(str(pki / "nexus.pem"), str(pki / "nexus.key"))
+    body = _body()
+    with socket.create_connection((host, port), timeout=10) as raw:
+        with ctx.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
+            tls.sendall(b"POST /v1/knowledge-context HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                        b"Content-Type: application/json\r\nContent-Length: "
+                        + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += tls.recv(4096)
+            head, _, rest = data.partition(b"\r\n\r\n")
+            length = int([h for h in head.split(b"\r\n") if h.lower().startswith(b"content-length")][0].split(b":")[1])
+            while len(rest) < length:
+                rest += tls.recv(4096)
+            # close at once, as the Nexus client does after the declared length
+    first.stop()
+    deadline = time.monotonic() + 5
+    while not _time_wait_on_port(port) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not _time_wait_on_port(port):
+        pytest.skip("the kernel left no TIME_WAIT socket on the port")
+    app, settings, _db, _data = build_app(tmp_path / "second")
+    settings.knowledge_context_transport = KnowledgeContextTransportConfig(
+        peer_authenticator=PinnedCertificatePeerAuthenticator(
+            peer_id="nexus-lab", cert_sha256=_fingerprint(pki / "nexus.pem"),
+            is_revoked=lambda _fingerprint: False,
+        ),
+        signer=_Signer(), max_ttl_seconds=30, expected_peer_id="nexus-lab", enabled=True,
+    )
+    cfg = MtlsListenerConfig(
+        bind_host=host, bind_port=port,
+        server_cert_file=pki / "server.pem", server_key_file=pki / "server.key",
+        client_ca_file=pki / "ca.pem",
+    )
+    restarted = KnowledgeContextMtlsListener(app, cfg)
+    restarted.start()
+    try:
+        assert restarted.address[1] == port
+        again = KnowledgeContextMtlsListener(app, cfg)
+        with pytest.raises(OSError):
+            again.start()
+    finally:
+        restarted.stop()
+
+
 def test_bind_failure_does_not_start_or_leak_listener_threads(tmp_path, pki):
     first, _ = _start(tmp_path, pki)
     try:

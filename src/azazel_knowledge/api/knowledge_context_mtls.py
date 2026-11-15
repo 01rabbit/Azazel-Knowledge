@@ -28,6 +28,7 @@ import json
 import selectors
 import socket
 import ssl
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -169,7 +170,7 @@ def _send_until(sock: socket.socket, data: bytes, deadline: float) -> None:
 
 class _Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    allow_reuse_address = True
     request_queue_size = 16
 
     def __init__(self, listener: "KnowledgeContextMtlsListener") -> None:
@@ -189,6 +190,14 @@ class _Server(http.server.ThreadingHTTPServer):
 
     def server_bind(self) -> None:
         # Avoid HTTPServer.server_bind's socket.getfqdn(), which can trigger DNS.
+        if self.allow_reuse_address and sys.platform != "win32":
+            # This override replaces TCPServer.server_bind, the only place that applies the
+            # class flag, so it must be set here. The listener closes each connection first
+            # (HTTP/1.0), which leaves TIME_WAIT on the bound port for about 60 seconds; without
+            # SO_REUSEADDR a restart in that window failed with EADDRINUSE. On Linux the option
+            # does not let another socket bind a port that is in LISTEN, so a second listener or
+            # a wildcard bind is still refused. SO_REUSEPORT is deliberately not used.
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(self.server_address)
         self.server_address = self.socket.getsockname()
         self.server_name = str(self.server_address[0])

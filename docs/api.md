@@ -170,6 +170,12 @@ use the path and the TLS library then reopens cert/key by path, so a writer who
 can replace those files between check and load is outside the guarantee; keep
 the directories owner-only.
 
+The listener closes every connection itself, so the bound port is in TIME_WAIT
+for about 60 seconds after a request. The listening socket sets `SO_REUSEADDR`
+(never `SO_REUSEPORT`), so a restart binds again at once. On Linux that option
+does not allow a second socket, including a wildcard one, to bind a port that is
+in LISTEN: a second listener on the same address and port is still refused.
+
 The TOML schema is closed: every field below is required, unknown fields are
 refused, and there are no defaults.
 
