@@ -16,7 +16,8 @@ from azazel_fabric.knowledge_context import (
     canonical_knowledge_context_bytes,
 )
 from azazel_knowledge.api import limits
-from azazel_knowledge.api.app import AuthContext
+from azazel_knowledge.api import attack_technique_context as attack_ctx
+from azazel_knowledge.api.app import AuthContext, ensure_warm_cache
 from azazel_knowledge.api.knowledge_context_adapter import (
     KnowledgeContextAdaptationError,
     from_knowledge_context_request,
@@ -24,7 +25,9 @@ from azazel_knowledge.api.knowledge_context_adapter import (
 )
 from azazel_knowledge.api.models import ContextResponse
 from azazel_knowledge.api.routers.context import post_context
+from azazel_knowledge.audit.logger import AuditUnavailable
 from azazel_knowledge.core.clock import parse_rfc3339, to_rfc3339
+from azazel_knowledge.db import generations
 from azazel_knowledge.security.auth import Scope
 
 router = APIRouter(prefix="/v1", tags=["knowledge-context"])
@@ -179,22 +182,8 @@ def _parse_envelope(request: Request, raw_body: bytes) -> KnowledgeContextReques
         raise invalid from None
 
 
-@router.post(
-    "/knowledge-context",
-    response_class=Response,
-    openapi_extra={"requestBody": _REQUEST_BODY},
-)
-def post_knowledge_context(
-    request: Request,
-    peer_id: str = Depends(_authenticated_peer),
-    raw_body: bytes = Depends(_bounded_envelope),
-) -> Response:
-    # Parsing runs in the threadpool, only after both gates have passed.
-    body = _parse_envelope(request, raw_body)
-    config = request.app.state.settings.knowledge_context_transport
-    if body.source_product != "azazel_nexus":
-        raise HTTPException(status_code=403, detail={"error": "peer_profile_mismatch"})
-
+def _ordinary_response(request, body, config, peer_id, raw_body):
+    """Existing IOC/legacy path, unchanged: Knowledge /v1/context -> Fabric projection."""
     try:
         context_request = from_knowledge_context_request(body)
     except (KnowledgeContextAdaptationError, ValidationError, TypeError, ValueError):
@@ -237,6 +226,85 @@ def post_knowledge_context(
                 "source-level freshness deadlines are not included in this projection",
             ),
         )
+    except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
+        raise HTTPException(
+            status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
+        ) from None
+    return semantic, generated, expires
+
+
+def _technique_response(request, body, config, peer_id):
+    """ATT&CK technique reference lookup (reserved attack-technique/v1 namespace)."""
+    ensure_warm_cache(request)
+    state = request.app.state
+    generated = state.clock.query_as_of()
+    max_age = timedelta(seconds=config.attack_max_age_seconds)
+    technique_ids = [e.value for e in body.entities]
+    try:
+        current = generations.current_generation(state.settings.data_db_dir)
+        with state.repo.connection() as conn:
+            generation_row = conn.execute(
+                "SELECT value FROM intel.stats_meta WHERE key = 'intel_generation'"
+            ).fetchone()
+            snapshot_ref = (
+                f"knowledge:intel-generation:{generation_row[0] if generation_row else current}"
+            )
+            corpus = attack_ctx.assess_corpus(
+                conn, generated_at=generated, max_age=max_age, current_generation=current,
+                technique_ids=technique_ids, snapshot_ref=snapshot_ref,
+            )
+        semantic = attack_ctx.build_response(
+            body, corpus, provider_id="azazel-knowledge", generated_at=generated,
+            response_ttl=timedelta(seconds=config.max_ttl_seconds), max_age=max_age,
+        )
+    except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
+        raise HTTPException(
+            status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
+        ) from None
+    coverage = [f.value for f in semantic.facts if f.predicate == "coverage"]
+    try:
+        state.audit.append({
+            "type": "technique_context",
+            "event_id": body.request_id,
+            "actor_key": f"mtls:{peer_id}",
+            "snapshot_ref": semantic.snapshot.ref,
+            "snapshot_state": semantic.snapshot.state,
+            "coverage": coverage,
+            "created_at": to_rfc3339(generated),
+        })
+    except AuditUnavailable:
+        raise HTTPException(status_code=503, detail={"error": "audit_unavailable"}) from None
+    return semantic, generated, semantic.expires_at
+
+
+@router.post(
+    "/knowledge-context",
+    response_class=Response,
+    openapi_extra={"requestBody": _REQUEST_BODY},
+)
+def post_knowledge_context(
+    request: Request,
+    peer_id: str = Depends(_authenticated_peer),
+    raw_body: bytes = Depends(_bounded_envelope),
+) -> Response:
+    # Parsing runs in the threadpool, only after both gates have passed.
+    body = _parse_envelope(request, raw_body)
+    config = request.app.state.settings.knowledge_context_transport
+    if body.source_product != "azazel_nexus":
+        raise HTTPException(status_code=403, detail={"error": "peer_profile_mismatch"})
+
+    try:
+        technique_request = attack_ctx.is_technique_request(body)
+    except attack_ctx.TechniqueRequestError:
+        raise HTTPException(
+            status_code=422, detail={"error": "attack_technique_request_invalid"}
+        ) from None
+
+    if technique_request:
+        semantic, generated, expires = _technique_response(request, body, config, peer_id)
+    else:
+        semantic, generated, expires = _ordinary_response(request, body, config, peer_id, raw_body)
+    try:
         semantic_bytes = canonical_knowledge_context_bytes(semantic)
     except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
         raise HTTPException(
