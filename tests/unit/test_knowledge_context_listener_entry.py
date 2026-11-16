@@ -613,3 +613,102 @@ def test_connection_lines_leak_nothing_from_the_request(env, capsys):
         listener.stop()
     text = "\n".join(lines)
     assert lines and "BEGIN" not in text and "Content-" not in text and SEED.hex() not in text
+
+
+# ---- review fixes: undelivered responses, process_request failure, recorder faults ----
+
+
+def _collecting(listener) -> list[tuple[str, str, int]]:
+    seen: list[tuple[str, str, int]] = []
+    listener._connection_recorder = lambda o, ip, port: seen.append((o, ip, port))
+    return seen
+
+
+def _wait_seen(seen: list, count: int) -> None:
+    deadline = time.monotonic() + 10
+    while len(seen) < count and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+@pytest.mark.parametrize("exc, expected", [
+    (TimeoutError("response write deadline"), "transport_timeout"),
+    (BrokenPipeError(), "transport_error"),
+])
+def test_undelivered_response_is_never_recorded_as_a_success(env, monkeypatch, exc, expected):
+    from azazel_knowledge.api import knowledge_context_mtls as mtls
+    tmp, pki, values = env
+    listener = entry.build_listener(entry.parse_config(_write_cfg(tmp, values).read_bytes()))
+    seen = _collecting(listener)
+
+    def failing_send(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(mtls, "_send_until", failing_send)
+    listener.start()
+    try:
+        _request(values["bind_port"], pki, tmp)
+        _wait_seen(seen, 1)
+    finally:
+        listener.stop()
+    assert [o for o, _ip, _p in seen] == [expected], seen
+
+
+def test_process_request_failure_records_once_releases_slot_and_propagates(env, monkeypatch):
+    import socketserver
+    from azazel_knowledge.api import knowledge_context_mtls as mtls
+    tmp, _pki, values = env
+    listener = entry.build_listener(
+        entry.parse_config(_write_cfg(tmp, {**values, "max_concurrency": 1}).read_bytes()))
+    seen = _collecting(listener)
+
+    def failing(self, request, client_address):
+        raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(socketserver.ThreadingMixIn, "process_request", failing)
+    server = mtls._Server(listener)
+    try:
+        sock = socket.socket()
+        with pytest.raises(RuntimeError, match="cannot start thread"):
+            server.process_request(sock, ("127.0.0.1", 4242))
+        sock.close()
+        assert seen == [("transport_error", "127.0.0.1", 4242)]
+        assert listener._slots.acquire(blocking=False)  # the slot was released
+        listener._slots.release()
+    finally:
+        server.server_close()
+
+
+@pytest.mark.parametrize("fault", [SystemExit, KeyboardInterrupt, RuntimeError])
+def test_recorder_faults_including_exit_and_interrupt_are_contained(env, fault):
+    tmp, pki, values = env
+    listener = entry.build_listener(entry.parse_config(_write_cfg(tmp, values).read_bytes()))
+    calls = []
+
+    def boom(*_a):
+        calls.append(1)
+        raise fault()
+
+    listener._connection_recorder = boom
+    listener.start()
+    try:
+        for _ in range(3):  # the accept loop keeps working after each fault
+            assert _request(values["bind_port"], pki, tmp)["status"] == 200
+        assert _request(values["bind_port"], pki, tmp, cert="other")["status"] == 401
+        deadline = time.monotonic() + 10
+        while len(calls) < 4 and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        listener.stop()
+    assert len(calls) == 4
+
+
+def test_record_connection_contains_stderr_failures(monkeypatch):
+    class Broken:
+        def write(self, _s):
+            raise SystemExit
+
+        def flush(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(entry.sys, "stderr", Broken())
+    entry.record_connection("served", "127.0.0.1", 1)  # must not raise

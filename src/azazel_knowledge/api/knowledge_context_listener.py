@@ -375,9 +375,8 @@ def record_connection(outcome: str, ip: str, port: int) -> None:
         with _record_lock:
             sys.stderr.write(f"conn {stamp} {outcome} {host}:{port}\n")
             sys.stderr.flush()
-    except BaseException as exc:  # noqa: BLE001
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
+    except BaseException:  # noqa: BLE001 -- the recording path never raises
+        pass
 
 
 def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:

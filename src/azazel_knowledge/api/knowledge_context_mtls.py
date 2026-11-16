@@ -209,9 +209,11 @@ class _Server(http.server.ThreadingHTTPServer):
             recorder = self.listener._connection_recorder
             if recorder is not None:
                 recorder(outcome, str(client_address[0]), int(client_address[1]))
-        except BaseException as exc:  # noqa: BLE001
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                raise
+        except BaseException:  # noqa: BLE001
+            # Signals are delivered to the main thread, never here, so anything raised in
+            # this path (SystemExit and KeyboardInterrupt included) comes from the
+            # recorder itself and must not leave the recording path.
+            pass
 
     def process_request(self, request, client_address):  # type: ignore[override]
         if not self.listener._slots.acquire(blocking=False):
@@ -222,6 +224,7 @@ class _Server(http.server.ThreadingHTTPServer):
             super().process_request(request, client_address)
         except BaseException:
             self.listener._slots.release()
+            self._record("transport_error", client_address)
             raise
 
     def process_request_thread(self, request, client_address):  # type: ignore[override]
@@ -299,10 +302,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return left
 
     def _reply(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
-        if self.outcome is None:
-            self.outcome = (
-                "served" if status == 200 else "peer_refused" if status == 401 else f"http_{status}"
-            )
+        delivered = (
+            "served" if status == 200 else "peer_refused" if status == 401 else f"http_{status}"
+        )
         try:
             reason = HTTPStatus(status).phrase.encode("ascii")
             response = [b"HTTP/1.0 " + str(status).encode("ascii") + b" " + reason + b"\r\n"]
@@ -317,8 +319,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 body,
             ))
             _send_until(self.connection, b"".join(response), self._deadline)
-        except (OSError, TimeoutError):
-            pass
+        except TimeoutError:
+            self.outcome = "transport_timeout"  # not delivered: never record a success
+        except OSError:
+            self.outcome = "transport_error"
+        else:
+            if self.outcome is None:
+                self.outcome = delivered
 
     def _recv(self, limit: int) -> bytes:
         # Every receive re-arms the timeout from the single connection deadline,
