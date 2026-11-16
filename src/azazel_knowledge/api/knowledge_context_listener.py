@@ -1,6 +1,13 @@
 """Default-disabled product entry for the Nexus Knowledge Context mTLS listener.
 
-Lab / interop-only until commissioning. This module assembles only existing
+Ready for a first isolated acceptance only; NOT ready for production use. It
+listens only when an explicit config (``enabled = true`` and all 16 fields) is
+given, and refuses to start otherwise. Production additionally needs values and
+operations that are not decided here: holders, rotation and revocation approvers
+for the keys and CA, retention and rotation of audit and connection records,
+clock synchronisation policy, a source-address ACL (not enforced by the
+product), and production TTL/concurrency/body/ATT&CK-age values. Until those
+are answered the listener stays disabled. This module assembles only existing
 product classes (``create_app`` settings, ``KnowledgeContextTransportConfig``,
 ``PinnedCertificatePeerAuthenticator``, ``KnowledgeContextMtlsListener``) plus
 two small pieces that did not exist: a response signer backed by a dedicated
@@ -27,6 +34,7 @@ import signal
 import stat
 import sys
 import threading
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -341,6 +349,37 @@ def _check_dir(value: str, field: str) -> None:
         raise _refuse(f"{field}: unsafe directory")
 
 
+_OUTCOMES = frozenset((
+    "over_capacity", "tls_refused", "peer_refused", "served",
+    "transport_timeout", "transport_error",
+))
+_record_lock = threading.Lock()
+
+
+def record_connection(outcome: str, ip: str, port: int) -> None:
+    """Write exactly one fixed-format line to stderr. Best effort: never raises.
+
+    Only a closed outcome code, an IP address parsed from the socket and an integer
+    port are accepted; anything else is dropped, so no request content can reach it.
+    """
+    try:
+        if outcome not in _OUTCOMES:
+            if not (outcome.startswith("http_") and outcome[5:].isascii()
+                    and outcome[5:].isdecimal() and 100 <= int(outcome[5:]) <= 599):
+                return
+        address = ipaddress.ip_address(ip.split("%", 1)[0])
+        if type(port) is not int or not 0 <= port <= 65535:
+            return
+        host = f"[{address}]" if address.version == 6 else str(address)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with _record_lock:
+            sys.stderr.write(f"conn {stamp} {outcome} {host}:{port}\n")
+            sys.stderr.flush()
+    except BaseException as exc:  # noqa: BLE001
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+
+
 def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
     """Validate everything and assemble the (not yet started) listener."""
     _check_bounds(cfg)
@@ -394,7 +433,9 @@ def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
     app = create_app(settings)
     try:
         # Malformed or mismatched cert/key/CA surface here (ssl.SSLError / OSError).
-        return KnowledgeContextMtlsListener(app, listener_config)
+        return KnowledgeContextMtlsListener(
+            app, listener_config, connection_recorder=record_connection
+        )
     except (OSError, ValueError):
         raise _refuse("tls: server certificate, key or client CA is malformed or mismatched") from None
 
@@ -407,7 +448,11 @@ def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="azazel-knowledge-context-listener",
-        description="Lab/interop-only Knowledge Context mTLS listener (disabled unless configured).",
+        description=(
+            "Knowledge Context mTLS listener. Ready for a first isolated acceptance, not for "
+            "production; disabled unless the explicit config is given. One line per "
+            "connection is written to stderr."
+        ),
     )
     parser.add_argument("--config", required=True, help="absolute path to the listener TOML file")
     args = parser.parse_args(argv)
@@ -443,6 +488,7 @@ __all__ = [
     "build_listener",
     "main",
     "parse_config",
+    "record_connection",
     "read_safe_file",
 ]
 

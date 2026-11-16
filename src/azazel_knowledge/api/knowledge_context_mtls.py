@@ -203,9 +203,20 @@ class _Server(http.server.ThreadingHTTPServer):
         self.server_name = str(self.server_address[0])
         self.server_port = self.server_address[1]
 
+    def _record(self, outcome: str, client_address: Any) -> None:
+        """Best-effort, one line per connection. Never raises, never alters a decision."""
+        try:
+            recorder = self.listener._connection_recorder
+            if recorder is not None:
+                recorder(outcome, str(client_address[0]), int(client_address[1]))
+        except BaseException as exc:  # noqa: BLE001
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+
     def process_request(self, request, client_address):  # type: ignore[override]
         if not self.listener._slots.acquire(blocking=False):
             self.shutdown_request(request)  # over capacity: drop before any TLS work
+            self._record("over_capacity", client_address)
             return
         try:
             super().process_request(request, client_address)
@@ -221,23 +232,32 @@ class _Server(http.server.ThreadingHTTPServer):
 
     def finish_request(self, request, client_address):  # type: ignore[override]
         cfg = self.listener.config
-        deadline = time.monotonic() + cfg.deadline_seconds
-        request.settimeout(max(0.001, deadline - time.monotonic()))
+        outcome = "transport_error"
         try:
-            tls = self.listener.ssl_context.wrap_socket(
-                request, server_side=True, do_handshake_on_connect=False
-            )
-            tls.setblocking(False)
-            self._handshake_until(tls, deadline)
-        except (OSError, ssl.SSLError, TimeoutError, ValueError):
-            return  # handshake refused (incl. no/invalid client cert): no response
-        try:
-            _Handler(tls, client_address, self, deadline=deadline)
-        finally:
+            deadline = time.monotonic() + cfg.deadline_seconds
+            request.settimeout(max(0.001, deadline - time.monotonic()))
             try:
-                tls.close()
-            except OSError:
-                pass
+                tls = self.listener.ssl_context.wrap_socket(
+                    request, server_side=True, do_handshake_on_connect=False
+                )
+                tls.setblocking(False)
+                self._handshake_until(tls, deadline)
+            except TimeoutError:
+                outcome = "transport_timeout"
+                return
+            except (OSError, ssl.SSLError, ValueError):
+                outcome = "tls_refused"
+                return  # handshake refused (incl. no/invalid client cert): no response
+            try:
+                handler = _Handler(tls, client_address, self, deadline=deadline)
+                outcome = handler.outcome or "transport_error"
+            finally:
+                try:
+                    tls.close()
+                except OSError:
+                    pass
+        finally:
+            self._record(outcome, client_address)
 
     @staticmethod
     def _handshake_until(tls: ssl.SSLSocket, deadline: float) -> None:
@@ -266,6 +286,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def __init__(self, request, client_address, server, *, deadline: float) -> None:
         self._deadline = deadline
+        self.outcome: str | None = None
         super().__init__(request, client_address, server)
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -278,6 +299,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return left
 
     def _reply(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
+        if self.outcome is None:
+            self.outcome = (
+                "served" if status == 200 else "peer_refused" if status == 401 else f"http_{status}"
+            )
         try:
             reason = HTTPStatus(status).phrase.encode("ascii")
             response = [b"HTTP/1.0 " + str(status).encode("ascii") + b" " + reason + b"\r\n"]
@@ -336,8 +361,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except (TimeoutError, socket.timeout):
             # The absolute transport deadline is exhausted; close without
             # promising an HTTP response that can no longer be sent in-budget.
+            self.outcome = self.outcome or "transport_timeout"
             return
         except OSError:
+            self.outcome = self.outcome or "transport_error"
             return
         except Exception:  # noqa: BLE001 -- listener failures fail closed
             self._reply(*_json(503, "knowledge_context_unavailable"))
@@ -408,7 +435,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 class KnowledgeContextMtlsListener:
     """Serve the Knowledge Context route over mutually authenticated TLS."""
 
-    def __init__(self, app: FastAPI, config: MtlsListenerConfig) -> None:
+    def __init__(
+        self,
+        app: FastAPI,
+        config: MtlsListenerConfig,
+        *,
+        connection_recorder: Callable[[str, str, int], None] | None = None,
+    ) -> None:
         transport = app.state.settings.knowledge_context_transport
         if transport is None or not transport.enabled:
             raise ValueError("an enabled knowledge_context_transport profile is required")
@@ -416,6 +449,7 @@ class KnowledgeContextMtlsListener:
             raise ValueError("the transport must use PinnedCertificatePeerAuthenticator")
         self.app = app
         self.config = config
+        self._connection_recorder = connection_recorder
         self.ssl_context = build_server_ssl_context(config)
         self._slots = threading.BoundedSemaphore(config.max_concurrency)
         self._app_slots = threading.BoundedSemaphore(config.max_concurrency)
