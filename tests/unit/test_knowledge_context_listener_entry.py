@@ -512,21 +512,35 @@ def test_planned_boundary_values_are_accepted_and_neighbours_refused(env, capsys
     _run_refusal(_write_cfg(tmp, {**cfg, "max_concurrency": 0}), capsys)
 
 
-def test_one_line_per_connection_for_served_refused_and_oversize(env, capsys):
+def test_one_line_per_connection_for_served_and_peer_refused(env, capsys):
     tmp, pki, values = env
-    listener, values = _started(env, max_body_bytes=2048)
+    listener, values = _started(env)
     lines: list[str] = []
     try:
         port = values["bind_port"]
-        assert _request(port, pki, tmp)["status"] in (200, 413)
+        assert _request(port, pki, tmp)["status"] == 200
         assert _request(port, pki, tmp, cert="other")["status"] == 401
         _wait_lines(capsys, 2, lines)
     finally:
         listener.stop()
-    kinds = [ln.split()[2] for ln in lines]
-    assert len(lines) == 2, lines
-    assert kinds[1] == "peer_refused"
-    assert kinds[0] in ("served", "http_413")
+    assert [ln.split()[2] for ln in lines] == ["served", "peer_refused"], lines
+
+
+def test_body_over_the_limit_is_recorded_as_http_413_and_never_served(env, capsys):
+    tmp, pki, values = env
+    listener, values = _started(env, max_body_bytes=100)  # the ~400 byte request is over it
+    lines: list[str] = []
+    try:
+        # The server answers 413 from the declared Content-Length without reading the
+        # body, so the client may see the 413 or a reset (delivery of the response is
+        # racy with the unread body). It is never accepted; the server-side record
+        # below is the deterministic evidence and is pinned.
+        oversize = _request(values["bind_port"], pki, tmp)
+        assert oversize.get("status", 413) == 413, oversize
+        _wait_lines(capsys, 1, lines)
+    finally:
+        listener.stop()
+    assert [ln.split()[2] for ln in lines] == ["http_413"], lines
 
 
 def test_tls_failure_and_over_capacity_are_recorded_once(env, capsys):
