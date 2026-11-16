@@ -151,6 +151,57 @@ operators and notification path are recorded. Tests may inject ephemeral
 credentials; production credentials and TLS settings are not part of this
 change.
 
+### Product start entry (lab / interop-only, disabled by default)
+
+`azazel-knowledge-context-listener --config /abs/path/listener.toml` starts the
+listener above from an explicit file. It is lab/interop-only until
+commissioning completes. Nothing starts it automatically, and without a config
+that sets `enabled = true` it refuses to run. It needs the `api` extra and
+Python 3.11 or later. It uses the real system clock, takes every path and
+setting from the config file only (it consults no `AZAZEL_*` variable and
+importing it does not build the environment-configured `app`), trusts only
+`client_ca_file` rather than the system store, never generates keys, and never
+prints key material (its only output is the bound address and the signing
+`key_id`). It refuses to start if the server certificate is outside its
+validity window, and if it cannot prove the response key differs from
+`secrets/node_signing_key` (unreadable or untraversable counts as unproven;
+only a positively absent node key passes). Remaining limitation: file checks
+use the path and the TLS library then reopens cert/key by path, so a writer who
+can replace those files between check and load is outside the guarantee; keep
+the directories owner-only.
+
+The TOML schema is closed: every field below is required, unknown fields are
+refused, and there are no defaults.
+
+| Field | Constraint |
+|---|---|
+| `enabled` | exactly `true` |
+| `bind_host`, `bind_port` | exact IPv4/IPv6 literal (no wildcard, multicast, scope id or DNS name); port 1..65535 |
+| `knowledge_root`, `config_dir` | absolute, symlink-free directories not group/other writable |
+| `server_cert_file`, `server_key_file`, `client_ca_file` | PEM; cert/key must match and the CA must load |
+| `expected_peer_id`, `client_cert_sha256` | one peer ID and one lowercase 64-hex DER SHA-256 pin |
+| `response_signing_key_file` | 32-byte raw Ed25519 seed, same format as `secrets/node_signing_key` but a different, dedicated key; refused if it is that file or has the same bytes |
+| `revocation_file` | see below |
+| `max_ttl_seconds` | 1..30 |
+| `deadline_seconds`, `max_concurrency`, `max_body_bytes` | (0, 60]; 1..64; 1..`CONTEXT_MAX_BODY_BYTES` |
+
+Every file must be an absolute path with no symlink in it, a regular file owned
+by the running user (root also for certificates, the CA and the revocation
+file), not group/other writable; private keys (`server_key_file`,
+`response_signing_key_file`) must have mode `0600` or tighter.
+
+The revocation source is a text file: first line exactly
+`# azazel-knowledge-revoked-client-cert-sha256 v1`, then one lowercase 64-hex
+DER SHA-256 per line (blank lines and `#` comments allowed). A missing,
+unreadable or malformed file refuses startup, and so does a file that lists the
+pinned certificate. It is re-read on every request; if it later becomes
+unreadable the request is denied, never treated as "not revoked". The empty
+list is a valid, explicit statement that nothing is revoked.
+
+The response key is created by the operator out of band (for example
+`head -c 32 /dev/urandom > key; chmod 600 key`) and its public key is
+registered in Nexus's signed Knowledge registry; the entry point only loads it.
+
 ## Read surfaces (operator-facing, advisory-only)
 
 These endpoints are `Scope.READ` only, return plain JSON, and stay on the

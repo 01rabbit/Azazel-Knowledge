@@ -311,4 +311,12 @@ def create_app(settings: Settings, *, eager_runtime: bool = True) -> FastAPI:
     return app
 
 
-app = create_app(settings_from_env(), eager_runtime=False)
+def __getattr__(name: str):
+    # Lazy module-level ``app`` for ``uvicorn azazel_knowledge.api.app:app``.
+    # Importing this module must not read AZAZEL_ROOT / AZAZEL_CONFIG_DIR or scan
+    # secrets; only an explicit attribute access builds the env-configured app.
+    if name == "app":
+        built = create_app(settings_from_env(), eager_runtime=False)
+        globals()["app"] = built
+        return built
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
