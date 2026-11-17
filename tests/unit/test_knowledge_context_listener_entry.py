@@ -465,3 +465,250 @@ def test_pyproject_declares_the_console_script():
     text = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text()
     assert ('azazel-knowledge-context-listener = '
             '"azazel_knowledge.api.knowledge_context_listener:main"') in text
+
+
+# ---- connection records (stderr, one line per connection) ----------------
+
+import re
+
+_CONN_LINE = re.compile(
+    r"conn \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ "
+    r"(over_capacity|tls_refused|peer_refused|served|transport_timeout|transport_error|http_[1-5]\d\d) "
+    r"(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\]):\d+")
+
+
+def _conn_lines(text: str) -> list[str]:
+    lines = [ln for ln in text.splitlines() if ln.startswith("conn ")]
+    for ln in lines:
+        assert _CONN_LINE.fullmatch(ln), ln
+    return lines
+
+
+def _started(env, **over):
+    tmp, pki, values = env
+    values = {**values, **over}
+    listener = entry.build_listener(entry.parse_config(_write_cfg(tmp, values).read_bytes()))
+    listener.start()
+    return listener, values
+
+
+def _wait_lines(capsys, count: int, acc: list[str]) -> list[str]:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        acc.extend(_conn_lines(capsys.readouterr().err))
+        if len(acc) >= count:
+            break
+        time.sleep(0.05)
+    return acc
+
+
+def test_planned_boundary_values_are_accepted_and_neighbours_refused(env, capsys):
+    tmp, _pki, values = env
+    cfg = {**values, "max_ttl_seconds": 30, "max_concurrency": 1}
+    listener = entry.build_listener(entry.parse_config(_write_cfg(tmp, cfg).read_bytes()))
+    assert listener.config.max_concurrency == 1
+    assert listener.app.state.settings.knowledge_context_transport.max_ttl_seconds == 30
+    _run_refusal(_write_cfg(tmp, {**cfg, "max_ttl_seconds": 31}), capsys)
+    _run_refusal(_write_cfg(tmp, {**cfg, "max_concurrency": 0}), capsys)
+
+
+def test_one_line_per_connection_for_served_and_peer_refused(env, capsys):
+    tmp, pki, values = env
+    listener, values = _started(env)
+    lines: list[str] = []
+    try:
+        port = values["bind_port"]
+        assert _request(port, pki, tmp)["status"] == 200
+        assert _request(port, pki, tmp, cert="other")["status"] == 401
+        _wait_lines(capsys, 2, lines)
+    finally:
+        listener.stop()
+    assert [ln.split()[2] for ln in lines] == ["served", "peer_refused"], lines
+
+
+def test_body_over_the_limit_is_recorded_as_http_413_and_never_served(env, capsys):
+    tmp, pki, values = env
+    listener, values = _started(env, max_body_bytes=100)  # the ~400 byte request is over it
+    lines: list[str] = []
+    try:
+        # The server answers 413 from the declared Content-Length without reading the
+        # body, so the client may see the 413 or a reset (delivery of the response is
+        # racy with the unread body). It is never accepted; the server-side record
+        # below is the deterministic evidence and is pinned.
+        oversize = _request(values["bind_port"], pki, tmp)
+        assert oversize.get("status", 413) == 413, oversize
+        _wait_lines(capsys, 1, lines)
+    finally:
+        listener.stop()
+    assert [ln.split()[2] for ln in lines] == ["http_413"], lines
+
+
+def test_tls_failure_and_over_capacity_are_recorded_once(env, capsys):
+    tmp, _pki, values = env
+    listener, values = _started(env, max_concurrency=1)
+    lines: list[str] = []
+    try:
+        port = values["bind_port"]
+        holder = socket.create_connection(("127.0.0.1", port))  # occupies the only slot
+        try:
+            time.sleep(0.3)
+            with socket.create_connection(("127.0.0.1", port)) as second:
+                second.settimeout(5)
+                try:
+                    second.recv(1)
+                except OSError:
+                    pass
+            _wait_lines(capsys, 1, lines)
+        finally:
+            holder.sendall(b"GET / HTTP/1.1\r\n\r\n")  # not TLS
+            holder.close()
+        _wait_lines(capsys, 2, lines)
+    finally:
+        listener.stop()
+    kinds = sorted(ln.split()[2] for ln in lines)
+    assert kinds == ["over_capacity", "tls_refused"], lines
+
+
+def test_record_connection_accepts_only_closed_fields(capsys):
+    entry.record_connection("served", "127.0.0.1", 4000)
+    entry.record_connection("http_413", "::1", 4001)
+    entry.record_connection("served\nconn forged", "127.0.0.1", 1)
+    entry.record_connection("served", "127.0.0.1\nx", 1)
+    entry.record_connection("served", "evil.example", 1)
+    entry.record_connection("http_99", "127.0.0.1", 1)
+    entry.record_connection("served", "127.0.0.1", "80")  # type: ignore[arg-type]
+    entry.record_connection("served", "127.0.0.1", 70000)
+    entry.record_connection("anything", "127.0.0.1", 1)
+    out = capsys.readouterr().err.splitlines()
+    assert len(out) == 2
+    assert out[0].endswith("served 127.0.0.1:4000") and out[1].endswith("http_413 [::1]:4001")
+    _conn_lines("\n".join(out))
+
+
+def test_recorder_failure_does_not_change_the_response(env, capsys):
+    tmp, pki, values = env
+    listener = entry.build_listener(
+        entry.parse_config(_write_cfg(tmp, values).read_bytes()))
+    def boom(*_a):
+        raise RuntimeError("recorder down")
+    listener._connection_recorder = boom
+    listener.start()
+    try:
+        assert _request(values["bind_port"], pki, tmp)["status"] == 200
+        assert _request(values["bind_port"], pki, tmp, cert="other")["status"] == 401
+    finally:
+        listener.stop()
+    err = capsys.readouterr().err
+    assert "recorder down" not in err and "Traceback" not in err
+
+
+def test_connection_lines_leak_nothing_from_the_request(env, capsys):
+    tmp, pki, values = env
+    listener, values = _started(env)
+    lines: list[str] = []
+    try:
+        _request(values["bind_port"], pki, tmp)
+        _wait_lines(capsys, 1, lines)
+    finally:
+        listener.stop()
+    text = "\n".join(lines)
+    assert lines and "BEGIN" not in text and "Content-" not in text and SEED.hex() not in text
+
+
+# ---- review fixes: undelivered responses, process_request failure, recorder faults ----
+
+
+def _collecting(listener) -> list[tuple[str, str, int]]:
+    seen: list[tuple[str, str, int]] = []
+    listener._connection_recorder = lambda o, ip, port: seen.append((o, ip, port))
+    return seen
+
+
+def _wait_seen(seen: list, count: int) -> None:
+    deadline = time.monotonic() + 10
+    while len(seen) < count and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+@pytest.mark.parametrize("exc, expected", [
+    (TimeoutError("response write deadline"), "transport_timeout"),
+    (BrokenPipeError(), "transport_error"),
+])
+def test_undelivered_response_is_never_recorded_as_a_success(env, monkeypatch, exc, expected):
+    from azazel_knowledge.api import knowledge_context_mtls as mtls
+    tmp, pki, values = env
+    listener = entry.build_listener(entry.parse_config(_write_cfg(tmp, values).read_bytes()))
+    seen = _collecting(listener)
+
+    def failing_send(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(mtls, "_send_until", failing_send)
+    listener.start()
+    try:
+        _request(values["bind_port"], pki, tmp)
+        _wait_seen(seen, 1)
+    finally:
+        listener.stop()
+    assert [o for o, _ip, _p in seen] == [expected], seen
+
+
+def test_process_request_failure_records_once_releases_slot_and_propagates(env, monkeypatch):
+    import socketserver
+    from azazel_knowledge.api import knowledge_context_mtls as mtls
+    tmp, _pki, values = env
+    listener = entry.build_listener(
+        entry.parse_config(_write_cfg(tmp, {**values, "max_concurrency": 1}).read_bytes()))
+    seen = _collecting(listener)
+
+    def failing(self, request, client_address):
+        raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(socketserver.ThreadingMixIn, "process_request", failing)
+    server = mtls._Server(listener)
+    try:
+        sock = socket.socket()
+        with pytest.raises(RuntimeError, match="cannot start thread"):
+            server.process_request(sock, ("127.0.0.1", 4242))
+        sock.close()
+        assert seen == [("transport_error", "127.0.0.1", 4242)]
+        assert listener._slots.acquire(blocking=False)  # the slot was released
+        listener._slots.release()
+    finally:
+        server.server_close()
+
+
+@pytest.mark.parametrize("fault", [SystemExit, KeyboardInterrupt, RuntimeError])
+def test_recorder_faults_including_exit_and_interrupt_are_contained(env, fault):
+    tmp, pki, values = env
+    listener = entry.build_listener(entry.parse_config(_write_cfg(tmp, values).read_bytes()))
+    calls = []
+
+    def boom(*_a):
+        calls.append(1)
+        raise fault()
+
+    listener._connection_recorder = boom
+    listener.start()
+    try:
+        for _ in range(3):  # the accept loop keeps working after each fault
+            assert _request(values["bind_port"], pki, tmp)["status"] == 200
+        assert _request(values["bind_port"], pki, tmp, cert="other")["status"] == 401
+        deadline = time.monotonic() + 10
+        while len(calls) < 4 and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        listener.stop()
+    assert len(calls) == 4
+
+
+def test_record_connection_contains_stderr_failures(monkeypatch):
+    class Broken:
+        def write(self, _s):
+            raise SystemExit
+
+        def flush(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(entry.sys, "stderr", Broken())
+    entry.record_connection("served", "127.0.0.1", 1)  # must not raise
