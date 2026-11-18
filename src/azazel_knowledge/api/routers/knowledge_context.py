@@ -11,6 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from nacl.signing import VerifyKey
 
+try:
+    from azazel_fabric.knowledge_context_clocklab import (
+        KnowledgeContextRequestV2, canonical_clocklab_bytes, request_v1_projection,
+    )
+except ImportError:  # Stable api profile has no lab contract.
+    KnowledgeContextRequestV2 = None
+    canonical_clocklab_bytes = None
+    request_v1_projection = None
 from azazel_fabric.knowledge_context import (
     KnowledgeContextRequestV1,
     canonical_knowledge_context_bytes,
@@ -174,6 +182,12 @@ def _parse_envelope(request: Request, raw_body: bytes) -> KnowledgeContextReques
     if not _is_json_media_type(request.headers.get("content-type")):
         raise invalid
     try:
+        config = request.app.state.settings.knowledge_context_transport
+        if config.clock_contract is not None:
+            body = KnowledgeContextRequestV2.model_validate(json.loads(raw_body))
+            if body.contract_id != config.clock_contract.contract_id:
+                raise ValueError("clocklab policy mismatch")
+            return body
         return KnowledgeContextRequestV1.model_validate(json.loads(raw_body))
     except (ValueError, ValidationError, RecursionError):
         # ValueError covers JSON decode and UnicodeDecodeError; pydantic's
@@ -185,7 +199,8 @@ def _parse_envelope(request: Request, raw_body: bytes) -> KnowledgeContextReques
 def _ordinary_response(request, body, config, peer_id, raw_body):
     """Existing IOC/legacy path, unchanged: Knowledge /v1/context -> Fabric projection."""
     try:
-        context_request = from_knowledge_context_request(body)
+        context_request = from_knowledge_context_request(
+            request_v1_projection(body) if type(body) is KnowledgeContextRequestV2 else body)
     except (KnowledgeContextAdaptationError, ValidationError, TypeError, ValueError):
         raise HTTPException(
             status_code=422, detail={"error": "knowledge_context_request_unrepresentable"}
@@ -222,6 +237,7 @@ def _ordinary_response(request, body, config, peer_id, raw_body):
             snapshot_as_of=snapshot_as_of,
             generated_at=generated,
             expires_at=expires,
+            clock_contract=config.clock_contract,
             limitations=(
                 "source-level freshness deadlines are not included in this projection",
             ),
@@ -256,6 +272,7 @@ def _technique_response(request, body, config, peer_id):
         semantic = attack_ctx.build_response(
             body, corpus, provider_id="azazel-knowledge", generated_at=generated,
             response_ttl=timedelta(seconds=config.max_ttl_seconds), max_age=max_age,
+            clock_contract=config.clock_contract,
         )
     except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
         raise HTTPException(
@@ -300,20 +317,30 @@ def post_knowledge_context(
             status_code=422, detail={"error": "attack_technique_request_invalid"}
         ) from None
 
+    if config.clock_contract is not None:
+        try:
+            config.clock_health.check(config.clock_contract)
+        except Exception:
+            raise HTTPException(status_code=503, detail={"error": "clock_health_unavailable"}) from None
     if technique_request:
         semantic, generated, expires = _technique_response(request, body, config, peer_id)
     else:
         semantic, generated, expires = _ordinary_response(request, body, config, peer_id, raw_body)
     try:
-        semantic_bytes = canonical_knowledge_context_bytes(semantic)
+        semantic_bytes = (canonical_clocklab_bytes(semantic) if config.clock_contract is not None
+                          else canonical_knowledge_context_bytes(semantic))
     except Exception:  # noqa: BLE001 -- projection errors fail closed without echoing input
         raise HTTPException(
             status_code=503, detail={"error": "knowledge_context_projection_unavailable"}
         ) from None
 
     try:
+        clocklab = config.clock_contract is not None
+        if clocklab:
+            config.clock_health.check(config.clock_contract)
+        domain = b"azazel-nexus/knowledge-context-envelope/v2\x00" if clocklab else _ENVELOPE_DOMAIN
         document = {
-            "schema": _ENVELOPE_SCHEMA,
+            "schema": "azazel-nexus/knowledge-context-envelope/2" if clocklab else _ENVELOPE_SCHEMA,
             "key_id": config.signer.key_id,
             "issued_at": to_rfc3339(generated),
             "expires_at": to_rfc3339(expires),
@@ -327,10 +354,10 @@ def post_knowledge_context(
         envelope = _canonical(document)
         if len(envelope) + 64 > _MAX_ENVELOPE_BYTES:
             raise ValueError("signed response exceeds envelope size limit")
-        signature = config.signer.sign(_ENVELOPE_DOMAIN + envelope)
+        signature = config.signer.sign(domain + envelope)
         if not isinstance(signature, bytes) or len(signature) != 64:
             raise ValueError("signer returned an invalid Ed25519 signature")
-        VerifyKey(public_key).verify(_ENVELOPE_DOMAIN + envelope, signature)
+        VerifyKey(public_key).verify(domain + envelope, signature)
     except Exception:  # noqa: BLE001 -- signer/provider failures fail closed
         raise HTTPException(
             status_code=503, detail={"error": "knowledge_context_signing_unavailable"}

@@ -30,6 +30,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+try:
+    from azazel_fabric.knowledge_context_clocklab import (
+        KnowledgeContextRequestV2, KnowledgeContextResponseV2,
+        request_v1_projection, assert_response_correlates_v2,
+    )
+except ImportError:  # Stable api profile has no lab contract.
+    KnowledgeContextRequestV2 = None
+    KnowledgeContextResponseV2 = None
+    request_v1_projection = None
+    assert_response_correlates_v2 = None
 from azazel_fabric.knowledge_context import (
     RESPONSE_SCHEMA_VERSION,
     KnowledgeContextRequestV1,
@@ -234,7 +244,7 @@ def _assess(conn, generated_at, max_age, current_generation, technique_ids, snap
 
 def build_response(
     request: KnowledgeContextRequestV1, corpus: Corpus, *, provider_id: str,
-    generated_at: datetime, response_ttl: timedelta, max_age: timedelta,
+    generated_at: datetime, response_ttl: timedelta, max_age: timedelta, clock_contract=None,
 ) -> KnowledgeContextResponseV1:
     facts: list[dict[str, Any]] = []
     states: list[str] = []
@@ -284,5 +294,11 @@ def build_response(
         "expires_at": to_rfc3339(expires),
     }
     response = KnowledgeContextResponseV1.model_validate(payload)
-    assert_response_correlates(request, response)
+    if type(request) is KnowledgeContextRequestV2:
+        value = response.model_dump(mode="python")
+        value.update(schema_version="knowledge-context-response/v2", contract_id=request.contract_id)
+        response = KnowledgeContextResponseV2.model_validate(value)
+        assert_response_correlates_v2(request, response, contract=clock_contract)
+    else:
+        assert_response_correlates(request, response)
     return response

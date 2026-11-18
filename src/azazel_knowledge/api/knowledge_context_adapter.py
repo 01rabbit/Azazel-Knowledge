@@ -65,6 +65,16 @@ import idna
 from pydantic import ValidationError
 
 from azazel_fabric.cti_contracts import assert_advisory_only
+try:
+    from azazel_fabric.knowledge_context_clocklab import (
+        KnowledgeContextRequestV2, KnowledgeContextResponseV2,
+        request_v1_projection, assert_response_correlates_v2,
+    )
+except ImportError:  # Stable api profile has no lab contract.
+    KnowledgeContextRequestV2 = None
+    KnowledgeContextResponseV2 = None
+    request_v1_projection = None
+    assert_response_correlates_v2 = None
 from azazel_fabric.knowledge_context import (
     MAX_FACTS,
     MAX_LIMITATIONS,
@@ -356,6 +366,7 @@ def to_knowledge_context_response(
     expires_at: Any,
     unknowns: Iterable[str] = (),
     limitations: Iterable[str] = (),
+    clock_contract=None,
 ) -> KnowledgeContextResponseV1:
     """Map a Knowledge context answer to the Fabric response profile.
 
@@ -369,6 +380,11 @@ def to_knowledge_context_response(
 
     if not isinstance(api_response, ContextResponse):
         raise TypeError("api_response must be a ContextResponse")
+    clock_request = request if type(request) is KnowledgeContextRequestV2 else None
+    if clock_request is not None:
+        if clock_contract is None:
+            raise ValueError("clocklab contract required")
+        request = request_v1_projection(clock_request)
     if type(request) is not KnowledgeContextRequestV1:
         raise TypeError("request must be a KnowledgeContextRequestV1")
 
@@ -489,7 +505,14 @@ def to_knowledge_context_response(
     response = _validate(KnowledgeContextResponseV1, payload, "response")
 
     try:
-        assert_response_correlates(request, response)
+        if clock_request is not None:
+            value = response.model_dump(mode="python")
+            value.update(schema_version="knowledge-context-response/v2",
+                         contract_id=clock_request.contract_id)
+            response = KnowledgeContextResponseV2.model_validate(value)
+            assert_response_correlates_v2(clock_request, response, contract=clock_contract)
+        else:
+            assert_response_correlates(request, response)
     except (TypeError, ValueError):
         raise KnowledgeContextAdaptationError("response does not correlate with the request") from None
     return response
