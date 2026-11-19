@@ -98,14 +98,19 @@ def test_one_ms_local_step_boundary_and_publication_counterexample(delta_ns,acce
         with pytest.raises(ValueError,match='latched'):h.check(c)
 
 
-def test_previous_policy_id_cannot_be_signed_under_new_contract(tmp_path):
+@pytest.mark.parametrize("old_id", [
+    "sha256:cf12dddea0953a51e8fb91b4524b6064118d1405a92601f3f89a8a8f28603de5",
+    "sha256:62281d081b7905bc4447d2f920bdb504e88edfdc86300a01bcf76d6a80246e21",
+])
+def test_previous_policy_id_cannot_be_signed_under_new_contract(tmp_path,old_id):
     client,settings,*_=make_client(tmp_path);_configure(settings);c=ClockContract(5000)
     settings.knowledge_context_transport=replace(settings.knowledge_context_transport,clock_contract=c,clock_health=Health())
-    body=_request();body.update(schema_version='knowledge-context-request/v2',contract_id='sha256:cf12dddea0953a51e8fb91b4524b6064118d1405a92601f3f89a8a8f28603de5')
+    body=_request();body.update(schema_version='knowledge-context-request/v2',contract_id=old_id)
     assert client.post('/v1/knowledge-context',json=body).status_code==422
 
 
-def test_old_fabric_policy_revision_is_rejected_even_for_same_type(monkeypatch):
+@pytest.mark.parametrize("old_schema", ["azazel-clocklab-policy/1", "azazel-clocklab-policy/2"])
+def test_old_fabric_policy_revision_is_rejected_even_for_same_type(monkeypatch,old_schema):
     c,h,_,_=local_health()
-    monkeypatch.setattr(ClockContract,'as_dict',lambda self:{'schema':'azazel-clocklab-policy/1'})
+    monkeypatch.setattr(ClockContract,'as_dict',lambda self:{'schema':old_schema})
     with pytest.raises(ValueError,match='revision'):h.check(c)

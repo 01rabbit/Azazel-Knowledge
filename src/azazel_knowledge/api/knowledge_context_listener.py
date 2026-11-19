@@ -320,9 +320,11 @@ def parse_config(raw: bytes) -> ListenerProductConfig:
         from azazel_fabric.knowledge_context_clocklab import ClockContract
         try:
             if (type(doc["clock_policy"]) is not dict
-                    or doc["clock_policy"].get("schema") != "azazel-clocklab-policy/2"):
+                    or doc["clock_policy"].get("schema") != "azazel-clocklab-policy/2"
+                    or type(doc["clock_policy"].get("consumer_revision")) is not int
+                    or doc["clock_policy"]["consumer_revision"] != 2):
                 raise ValueError("clock policy revision")
-            ClockContract.from_dict(doc["clock_policy"])
+            ClockContract.from_dict(doc["clock_policy"], consumer_revision=2)
             path = doc["clock_health_path"]
             if type(path) is not str or not os.path.isabs(path):
                 raise ValueError("health path must be absolute")
@@ -424,7 +426,7 @@ def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
         if cfg.clock_policy is not None:
             from azazel_fabric.knowledge_context_clocklab import ClockContract
             from azazel_knowledge.api.knowledge_clock_health import LocalClockHealth
-            clock_contract = ClockContract.from_dict(cfg.clock_policy)
+            clock_contract = ClockContract.from_dict(cfg.clock_policy, consumer_revision=2)
             clock_health = LocalClockHealth(cfg.clock_health_path)
             clock_health.check(clock_contract)
         transport = KnowledgeContextTransportConfig(

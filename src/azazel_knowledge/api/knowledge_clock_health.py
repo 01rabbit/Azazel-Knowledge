@@ -64,7 +64,9 @@ class LocalClockHealth:
 
     def _check(self, contract: ClockContract) -> None:
         if (type(contract) is not ClockContract
-                or contract.as_dict().get('schema') != 'azazel-clocklab-policy/2'):
+                or contract.as_dict().get('schema') != 'azazel-clocklab-policy/2'
+                or type(contract.as_dict().get('consumer_revision')) is not int
+                or contract.as_dict()['consumer_revision'] != 2):
             raise ValueError('clock policy revision invalid')
         d = self._read()
         if type(d) is not dict or set(d) != _FIELDS or d['schema'] != 'azazel-clocklab-health/1':

@@ -714,13 +714,14 @@ def test_record_connection_contains_stderr_failures(monkeypatch):
     entry.record_connection("served", "127.0.0.1", 1)  # must not raise
 
 
-def test_old_policy_rejected_before_permissive_old_fabric_loader(env,monkeypatch):
+@pytest.mark.parametrize("policy_revision", [1, 2])
+def test_old_policy_or_old_fabric_without_ack_is_refused(env,monkeypatch,policy_revision):
     from azazel_fabric.knowledge_context_clocklab import ClockContract
     tmp,pki,values=env
     raw=_toml({**values,'clock_health_path':'/run/clock-health.json'})
-    old={'schema':'azazel-clocklab-policy/1','skew_budget_us':5000,
+    old={'schema':f'azazel-clocklab-policy/{policy_revision}','consumer_revision':2,'skew_budget_us':5000,
          'max_observation_age_ms':5000,
-         'contract_id':'sha256:cf12dddea0953a51e8fb91b4524b6064118d1405a92601f3f89a8a8f28603de5'}
+         'contract_id':ClockContract(5000).contract_id}
     raw+='\n[clock_policy]\n'+_toml(old)
     calls=[]
     monkeypatch.setattr(ClockContract,'from_dict',lambda value:calls.append(value))
