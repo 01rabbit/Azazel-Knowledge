@@ -317,8 +317,8 @@ def parse_config(raw: bytes) -> ListenerProductConfig:
         raise _refuse("clock policy and health must be paired")
     extra = {}
     if "clock_policy" in doc:
-        from azazel_fabric.knowledge_context_clocklab import ClockContract
         try:
+            from azazel_fabric.knowledge_context_clocklab import ClockContract
             if (type(doc["clock_policy"]) is not dict
                     or doc["clock_policy"].get("schema") != "azazel-clocklab-policy/2"
                     or type(doc["clock_policy"].get("consumer_revision")) is not int
@@ -328,7 +328,7 @@ def parse_config(raw: bytes) -> ListenerProductConfig:
             path = doc["clock_health_path"]
             if type(path) is not str or not os.path.isabs(path):
                 raise ValueError("health path must be absolute")
-        except (ValueError, TypeError):
+        except (ImportError, ValueError, TypeError):
             raise _refuse("clocklab config invalid") from None
         extra = {k: doc[k] for k in _OPTIONAL_CLOCK_FIELDS}
     return ListenerProductConfig(**{k: doc[k] for k in FIELDS if k != "enabled"}, **extra)

@@ -3,7 +3,12 @@ from dataclasses import replace
 import json
 import pytest
 from nacl.signing import VerifyKey
-from azazel_fabric.knowledge_context_clocklab import ClockContract
+# Stable api deliberately has no lab contract; candidate CI requires this
+# module explicitly before collecting, so a missing candidate cannot pass by skip.
+ClockContract = pytest.importorskip(
+    "azazel_fabric.knowledge_context_clocklab",
+    reason="clocklab tests require the explicit candidate Fabric profile",
+).ClockContract
 from azazel_knowledge.api.knowledge_clock_health import LocalClockHealth
 from azazel_knowledge.core.clock import parse_rfc3339, to_rfc3339
 from datetime import timedelta

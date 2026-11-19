@@ -462,7 +462,11 @@ def test_the_pinned_fabric_carries_the_canonical_vocabulary():
     assert len(stable) == 1, f"Expected exactly one stable Fabric api-extra pin: {stable}"
     assert stable[0].endswith("@v0.10.0"), stable
     assert len(candidate) == 1, f"Expected exactly one candidate Fabric pin: {candidate}"
-    assert candidate[0].endswith("@v0.10.0"), candidate
+    # This explicit candidate pin is separate from the stable API tag.
+    assert candidate[0] == (
+        "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git"
+        "@a4fa5535d3d0a0c9ed2694ea15b4b474ed587aa1"
+    ), candidate
     assert {member.value for member in DefensiveState} == {
         "OBSERVE",
         "NOTIFY",

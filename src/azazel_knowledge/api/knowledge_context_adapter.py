@@ -506,9 +506,9 @@ def to_knowledge_context_response(
 
     try:
         if clock_request is not None:
-            value = response.model_dump(mode="python")
-            value.update(schema_version="knowledge-context-response/v2",
-                         contract_id=clock_request.contract_id)
+            value = {**response.model_dump(mode="python"),
+                     "schema_version": "knowledge-context-response/v2",
+                     "contract_id": clock_request.contract_id}
             response = KnowledgeContextResponseV2.model_validate(value)
             assert_response_correlates_v2(clock_request, response, contract=clock_contract)
         else:
