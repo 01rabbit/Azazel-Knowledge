@@ -83,3 +83,29 @@ def test_technique_v2_uses_same_signed_policy(tmp_path):
     VerifyKey(signer.public_key).verify(b'azazel-nexus/knowledge-context-envelope/v2\0'+r.content[64:],r.content[:64])
     d=json.loads(r.content[64:]);assert d['payload']['contract_id']==c.contract_id
     assert d['payload']['facts'][0]['predicate']=='coverage'
+
+
+@pytest.mark.parametrize('delta_ns,accepted',[
+    (-1_000_001,False),(-1_000_000,True),(1_000_000,True),(1_000_001,False),
+    (-1_999_000,False),(1_999_000,False),
+])
+def test_one_ms_local_step_boundary_and_publication_counterexample(delta_ns,accepted):
+    c,h,clock,d=local_health();clock['mono']=d['sample_boottime_ns'];clock['wall']=d['sample_wall_ns']+delta_ns
+    if accepted:h.check(c)
+    else:
+        with pytest.raises(ValueError,match='step'):h.check(c)
+        clock['wall']=d['sample_wall_ns']
+        with pytest.raises(ValueError,match='latched'):h.check(c)
+
+
+def test_previous_policy_id_cannot_be_signed_under_new_contract(tmp_path):
+    client,settings,*_=make_client(tmp_path);_configure(settings);c=ClockContract(5000)
+    settings.knowledge_context_transport=replace(settings.knowledge_context_transport,clock_contract=c,clock_health=Health())
+    body=_request();body.update(schema_version='knowledge-context-request/v2',contract_id='sha256:cf12dddea0953a51e8fb91b4524b6064118d1405a92601f3f89a8a8f28603de5')
+    assert client.post('/v1/knowledge-context',json=body).status_code==422
+
+
+def test_old_fabric_policy_revision_is_rejected_even_for_same_type(monkeypatch):
+    c,h,_,_=local_health()
+    monkeypatch.setattr(ClockContract,'as_dict',lambda self:{'schema':'azazel-clocklab-policy/1'})
+    with pytest.raises(ValueError,match='revision'):h.check(c)

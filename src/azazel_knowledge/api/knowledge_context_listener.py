@@ -319,6 +319,9 @@ def parse_config(raw: bytes) -> ListenerProductConfig:
     if "clock_policy" in doc:
         from azazel_fabric.knowledge_context_clocklab import ClockContract
         try:
+            if (type(doc["clock_policy"]) is not dict
+                    or doc["clock_policy"].get("schema") != "azazel-clocklab-policy/2"):
+                raise ValueError("clock policy revision")
             ClockContract.from_dict(doc["clock_policy"])
             path = doc["clock_health_path"]
             if type(path) is not str or not os.path.isabs(path):

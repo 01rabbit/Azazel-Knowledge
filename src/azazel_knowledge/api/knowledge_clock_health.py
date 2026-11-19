@@ -8,6 +8,8 @@ import time
 from threading import Lock
 from azazel_fabric.knowledge_context_clocklab import ClockContract
 
+MAX_OBSERVED_ERROR_US = 1000
+MAX_UNOBSERVED_STEP_NS = 1_000_000
 _FIELDS = {"schema", "boot_id", "sample_boottime_ns", "sample_wall_ns",
            "error_bound_us", "step_counter", "contract_id"}
 
@@ -61,7 +63,9 @@ class LocalClockHealth:
                 raise
 
     def _check(self, contract: ClockContract) -> None:
-        if type(contract) is not ClockContract: raise ValueError('clock policy invalid')
+        if (type(contract) is not ClockContract
+                or contract.as_dict().get('schema') != 'azazel-clocklab-policy/2'):
+            raise ValueError('clock policy revision invalid')
         d = self._read()
         if type(d) is not dict or set(d) != _FIELDS or d['schema'] != 'azazel-clocklab-health/1':
             raise ValueError('clock health malformed')
@@ -73,11 +77,11 @@ class LocalClockHealth:
         age = now_mono - d['sample_boottime_ns']
         if not 0 <= age < contract.max_observation_age_ms * 1_000_000:
             raise ValueError('clock health expired')
-        if d['error_bound_us'] > 1000:
+        if d['error_bound_us'] > MAX_OBSERVED_ERROR_US:
             raise ValueError('clock health error budget exceeded')
         # 100ppm is an explicit lab hypothesis, never a production guarantee.
         residual = abs(now_wall - d['sample_wall_ns'] - age)
-        if residual > 2_000_000 + age // 10_000:
+        if residual > MAX_UNOBSERVED_STEP_NS + age // 10_000:
             raise ValueError('clock health step detected')
         generation = (d['boot_id'], d['step_counter'])
         if self._generation is not None and self._generation != generation:

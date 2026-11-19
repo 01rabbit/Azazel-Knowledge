@@ -36,7 +36,7 @@ api-context-candidate = [
     "fastapi>=0.115,<1",
     "pydantic>=2,<3",
     "uvicorn>=0.30,<1",
-    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@506f89751012ea6c41d95a0d92e45284e9c3d099",
+    "azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@3579ffeab3a1cdd3275e401b09d3f6511010ed9e",
 ]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
 
