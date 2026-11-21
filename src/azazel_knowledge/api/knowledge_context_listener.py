@@ -266,6 +266,7 @@ _STR_FIELDS = (
 )
 _INT_FIELDS = ("bind_port", "max_ttl_seconds", "max_concurrency", "max_body_bytes")
 _NUM_FIELDS = ("deadline_seconds",)
+_OPTIONAL_CLOCK_FIELDS = frozenset(("clock_policy", "clock_health_path"))
 FIELDS = frozenset(("enabled", *_STR_FIELDS, *_INT_FIELDS, *_NUM_FIELDS))
 
 
@@ -286,6 +287,8 @@ class ListenerProductConfig:
     deadline_seconds: float
     max_concurrency: int
     max_body_bytes: int
+    clock_policy: dict | None = None
+    clock_health_path: str | None = None
 
 
 def parse_config(raw: bytes) -> ListenerProductConfig:
@@ -295,7 +298,7 @@ def parse_config(raw: bytes) -> ListenerProductConfig:
         raise _refuse("config: not valid TOML") from None
     if doc.get("enabled") is not True:
         raise _refuse("config: enabled must be explicitly true")
-    unknown = set(doc) - FIELDS
+    unknown = set(doc) - FIELDS - _OPTIONAL_CLOCK_FIELDS
     if unknown:
         raise _refuse("config: unknown field(s): " + ", ".join(sorted(map(str, unknown))[:5]))
     missing = FIELDS - set(doc)
@@ -310,7 +313,25 @@ def parse_config(raw: bytes) -> ListenerProductConfig:
     for name in _NUM_FIELDS:
         if type(doc[name]) not in (int, float):
             raise _refuse(f"config: {name} must be a number")
-    return ListenerProductConfig(**{k: doc[k] for k in FIELDS if k != "enabled"})
+    if bool("clock_policy" in doc) != bool("clock_health_path" in doc):
+        raise _refuse("clock policy and health must be paired")
+    extra = {}
+    if "clock_policy" in doc:
+        try:
+            from azazel_fabric.knowledge_context_clocklab import ClockContract
+            if (type(doc["clock_policy"]) is not dict
+                    or doc["clock_policy"].get("schema") != "azazel-clocklab-policy/2"
+                    or type(doc["clock_policy"].get("consumer_revision")) is not int
+                    or doc["clock_policy"]["consumer_revision"] != 2):
+                raise ValueError("clock policy revision")
+            ClockContract.from_dict(doc["clock_policy"], consumer_revision=2)
+            path = doc["clock_health_path"]
+            if type(path) is not str or not os.path.isabs(path):
+                raise ValueError("health path must be absolute")
+        except (ImportError, ValueError, TypeError):
+            raise _refuse("clocklab config invalid") from None
+        extra = {k: doc[k] for k in _OPTIONAL_CLOCK_FIELDS}
+    return ListenerProductConfig(**{k: doc[k] for k in FIELDS if k != "enabled"}, **extra)
 
 
 def _check_bounds(cfg: ListenerProductConfig) -> None:
@@ -401,6 +422,13 @@ def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
         raise _refuse("client_cert_sha256: pinned certificate is listed as revoked")
 
     try:
+        clock_contract = clock_health = None
+        if cfg.clock_policy is not None:
+            from azazel_fabric.knowledge_context_clocklab import ClockContract
+            from azazel_knowledge.api.knowledge_clock_health import LocalClockHealth
+            clock_contract = ClockContract.from_dict(cfg.clock_policy, consumer_revision=2)
+            clock_health = LocalClockHealth(cfg.clock_health_path)
+            clock_health.check(clock_contract)
         transport = KnowledgeContextTransportConfig(
             peer_authenticator=PinnedCertificatePeerAuthenticator(
                 peer_id=cfg.expected_peer_id,
@@ -411,6 +439,8 @@ def build_listener(cfg: ListenerProductConfig) -> KnowledgeContextMtlsListener:
             max_ttl_seconds=cfg.max_ttl_seconds,
             expected_peer_id=cfg.expected_peer_id,
             enabled=True,
+            clock_contract=clock_contract,
+            clock_health=clock_health,
         )
         listener_config = MtlsListenerConfig(
             bind_host=cfg.bind_host,

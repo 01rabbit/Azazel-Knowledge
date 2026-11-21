@@ -1,0 +1,5 @@
+# 閉域clocklab policy revision 2
+
+候補v2の署名wireはrequest/response v2のまま、policy schemaをazazel-clocklab-policy/2へ変更してcontract IDを分離する。policy bodyにもstrict整数consumer_revision:2を含め、Python from_dictも明示consumer_revision=2を必須にする。旧policy/1・旧ID・body revisionのない途中policy/2・旧Fabric・未ack consumerを明示拒否し、既定v1は変えない。Nが旧Kの2ms閾値を新Kの1msと誤認しないための互換性境界であり、自動fallbackを設けない。
+
+Kのローカルhealthは観測誤差<=1000us、未観測wall displacement<=1000us+観測ageの100ppm項を必要とし、失敗はラッチする。Nは任意の新K snapshotの誤差hard上限1000usを予約し、両node各1ms、T固定初回anchorの移動予算、mapping/driftを有限B5000usへ計上する。producerは実測値を使い2秒以下で早く閉じる。これらは仮想閉域の実験条件で、UTCや物理時計の保証・本番値ではない。署名、要求binding、期限、monotonic要求予算は緩めない。

@@ -49,11 +49,20 @@ class KnowledgeContextTransportConfig:
     max_ttl_seconds: int
     expected_peer_id: str
     enabled: bool = False
+    clock_contract: object | None = None
+    clock_health: object | None = None
     #: Freshness deadline of the ATT&CK corpus for technique lookups. Operations
     #: decide the production value; the default is a conservative two weeks.
     attack_max_age_seconds: int = 14 * 24 * 3600
 
     def __post_init__(self) -> None:
+        if (self.clock_contract is None) != (self.clock_health is None):
+            raise ValueError("clocklab policy and health must be explicitly paired")
+        if self.clock_contract is not None:
+            from azazel_fabric.knowledge_context_clocklab import ClockContract
+            if (type(self.clock_contract) is not ClockContract
+                    or not callable(getattr(self.clock_health, "check", None))):
+                raise ValueError("clocklab policy and health must be explicitly paired")
         if type(self.max_ttl_seconds) is not int or not 1 <= self.max_ttl_seconds <= 30:
             raise ValueError("max_ttl_seconds must be between 1 and 30")
         if (type(self.attack_max_age_seconds) is not int

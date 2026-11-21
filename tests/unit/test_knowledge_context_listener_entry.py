@@ -712,3 +712,26 @@ def test_record_connection_contains_stderr_failures(monkeypatch):
 
     monkeypatch.setattr(entry.sys, "stderr", Broken())
     entry.record_connection("served", "127.0.0.1", 1)  # must not raise
+
+
+@pytest.mark.parametrize("policy_revision", [1, 2])
+def test_old_policy_or_old_fabric_without_ack_is_refused(env,monkeypatch,policy_revision):
+    try:
+        from azazel_fabric.knowledge_context_clocklab import ClockContract
+    except ModuleNotFoundError as exc:
+        if exc.name != "azazel_fabric.knowledge_context_clocklab":
+            raise
+        ClockContract = None  # stable profile must reject the lab config
+    tmp,pki,values=env
+    raw=_toml({**values,'clock_health_path':'/run/clock-health.json'})
+    old={'schema':f'azazel-clocklab-policy/{policy_revision}','consumer_revision':2,'skew_budget_us':5000,
+         'max_observation_age_ms':5000,
+         'contract_id':(ClockContract(5000).contract_id if ClockContract is not None else
+                        'sha256:b65c4756ba5d724b606bb3c37574117b837cbe25641ee127301e1e248dd6d170')}
+    raw+='\n[clock_policy]\n'+_toml(old)
+    calls=[]
+    if ClockContract is not None:
+        monkeypatch.setattr(ClockContract,'from_dict',lambda value:calls.append(value))
+    with pytest.raises(entry.ListenerConfigError,match='clocklab config'):
+        entry.parse_config(raw.encode())
+    assert calls==[]

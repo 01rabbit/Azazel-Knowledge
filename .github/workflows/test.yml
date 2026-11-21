@@ -31,8 +31,8 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[api-context-candidate,dev]"
 
-      - name: Require the published stable Fabric Knowledge Context contract
-        run: python -c "import azazel_fabric.knowledge_context"
+      - name: Require the explicit candidate Fabric Knowledge Context contract
+        run: python -c "import azazel_fabric.knowledge_context; import azazel_fabric.knowledge_context_clocklab"
 
       - name: Require OpenSSL for isolated mTLS tests
         run: openssl version
